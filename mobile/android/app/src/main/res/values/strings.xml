@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">AgentCall</string>
+    <string name="incoming_call">Incoming AI Call</string>
+    <string name="answer">Answer</string>
+    <string name="decline">Decline</string>
+    <string name="end_call">End Call</string>
+    <string name="mute">Mute</string>
+    <string name="speaker">Speaker</string>
+    <string name="connecting">Connecting…</string>
+    <string name="reconnecting">Reconnecting…</string>
+    <string name="call_ended">Call Ended</string>
+    <string name="call_missed">Call Missed</string>
+    <string name="channel_calls">Incoming Calls</string>
+    <string name="channel_ongoing">Ongoing Call</string>
+</resources>

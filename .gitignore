@@ -1,0 +1,38 @@
+# Dependencies
+backend/node_modules/
+mcp-server/node_modules/
+mobile/android/.gradle/
+mobile/android/build/
+mobile/android/app/build/
+mobile/android/local.properties
+
+# Environment
+.env
+.env.local
+backend/keys/jwt_*.pem
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+backend/logs/
+
+# Build output
+backend/dist/
+mcp-server/dist/
+
+# Coverage
+coverage/
+
+# Docker
+infra/caddy_data/
+infra/caddy_config/

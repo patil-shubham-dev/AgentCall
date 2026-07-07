@@ -1,0 +1,38 @@
+{$CADDY_DOMAIN:localhost} {
+    tls internal
+
+    @mcp {
+        path /mcp/*
+    }
+    handle @mcp {
+        reverse_proxy mcp-server:3000
+    }
+
+    @api {
+        path /api/*
+    }
+    handle @api {
+        reverse_proxy backend-api:4000
+    }
+
+    @ws {
+        path /ws/*
+    }
+    handle @ws {
+        reverse_proxy backend-api:4001 {
+            header_up Upgrade {>Upgrade}
+            header_up Connection {>Connection}
+        }
+    }
+
+    handle {
+        respond "AgentCall MCP" 200
+    }
+
+    header {
+        Strict-Transport-Security "max-age=63072000"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        Referrer-Policy "strict-origin-when-cross-origin"
+    }
+}

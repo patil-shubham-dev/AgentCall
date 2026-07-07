@@ -1,0 +1,110 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: ac-postgres
+    restart: unless-stopped
+    ports:
+      - '5432:5432'
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-ic_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?err}
+      POSTGRES_DB: ${POSTGRES_DB:-agentcall}
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-ic_user}']
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - ac-internal
+
+  redis:
+    image: redis:7-alpine
+    container_name: ac-redis
+    restart: unless-stopped
+    ports:
+      - '6379:6379'
+    command: redis-server --requirepass ${REDIS_PASSWORD:?err}
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', '--raw', 'incr', 'ping']
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - ac-internal
+
+  backend-api:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    container_name: ac-backend
+    restart: unless-stopped
+    ports:
+      - '4000:4000'
+      - '4001:4001'
+    env_file: ../.env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ../backend/src:/app/src:ro
+    networks:
+      - ac-internal
+
+  mcp-server:
+    build:
+      context: ../mcp-server
+      dockerfile: Dockerfile
+    container_name: ac-mcp
+    restart: unless-stopped
+    ports:
+      - '3000:3000'
+    env_file: ../.env
+    depends_on:
+      - backend-api
+    networks:
+      - ac-internal
+
+  coturn:
+    image: coturn/coturn:latest
+    container_name: ac-coturn
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ./coturn/turnserver.conf:/etc/turnserver.conf:ro
+    depends_on:
+      - backend-api
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: ac-caddy
+    restart: unless-stopped
+    ports:
+      - '80:80'
+      - '443:443'
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - backend-api
+      - mcp-server
+    networks:
+      - ac-internal
+
+volumes:
+  pg_data:
+  redis_data:
+  caddy_data:
+  caddy_config:
+
+networks:
+  ac-internal:
+    internal: true
