@@ -80,6 +80,8 @@ data class CallResponse(
     val status: String,
     @SerialName("user_id") val userId: String? = null,
     @SerialName("agent_id") val agentId: String? = null,
+    val priority: String? = null,
+    @SerialName("context_summary") val contextSummary: String? = null,
     @SerialName("created_at") val createdAt: String? = null,
     @SerialName("connected_at") val connectedAt: String? = null,
     @SerialName("ended_at") val endedAt: String? = null,

@@ -53,8 +53,12 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    volumes:
-      - ../backend/src:/app/src:ro
+    healthcheck:
+      test: ['CMD', 'wget', '--no-verbose', '--tries=1', '--spider', 'http://localhost:4000/api/v1/health']
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     networks:
       - ac-internal
 
@@ -68,7 +72,8 @@ services:
       - '3000:3000'
     env_file: ../.env
     depends_on:
-      - backend-api
+      backend-api:
+        condition: service_started
     networks:
       - ac-internal
 

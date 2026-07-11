@@ -33,6 +33,13 @@ mcp-server/dist/
 # Coverage
 coverage/
 
+# iOS
+mobile/ios/AgentCall/.build/
+mobile/ios/AgentCall/build/
+mobile/ios/AgentCall/*.xcworkspace/
+mobile/ios/AgentCall/Pods/
+mobile/ios/AgentCall/DerivedData/
+
 # Docker
 infra/caddy_data/
 infra/caddy_config/

@@ -44,12 +44,15 @@ export const config = {
   },
 
   fcm: {
+    projectId: optional('FCM_PROJECT_ID', ''),
+    serviceAccountKeyPath: optional('FCM_SERVICE_ACCOUNT_KEY_PATH', ''),
     serverKey: optional('FCM_SERVER_KEY', ''),
   },
 
   apns: {
     keyId: optional('APNS_KEY_ID', ''),
     teamId: optional('APNS_TEAM_ID', ''),
+    privateKeyPath: optional('APNS_PRIVATE_KEY_PATH', ''),
     privateKey: optional('APNS_PRIVATE_KEY', ''),
   },
 
@@ -69,6 +72,13 @@ export const config = {
   },
 
   backendApiUrl: optional('BACKEND_API_URL', 'http://localhost:4000/api/v1'),
+
+  signaling: {
+    maxMessageSize: parseInt(optional('SIGNALING_MAX_MESSAGE_SIZE', '262144'), 10),
+    rateLimitMessages: parseInt(optional('SIGNALING_RATE_LIMIT_MESSAGES', '30'), 10),
+    rateLimitWindowSec: parseInt(optional('SIGNALING_RATE_LIMIT_WINDOW', '10'), 10),
+    connectionRateLimit: parseInt(optional('SIGNALING_CONNECTION_RATE_LIMIT', '5'), 10),
+  },
 
   security: {
     corsAllowedOrigins: optional('CORS_ALLOWED_ORIGINS', '*'),
