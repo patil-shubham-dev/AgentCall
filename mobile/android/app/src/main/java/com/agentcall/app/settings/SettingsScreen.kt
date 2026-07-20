@@ -2,9 +2,9 @@ package com.agentcall.app.settings
 
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -17,7 +17,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -68,58 +68,57 @@ fun SettingsScreen(viewModel: SettingsViewModel = hiltViewModel()) {
         )
         Spacer(modifier = Modifier.height(20.dp))
 
-        // ── Profile Section ─────────────────────────
         SettingsSection(title = "Profile") {
-            Surface(
-                shape = RoundedCornerShape(16.dp),
-                color = Slate800,
-            ) {
-                Row(
-                    modifier = Modifier.padding(16.dp),
-                    verticalAlignment = Alignment.CenterVertically,
+            SettingsCard {
+                Surface(
+                    onClick = {},
+                    shape = RoundedCornerShape(12.dp),
+                    color = Color.Transparent,
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .size(52.dp)
-                            .clip(CircleShape)
-                            .background(
-                                Brush.linearGradient(
-                                    colors = listOf(GradientBrandStart, GradientBrandEnd),
-                                ),
-                            ),
-                        contentAlignment = Alignment.Center,
+                    Row(
+                        modifier = Modifier.padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically,
                     ) {
+                        Box(
+                            modifier = Modifier
+                                .size(52.dp)
+                                .clip(CircleShape)
+                                .background(Brush.linearGradient(
+                                    colors = listOf(GradientBrandStart, GradientBrandEnd),
+                                )),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Person,
+                                contentDescription = null,
+                                tint = Slate50,
+                                modifier = Modifier.size(28.dp),
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(14.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Your Account",
+                                style = MaterialTheme.typography.titleMedium,
+                                color = Slate50,
+                            )
+                            Text(
+                                text = deviceId.take(16) + "...",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = Slate400,
+                            )
+                        }
                         Icon(
-                            imageVector = Icons.Default.Person,
+                            imageVector = Icons.Default.ChevronRight,
                             contentDescription = null,
-                            tint = Slate50,
-                            modifier = Modifier.size(28.dp),
+                            tint = Slate600,
+                            modifier = Modifier.size(20.dp),
                         )
                     }
-                    Spacer(modifier = Modifier.width(14.dp))
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = "Your Account",
-                            style = MaterialTheme.typography.titleMedium,
-                            color = Slate50,
-                        )
-                        Text(
-                            text = deviceId.take(16) + "...",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = Slate400,
-                        )
-                    }
-                    Icon(
-                        imageVector = Icons.Default.ChevronRight,
-                        contentDescription = null,
-                        tint = Slate600,
-                        modifier = Modifier.size(20.dp),
-                    )
                 }
             }
         }
 
-        // ── Notifications Section ───────────────────
         SettingsSection(title = "Notifications") {
             SettingsCard {
                 SettingsToggle(
@@ -142,7 +141,6 @@ fun SettingsScreen(viewModel: SettingsViewModel = hiltViewModel()) {
             }
         }
 
-        // ── Do Not Disturb Section ──────────────────
         SettingsSection(title = "Do Not Disturb") {
             SettingsCard {
                 SettingsToggle(
@@ -153,7 +151,11 @@ fun SettingsScreen(viewModel: SettingsViewModel = hiltViewModel()) {
                     checked = dndEnabled,
                     onCheckedChange = { dndEnabled = it },
                 )
-                AnimatedVisibility(visible = dndEnabled) {
+                AnimatedVisibility(
+                    visible = dndEnabled,
+                    enter = expandVertically(animationSpec = spring(dampingRatio = 0.7f)) + fadeIn(),
+                    exit = shrinkVertically() + fadeOut(),
+                ) {
                     Column {
                         SettingsDivider()
                         Row(
@@ -175,18 +177,25 @@ fun SettingsScreen(viewModel: SettingsViewModel = hiltViewModel()) {
                                 color = Slate300,
                             )
                             Spacer(modifier = Modifier.weight(1f))
-                            Text(
-                                text = "Your timezone",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = Slate500,
-                            )
+                            Surface(
+                                onClick = {},
+                                shape = RoundedCornerShape(8.dp),
+                                color = GlassIndigo,
+                            ) {
+                                Text(
+                                    text = "Edit",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = Indigo400,
+                                    fontWeight = FontWeight.SemiBold,
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                                )
+                            }
                         }
                     }
                 }
             }
         }
 
-        // ── Privacy Section ─────────────────────────
         SettingsSection(title = "Privacy") {
             SettingsCard {
                 SettingsToggle(
@@ -207,7 +216,6 @@ fun SettingsScreen(viewModel: SettingsViewModel = hiltViewModel()) {
             }
         }
 
-        // ── Connected Agents Section ────────────────
         SettingsSection(title = "Connected Agents") {
             SettingsCard {
                 AgentRow(name = "OpenCode", status = "Active", statusColor = Green500)
@@ -248,7 +256,6 @@ fun SettingsScreen(viewModel: SettingsViewModel = hiltViewModel()) {
             }
         }
 
-        // ── About Section ───────────────────────────
         SettingsSection(title = "About") {
             SettingsCard {
                 ClickableRow(
@@ -274,12 +281,18 @@ fun SettingsScreen(viewModel: SettingsViewModel = hiltViewModel()) {
 
         Spacer(modifier = Modifier.height(24.dp))
 
-        // ── Sign Out ────────────────────────────────
+        var signOutPressed by remember { mutableStateOf(false) }
+        val signOutScale by animateFloatAsState(
+            targetValue = if (signOutPressed) 0.97f else 1f,
+            animationSpec = spring(dampingRatio = 0.5f, stiffness = 800f), label = "signOutScale"
+        )
+
         OutlinedButton(
             onClick = { viewModel.logout() },
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp),
+                .padding(horizontal = 16.dp)
+                .scale(signOutScale),
             shape = RoundedCornerShape(16.dp),
             colors = ButtonDefaults.outlinedButtonColors(contentColor = Red400),
             border = ButtonDefaults.outlinedButtonBorder.copy(
@@ -287,6 +300,11 @@ fun SettingsScreen(viewModel: SettingsViewModel = hiltViewModel()) {
                     colors = listOf(Red500.copy(alpha = 0.3f), Red500.copy(alpha = 0.1f)),
                 ),
             ),
+            interactionSource = remember { MutableInteractionSource() }.also { src ->
+                LaunchedEffect(src) {
+                    src.collectIsPressedAsState().let { signOutPressed = it.value }
+                }
+            },
         ) {
             Icon(
                 imageVector = Icons.Default.Logout,
@@ -300,8 +318,6 @@ fun SettingsScreen(viewModel: SettingsViewModel = hiltViewModel()) {
         Spacer(modifier = Modifier.height(32.dp))
     }
 }
-
-// ── Reusable Components ──────────────────────
 
 @Composable
 private fun SettingsSection(title: String, content: @Composable () -> Unit) {
@@ -459,11 +475,13 @@ private fun AgentRow(name: String, status: String, statusColor: Color) {
                     color = Slate50,
                 )
             }
+            val dotAnim by rememberInfiniteTransition(label = "agentDot").animateFloat(0f, 1f,
+                infiniteRepeatable(tween(1500, easing = EaseInOutSine), RepeatMode.Reverse), label = "agentStatus")
             Box(
                 modifier = Modifier
                     .size(6.dp)
                     .clip(CircleShape)
-                    .background(statusColor),
+                    .background(statusColor.copy(alpha = 0.5f + dotAnim * 0.5f)),
             )
             Spacer(modifier = Modifier.width(6.dp))
             Text(

@@ -6,19 +6,11 @@ import helmet from '@fastify/helmet';
 import crypto from 'node:crypto';
 import { config } from './common/config.js';
 import { logger } from './common/logger.js';
-import { checkConnection, destroyConnection } from './db/connection.js';
-import { checkRedis, redis } from './db/redis.js';
 import { registerRoutes } from './routes.js';
 import { createSignalingServer } from './signaling/server.js';
 import type { WebSocketServer } from 'ws';
 
 async function main() {
-  // Database connections
-  await checkConnection();
-  await checkRedis();
-  logger.info('Database connections established');
-
-  // HTTP API server
   const app = Fastify({
     logger: {
       level: config.nodeEnv === 'production' ? 'info' : 'debug',
@@ -37,16 +29,13 @@ async function main() {
     genReqId: () => crypto.randomUUID(),
   });
 
-  // Security headers
   await app.register(helmet, {
     contentSecurityPolicy: false,
     crossOriginEmbedderPolicy: false,
   });
 
-  // Response compression
   await app.register(compress, { global: true });
 
-  // CORS — restrict to configured origins in production
   const corsOrigins = config.security.corsAllowedOrigins === '*'
     ? true
     : config.security.corsAllowedOrigins.split(',').map((s) => s.trim());
@@ -58,7 +47,6 @@ async function main() {
     exposedHeaders: ['X-Request-Id'],
   });
 
-  // Rate limiting — global defaults, per-route overrides in routes.ts
   await app.register(rateLimit, {
     max: 100,
     timeWindow: '1 minute',
@@ -68,52 +56,38 @@ async function main() {
     }),
   });
 
-  // Request ID propagation
   app.addHook('onRequest', async (request, reply) => {
     reply.header('X-Request-Id', request.id);
   });
 
-  // Structured error handler
+  app.addContentTypeParser(['audio/wav', 'application/octet-stream'], { bodyLimit: config.security.bodyLimit }, (request, rawBody, done) => {
+    (request as unknown as Record<string, unknown>).rawBody = rawBody;
+    done(null);
+  });
+
   app.setErrorHandler(async (error, request, reply) => {
     const requestId = request.id;
     const statusCode = error.statusCode ?? 500;
-
-    // Known application errors
     const errAny = error as unknown as Record<string, unknown>;
+
     if (typeof errAny.code === 'string') {
-      const code = errAny.code as string;
-      const msg = errAny.message as string ?? 'Unknown error';
-      const details = errAny.details as Record<string, unknown> | undefined;
-      if (statusCode >= 500) {
-        logger.error({ err: error, requestId }, msg);
-      }
+      if (statusCode >= 500) logger.error({ err: error, requestId }, (errAny.message as string) ?? 'Error');
       return reply.status(statusCode).send({
-        error: code,
-        message: msg,
+        error: errAny.code,
+        message: errAny.message ?? 'Unknown error',
         request_id: requestId,
-        ...(details ? { details } : {}),
+        ...(errAny.details ? { details: errAny.details } : {}),
       });
     }
 
-    // Rate limit errors
     if (statusCode === 429) {
-      return reply.status(429).send({
-        error: 'RATE_LIMITED',
-        message: error.message ?? 'Too many requests',
-        request_id: requestId,
-      });
+      return reply.status(429).send({ error: 'RATE_LIMITED', message: error.message ?? 'Too many requests', request_id: requestId });
     }
 
-    // Validation errors from Fastify schema
     if ('validation' in error) {
-      return reply.status(400).send({
-        error: 'VALIDATION_ERROR',
-        message: error.message,
-        request_id: requestId,
-      });
+      return reply.status(400).send({ error: 'VALIDATION_ERROR', message: error.message, request_id: requestId });
     }
 
-    // Unhandled errors
     logger.error({ err: error, requestId }, 'Unhandled error');
     return reply.status(500).send({
       error: 'INTERNAL_ERROR',
@@ -124,27 +98,29 @@ async function main() {
 
   registerRoutes(app);
 
-  // Start HTTP server
   let signalingServer: WebSocketServer | undefined;
   try {
     await app.ready();
     await app.listen({ port: config.port, host: '0.0.0.0' });
-    logger.info({ port: config.port }, 'HTTP API server started');
+    logger.info({ port: config.port }, 'VoiceBridge HTTP API started');
 
     signalingServer = createSignalingServer(config.signalingPort);
+    logger.info({ port: config.signalingPort }, 'Phone WebSocket signaling ready');
+    logger.info(`\n  VoiceBridge running — AI ↔ Human voice bridge`);
+    logger.info(`  HTTP API:     http://localhost:${config.port}`);
+    logger.info(`  Phone WS:     ws://localhost:${config.signalingPort}/phone`);
+    logger.info(`  STT engine:   ${config.stt.enabled ? 'Whisper (local)' : 'disabled'}`);
+    logger.info(`  TTS engine:   Phone-side (Android TextToSpeech)\n`);
   } catch (err) {
     logger.error({ err }, 'Failed to start server');
     process.exit(1);
   }
 
-  // Graceful shutdown
   const shutdown = async (signal: string) => {
     logger.info({ signal }, 'Shutdown signal received');
     try {
       await app.close();
       signalingServer?.close();
-      redis.disconnect();
-      await destroyConnection();
       logger.info('Server shut down gracefully');
       process.exit(0);
     } catch (err) {

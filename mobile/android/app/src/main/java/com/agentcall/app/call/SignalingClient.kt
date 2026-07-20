@@ -1,43 +1,37 @@
 package com.agentcall.app.call
 
-import com.agentcall.app.data.api.TokenManager
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.serialization.json.*
 import okhttp3.*
 import org.json.JSONObject
-import org.webrtc.IceCandidate
-import org.webrtc.SessionDescription
 import javax.inject.Inject
 import javax.inject.Singleton
 
-sealed class SignalingEvent {
-    data class OfferReceived(val sdp: SessionDescription) : SignalingEvent()
-    data class AnswerReceived(val sdp: SessionDescription) : SignalingEvent()
-    data class IceCandidateReceived(val candidate: IceCandidate) : SignalingEvent()
-    data class ParticipantJoined(val userId: String, val role: String) : SignalingEvent()
-    data class ParticipantLeft(val userId: String) : SignalingEvent()
-    data class MuteChanged(val userId: String, val muted: Boolean) : SignalingEvent()
-    data class Error(val code: String, val message: String) : SignalingEvent()
-    object RoomJoined : SignalingEvent()
-    object Disconnected : SignalingEvent()
+sealed class VoiceBridgeEvent {
+    data class AiMessage(val callId: String, val messageId: String, val content: String, val enrichedJson: String = "") : VoiceBridgeEvent()
+    data class BargeInDetected(val callId: String, val action: String, val callbackMinutes: Int = 10) : VoiceBridgeEvent()
+    data class CallbackScheduled(val callId: String, val delayMinutes: Int) : VoiceBridgeEvent()
+    data class CallIncoming(val callId: String, val reason: String, val summary: String) : VoiceBridgeEvent()
+    data class CallEnded(val callId: String) : VoiceBridgeEvent()
+    data class CallCancelled(val callId: String) : VoiceBridgeEvent()
+    data class Connected(val userId: String) : VoiceBridgeEvent()
+    data class Error(val code: String, val message: String) : VoiceBridgeEvent()
+    object Disconnected : VoiceBridgeEvent()
 }
 
 @Singleton
-class SignalingClient @Inject constructor(
-    private val tokenManager: TokenManager
-) {
-    private val json = Json { ignoreUnknownKeys = true; isLenient = true }
+class SignalingClient @Inject constructor() {
     private val client = OkHttpClient()
     private var webSocket: WebSocket? = null
     private var connectionJob: Job? = null
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private var currentUserId: String = "solo-user"
 
-    private val _events = MutableSharedFlow<SignalingEvent>(extraBufferCapacity = 64)
-    val events: SharedFlow<SignalingEvent> = _events
+    private val _events = MutableSharedFlow<VoiceBridgeEvent>(extraBufferCapacity = 64)
+    val events: SharedFlow<VoiceBridgeEvent> = _events
 
     private val _connectionState = MutableStateFlow(ConnectionState.DISCONNECTED)
     val connectionState: StateFlow<ConnectionState> = _connectionState
@@ -46,28 +40,23 @@ class SignalingClient @Inject constructor(
         DISCONNECTED, CONNECTING, CONNECTED, RECONNECTING
     }
 
-    fun connect(callId: String) {
+    fun connect(userId: String = "solo-user") {
+        currentUserId = userId
         connectionJob?.cancel()
         connectionJob = scope.launch {
             _connectionState.value = ConnectionState.CONNECTING
-            connectInternal(callId)
+            connectInternal()
         }
     }
 
-    private suspend fun connectInternal(callId: String) {
-        val token = tokenManager.accessToken ?: run {
-            _events.emit(SignalingEvent.Error("AUTH", "No access token"))
-            _connectionState.value = ConnectionState.DISCONNECTED
-            return
-        }
-
-        val url = "wss://api.agentcall.example.com/ws?token=$token&call_id=$callId"
+    private suspend fun connectInternal() {
+        val url = "ws://10.0.2.2:4001/phone?user_id=$currentUserId"
         val request = Request.Builder().url(url).build()
 
         webSocket = client.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 _connectionState.value = ConnectionState.CONNECTED
-                scope.launch { _events.emit(SignalingEvent.RoomJoined) }
+                scope.launch { _events.emit(VoiceBridgeEvent.Connected(currentUserId)) }
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
@@ -77,14 +66,14 @@ class SignalingClient @Inject constructor(
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                 scope.launch {
                     _connectionState.value = ConnectionState.RECONNECTING
-                    delay(2000)
-                    connectInternal(callId)
+                    delay(3000)
+                    connectInternal()
                 }
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
                 _connectionState.value = ConnectionState.DISCONNECTED
-                scope.launch { _events.emit(SignalingEvent.Disconnected) }
+                scope.launch { _events.emit(VoiceBridgeEvent.Disconnected) }
             }
         })
     }
@@ -96,114 +85,52 @@ class SignalingClient @Inject constructor(
             val payload = obj.optJSONObject("payload")
 
             when (type) {
-                "offer" -> {
-                    val sdp = payload?.getString("sdp") ?: return
-                    val typeStr = payload.optString("type", "offer")
-                    _events.emit(
-                        SignalingEvent.OfferReceived(
-                            SessionDescription(
-                                SessionDescription.Type.fromCanonicalForm(typeStr),
-                                sdp
-                            )
-                        )
-                    )
+                "connected" -> {
+                    val userId = payload?.getString("user_id") ?: currentUserId
+                    _events.emit(VoiceBridgeEvent.Connected(userId))
                 }
-                "answer" -> {
-                    val sdp = payload?.getString("sdp") ?: return
-                    _events.emit(
-                        SignalingEvent.AnswerReceived(
-                            SessionDescription(SessionDescription.Type.ANSWER, sdp)
-                        )
-                    )
+                "call_incoming" -> {
+                    val callId = payload?.getString("callId") ?: return
+                    val reason = payload.optString("reason", "input_required")
+                    val summary = payload.optString("summary", "")
+                    _events.emit(VoiceBridgeEvent.CallIncoming(callId, reason, summary))
                 }
-                "ice_candidate" -> {
-                    val candidate = payload?.getString("candidate") ?: return
-                    val sdpMid = payload.getString("sdpMid")
-                    val sdpMLineIndex = payload.getInt("sdpMLineIndex")
-                    _events.emit(
-                        SignalingEvent.IceCandidateReceived(
-                            IceCandidate(sdpMid, sdpMLineIndex, candidate)
-                        )
-                    )
+                "ai_message" -> {
+                    val callId = payload?.getString("callId") ?: return
+                    val messageObj = payload.optJSONObject("message")
+                    val content = messageObj?.getString("content") ?: return
+                    val messageId = messageObj.getString("id")
+                    val enriched = payload.optJSONObject("enriched")?.toString() ?: ""
+                    _events.emit(VoiceBridgeEvent.AiMessage(callId, messageId, content, enriched))
                 }
-                "participant_joined" -> {
-                    val userId = payload?.getString("user_id") ?: return
-                    val role = payload.optString("role", "unknown")
-                    _events.emit(SignalingEvent.ParticipantJoined(userId, role))
+                "barge_in_detected" -> {
+                    val callId = payload?.getString("callId") ?: return
+                    val action = payload.optString("action", "none")
+                    val callbackMinutes = payload.optInt("callbackMinutes", 10)
+                    _events.emit(VoiceBridgeEvent.BargeInDetected(callId, action, callbackMinutes))
                 }
-                "participant_left" -> {
-                    val userId = payload?.getString("user_id") ?: return
-                    _events.emit(SignalingEvent.ParticipantLeft(userId))
+                "callback_scheduled" -> {
+                    val callId = payload?.getString("callId") ?: return
+                    val delay = payload.optInt("delayMinutes", 10)
+                    _events.emit(VoiceBridgeEvent.CallbackScheduled(callId, delay))
                 }
-                "mute_changed" -> {
-                    val userId = payload?.getString("user_id") ?: return
-                    val muted = payload.optBoolean("muted", false)
-                    _events.emit(SignalingEvent.MuteChanged(userId, muted))
+                "call_ended" -> {
+                    val callId = payload?.getString("callId") ?: return
+                    _events.emit(VoiceBridgeEvent.CallEnded(callId))
+                }
+                "call_cancelled" -> {
+                    val callId = payload?.getString("callId") ?: return
+                    _events.emit(VoiceBridgeEvent.CallCancelled(callId))
                 }
                 "error" -> {
                     val code = payload?.getString("code") ?: "UNKNOWN"
                     val message = payload?.getString("message") ?: "Unknown error"
-                    _events.emit(SignalingEvent.Error(code, message))
+                    _events.emit(VoiceBridgeEvent.Error(code, message))
                 }
             }
         } catch (e: Exception) {
-            _events.emit(SignalingEvent.Error("PARSE", "Failed to parse message"))
+            _events.emit(VoiceBridgeEvent.Error("PARSE", "Failed to parse message"))
         }
-    }
-
-    fun sendOffer(sdp: SessionDescription) {
-        val msg = buildJsonObject {
-            put("type", "offer")
-            put("payload", buildJsonObject {
-                put("sdp", sdp.description)
-                put("type", sdp.type.canonicalForm())
-            })
-            put("timestamp", JsonPrimitive(java.time.Instant.now().toString()))
-        }
-        webSocket?.send(json.encodeToString(msg))
-    }
-
-    fun sendAnswer(sdp: SessionDescription) {
-        val msg = buildJsonObject {
-            put("type", "answer")
-            put("payload", buildJsonObject {
-                put("sdp", sdp.description)
-                put("type", sdp.type.canonicalForm())
-            })
-            put("timestamp", JsonPrimitive(java.time.Instant.now().toString()))
-        }
-        webSocket?.send(json.encodeToString(msg))
-    }
-
-    fun sendIceCandidate(candidate: IceCandidate) {
-        val msg = buildJsonObject {
-            put("type", "ice_candidate")
-            put("payload", buildJsonObject {
-                put("candidate", candidate.sdp)
-                put("sdpMid", candidate.sdpMid)
-                put("sdpMLineIndex", candidate.sdpMLineIndex)
-            })
-            put("timestamp", JsonPrimitive(java.time.Instant.now().toString()))
-        }
-        webSocket?.send(json.encodeToString(msg))
-    }
-
-    fun sendMuteState(muted: Boolean) {
-        val msg = buildJsonObject {
-            put("type", "mute")
-            put("payload", buildJsonObject { put("muted", muted) })
-            put("timestamp", JsonPrimitive(java.time.Instant.now().toString()))
-        }
-        webSocket?.send(json.encodeToString(msg))
-    }
-
-    fun sendHangup() {
-        val msg = buildJsonObject {
-            put("type", "hangup")
-            put("payload", buildJsonObject())
-            put("timestamp", JsonPrimitive(java.time.Instant.now().toString()))
-        }
-        webSocket?.send(json.encodeToString(msg))
     }
 
     fun disconnect() {

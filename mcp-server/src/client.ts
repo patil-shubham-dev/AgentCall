@@ -1,19 +1,6 @@
 import { config } from './config.js';
 import { logger } from './logger.js';
 
-interface CreateCallInput {
-  user_id: string;
-  agent_id: string;
-  context: {
-    task_id?: string;
-    reason: string;
-    summary: string;
-    options?: string[];
-  };
-  priority?: string;
-  timeout_seconds?: number;
-}
-
 interface ApiResponse<T> {
   data?: T;
   error?: string;
@@ -51,51 +38,49 @@ async function apiRequest<T>(
   }
 }
 
-export async function createCall(input: CreateCallInput) {
-  return apiRequest<{ call_id: string; status: string; expires_at?: string }>(
-    'POST',
-    '/calls',
-    input as unknown as Record<string, unknown>,
-  );
+export function createCall(input: {
+  user_id: string;
+  agent_id: string;
+  context: { task_id?: string; reason: string; summary: string; options?: string[] };
+  priority?: string;
+}) {
+  return apiRequest<{ call_id: string; status: string; created_at: string }>('POST', '/calls', {
+    user_id: input.user_id,
+    agent_id: input.agent_id,
+    context: input.context,
+    priority: input.priority,
+    summary: input.context.summary,
+    reason: input.context.reason,
+  });
 }
 
-export async function getCall(callId: string) {
+export function getCall(callId: string) {
   return apiRequest<{
     call_id: string;
     status: string;
     user_id: string;
     agent_id: string;
     result?: Record<string, unknown>;
-    duration_seconds?: number;
+    message_count: number;
   }>('GET', `/calls/${callId}`);
 }
 
-export async function cancelCall(callId: string, reason = 'resolved') {
-  return apiRequest<{ status: string }>('POST', `/calls/${callId}/cancel`, { reason });
-}
-
-export async function completeCall(callId: string, result: Record<string, unknown>) {
-  return apiRequest<{ status: string }>('POST', `/calls/${callId}/complete`, { result });
-}
-
-export async function queryPresence(userId: string) {
-  return apiRequest<{
-    user_id: string;
-    status: string;
-    last_seen?: string;
-    dnd: boolean;
-    devices: Array<{ platform: string; push_enabled: boolean }>;
-  }>('GET', `/users/${userId}/presence`);
-}
-
-export async function sendNotification(
-  userId: string,
-  type: string,
-  payload: Record<string, unknown>,
-) {
-  return apiRequest<{ status: string; device_targets: number }>(
-    'POST',
-    '/notifications',
-    { user_id: userId, type, payload },
+export function sendMessage(callId: string, content: string) {
+  return apiRequest<{ message_id: string; role: string; content: string; created_at: string }>(
+    'POST', `/calls/${callId}/messages`, { content },
   );
+}
+
+export function getTranscript(callId: string) {
+  return apiRequest<{ call_id: string; messages: Array<{ role: string; content: string; type: string; created_at: string }> }>(
+    'GET', `/calls/${callId}/transcript`,
+  );
+}
+
+export function completeCall(callId: string, result?: Record<string, unknown>) {
+  return apiRequest<{ status: string; call_id: string }>('POST', `/calls/${callId}/complete`, { result });
+}
+
+export function cancelCall(callId: string, reason = 'resolved') {
+  return apiRequest<{ status: string }>('POST', `/calls/${callId}/cancel`, { reason });
 }

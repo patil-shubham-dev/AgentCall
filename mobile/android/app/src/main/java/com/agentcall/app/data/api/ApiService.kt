@@ -1,52 +1,45 @@
 package com.agentcall.app.data.api
 
 import com.agentcall.app.data.model.*
+import okhttp3.MultipartBody
 import retrofit2.http.*
 
 interface ApiService {
 
-    @POST("auth/login")
-    suspend fun login(@Body request: LoginRequest): AuthResponse
-
-    @POST("auth/refresh")
-    suspend fun refreshToken(@Body request: RefreshRequest): AuthResponse
-
-    @POST("devices/register")
-    suspend fun registerDevice(@Body request: DeviceRegisterRequest): DeviceRegisterResponse
-
-    @DELETE("devices/{deviceId}")
-    suspend fun removeDevice(@Path("deviceId") deviceId: String)
-
-    @GET("users/{userId}/presence")
-    suspend fun getUserPresence(@Path("userId") userId: String): PresenceResponse
-
-    @POST("presence/heartbeat")
-    suspend fun sendHeartbeat(@Body request: HeartbeatRequest)
-
     @POST("calls")
-    suspend fun createCall(@Body request: CreateCallRequest): CreateCallResponse
+    suspend fun createCall(): CreateCallResponse
 
     @GET("calls/{callId}")
     suspend fun getCall(@Path("callId") callId: String): CallResponse
 
-    @POST("calls/{callId}/cancel")
-    suspend fun cancelCall(@Path("callId") callId: String, @Body reason: Map<String, String>)
+    @POST("calls/{callId}/messages")
+    suspend fun sendMessage(
+        @Path("callId") callId: String,
+        @Body body: Map<String, String>,
+    ): SendMessageResponse
 
     @POST("calls/{callId}/complete")
-    suspend fun completeCall(@Path("callId") callId: String, @Body result: Map<String, @JvmSuppressWildcards Any>)
+    suspend fun completeCall(
+        @Path("callId") callId: String,
+        @Body result: Map<String, @JvmSuppressWildcards Any>,
+    )
 
-    @GET("calls")
-    suspend fun getCallHistory(): CallHistoryResponse
+    @POST("calls/{callId}/callback")
+    suspend fun scheduleCallback(
+        @Path("callId") callId: String,
+        @Body body: Map<String, Int>,
+    ): Map<String, @JvmSuppressWildcards Any>
 
-    @GET("turn/credentials")
-    suspend fun getTurnCredentials(): TurnCredentialsResponse
+    @GET("users/{userId}/active-call")
+    suspend fun getActiveCall(@Path("userId") userId: String): ActiveCallResponse
 
-    @GET("api-keys")
-    suspend fun getApiKeys(): ApiKeyListResponse
+    @POST("phone/register")
+    suspend fun registerPhone(): PhoneRegisterResponse
 
-    @POST("api-keys")
-    suspend fun createApiKey(@Body request: Map<String, String>): CreateApiKeyResponse
-
-    @DELETE("api-keys/{keyId}")
-    suspend fun deleteApiKey(@Path("keyId") keyId: String)
+    @Multipart
+    @POST("calls/{callId}/audio")
+    suspend fun uploadAudio(
+        @Path("callId") callId: String,
+        @Part audio: MultipartBody.Part,
+    ): TranscribeResponse
 }

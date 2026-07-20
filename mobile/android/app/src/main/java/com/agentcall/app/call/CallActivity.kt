@@ -1,15 +1,27 @@
 package com.agentcall.app.call
 
+import android.Manifest
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
+import android.transition.Fade
+import android.transition.Slide
+import android.view.Gravity
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -19,40 +31,72 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.*
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.agentcall.app.ui.theme.*
 import kotlinx.coroutines.delay
+import kotlin.math.abs
+import kotlin.math.sin
 
 class CallActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            overrideActivityTransition(
+                ComponentActivity.OVERRIDE_TRANSITION_OPEN,
+                Fade().apply { duration = 350 },
+                Slide(Gravity.END).apply { duration = 350 }
+            )
+        }
+
         val callId = intent.getStringExtra("call_id") ?: run { finish(); return }
+
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
+            != PackageManager.PERMISSION_GRANTED) {
+            ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.RECORD_AUDIO), 100)
+        }
+
         setContent {
             AgentCallTheme {
-                val context = this@CallActivity
-                ActiveCallScreen(
-                    callId = callId,
-                    context = context,
+                ActiveCallScreen(callId = callId, context = this@CallActivity,
                     onEndCall = {
-                        val intent = Intent(this@CallActivity, CallService::class.java).apply {
+                        startService(Intent(this@CallActivity, CallService::class.java).apply {
                             action = CallService.ACTION_END_CALL
-                        }
-                        this@CallActivity.startService(intent)
+                        })
                         finish()
-                    },
-                )
+                    })
             }
         }
     }
 }
+
+private val emotionColors = mapOf(
+    "calm" to Green400,
+    "urgent" to Red400,
+    "excited" to Amber400,
+    "thoughtful" to Indigo400,
+    "neutral" to Slate400,
+)
+
+private val emotionEmojis = mapOf(
+    "calm" to "\uD83D\uDE0A",
+    "urgent" to "\u26A0\uFE0F",
+    "excited" to "\uD83D\uDE04",
+    "thoughtful" to "\uD83E\uDD14",
+    "neutral" to "\uD83D\uDE10",
+)
 
 @Composable
 fun ActiveCallScreen(
@@ -62,11 +106,24 @@ fun ActiveCallScreen(
     viewModel: CallViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val listState = rememberLazyListState()
+    var showContext by remember { mutableStateOf(true) }
 
     LaunchedEffect(Unit) {
-        while (true) {
-            delay(250)
-            viewModel.tick()
+        viewModel.connect(callId)
+        while (true) { delay(250); viewModel.tick() }
+    }
+
+    LaunchedEffect(state.messages.size) {
+        if (state.messages.isNotEmpty()) {
+            listState.animateScrollToItem(state.messages.size - 1)
+        }
+    }
+
+    LaunchedEffect(state.isConnected) {
+        if (state.isConnected) {
+            delay(4000)
+            showContext = false
         }
     }
 
@@ -74,294 +131,306 @@ fun ActiveCallScreen(
     val seconds = state.elapsedSeconds % 60
     val timerText = "%02d:%02d".format(minutes, seconds)
 
-    val infiniteTransition = rememberInfiniteTransition(label = "callPulse")
-    val breathingScale by infiniteTransition.animateFloat(
-        initialValue = 1f,
-        targetValue = 1.04f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(3000, easing = EaseInOutSine),
-            repeatMode = RepeatMode.Reverse,
-        ),
-        label = "breathing",
-    )
+    val infiniteTransition = rememberInfiniteTransition(label = "pulse")
+    val breathingScale by infiniteTransition.animateFloat(1f, 1.04f,
+        infiniteRepeatable(tween(3000, easing = EaseInOutSine), RepeatMode.Reverse), label = "breathing")
 
-    val connectionLabel = when (state.status) {
-        CallConnectionStatus.CONNECTING -> "Connecting..."
-        CallConnectionStatus.CONNECTED -> "Connected"
-        CallConnectionStatus.RECONNECTING -> "Reconnecting..."
-        CallConnectionStatus.DISCONNECTED -> "Disconnected"
-        CallConnectionStatus.FAILED -> "Failed"
-    }
-
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Slate900),
-    ) {
-        // Background gradient orbs
+    Box(modifier = Modifier.fillMaxSize().background(Slate900)) {
         Canvas(modifier = Modifier.fillMaxSize()) {
-            drawCircle(
-                color = Indigo500.copy(alpha = 0.08f),
-                radius = size.width * 0.5f,
-                center = Offset(size.width * 0.5f, size.height * 0.2f),
-            )
-            drawCircle(
-                color = GradientBrandEnd.copy(alpha = 0.05f),
-                radius = size.width * 0.7f,
-                center = Offset(size.width * 0.3f, size.height * 0.6f),
-            )
+            drawCircle(Indigo500.copy(alpha = 0.08f), size.width * 0.5f, Offset(size.width * 0.5f, size.height * 0.2f))
+            drawCircle(GradientBrandEnd.copy(alpha = 0.05f), size.width * 0.7f, Offset(size.width * 0.3f, size.height * 0.6f))
         }
 
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(32.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
-            Spacer(modifier = Modifier.weight(0.08f))
-
-            // ── Connection Status ──────────────────
+        Column(modifier = Modifier.fillMaxSize()) {
             Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.Center,
             ) {
-                val dotColor = when (state.status) {
-                    CallConnectionStatus.CONNECTED -> Green500
-                    CallConnectionStatus.RECONNECTING -> Amber400
-                    CallConnectionStatus.CONNECTING -> Indigo400
-                    else -> Red400
-                }
-                Box(
-                    modifier = Modifier
-                        .size(8.dp)
-                        .clip(CircleShape)
-                        .background(dotColor),
-                )
+                val dotAnim by infiniteTransition.animateFloat(0f, 1f,
+                    infiniteRepeatable(tween(1200, easing = EaseInOutSine), RepeatMode.Reverse), label = "statusDot")
+                Box(modifier = Modifier.size(8.dp).clip(CircleShape)
+                    .background(if (state.isConnected) Green500.copy(alpha = 0.5f + dotAnim * 0.5f) else Amber400))
                 Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    text = connectionLabel,
-                    style = MaterialTheme.typography.labelMedium,
-                    color = dotColor,
-                )
+                Text(state.statusText, style = MaterialTheme.typography.labelSmall,
+                    color = if (state.isConnected) Green500 else Amber400,
+                    modifier = Modifier.weight(1f))
+
+                if (state.isBargeIn) {
+                    Surface(shape = RoundedCornerShape(8.dp), color = Amber400.copy(alpha = 0.2f)) {
+                        Text(" Interrupted ", style = MaterialTheme.typography.labelSmall,
+                            color = Amber400, fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp))
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                }
+
+                Text(timerText, fontSize = 18.sp, fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Light, color = Slate50, letterSpacing = 1.sp)
             }
 
-            Spacer(modifier = Modifier.weight(0.06f))
-
-            // ── Timer ──────────────────────────────
-            Text(
-                text = timerText,
-                fontSize = 64.sp,
-                fontFamily = FontFamily.Monospace,
-                fontWeight = FontWeight.Light,
-                color = Slate50,
-                letterSpacing = 2.sp,
-            )
-
-            Spacer(modifier = Modifier.weight(0.04f))
-
-            // ── AI Avatar ──────────────────────────
-            Box(
-                modifier = Modifier
-                    .size(96.dp)
-                    .graphicsLayer(scaleX = breathingScale, scaleY = breathingScale)
-                    .clip(CircleShape)
-                    .background(
-                        Brush.linearGradient(
-                            colors = listOf(GradientBrandStart, GradientBrandEnd),
-                        ),
-                    ),
-                contentAlignment = Alignment.Center,
-            ) {Icon(
-                        imageVector = Icons.Default.Call,
-                    contentDescription = null,
-                    modifier = Modifier.size(48.dp),
-                    tint = Slate50,
-                )
+            AnimatedVisibility(visible = showContext && state.callContext.summary.isNotBlank(),
+                enter = slideInVertically(animationSpec = spring(dampingRatio = 0.8f)) + fadeIn(),
+                exit = slideOutVertically() + fadeOut()) {
+                Surface(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                    shape = RoundedCornerShape(16.dp), color = Indigo900.copy(alpha = 0.6f),
+                    tonalElevation = 4.dp
+                ) {
+                    Row(modifier = Modifier.padding(14.dp), verticalAlignment = Alignment.Top) {
+                        Icon(Icons.Default.Info, null, modifier = Modifier.size(18.dp), tint = Indigo300)
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column {
+                            Text("AI is calling about:",
+                                style = MaterialTheme.typography.labelSmall, color = Indigo300,
+                                fontWeight = FontWeight.SemiBold)
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(state.callContext.summary,
+                                style = MaterialTheme.typography.bodyMedium, color = Slate200)
+                        }
+                    }
+                }
             }
 
-            Spacer(modifier = Modifier.height(16.dp))
+            LazyColumn(
+                state = listState,
+                modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                contentPadding = PaddingValues(vertical = 8.dp),
+            ) {
+                items(state.messages, key = { it.id }) { msg ->
+                    MessageBubble(msg = msg, isAi = msg.role == "ai")
+                }
 
-            Text(
-                text = "AI Agent",
-                style = MaterialTheme.typography.headlineSmall,
-                color = Slate50,
-                fontWeight = FontWeight.SemiBold,
-            )
+                if (state.isAITyping) {
+                    item(key = "typing") {
+                        AITypingIndicator()
+                    }
+                }
+
+                if (state.isPaused) {
+                    item(key = "paused") {
+                        Surface(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(12.dp), color = Amber900.copy(alpha = 0.4f),
+                        ) {
+                            Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.PauseCircle, null, tint = Amber400,
+                                    modifier = Modifier.size(20.dp))
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("Call paused — press Record when you're ready",
+                                    style = MaterialTheme.typography.labelMedium, color = Amber300)
+                            }
+                        }
+                    }
+                }
+            }
+
+            WaveformBar(levels = state.waveformLevels, isActive = state.isRecording || state.isAiSpeaking)
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            Text(
-                text = "Waiting for your response",
-                style = MaterialTheme.typography.bodyMedium,
-                color = Slate400,
-            )
-
-            Spacer(modifier = Modifier.weight(0.06f))
-
-            // ── Waveform Visualization ─────────────
-            Canvas(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(60.dp),
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 32.dp),
+                horizontalArrangement = Arrangement.SpaceEvenly,
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                val barWidth = size.width / (state.waveformLevels.size * 2 - 1)
-                val centerY = size.height / 2
-                state.waveformLevels.forEachIndexed { i, level ->
-                    val barHeight = level * size.height * 0.8f
-                    val x = i * barWidth * 2
-                    val color = if (state.isMuted) WaveformMuted
-                    else WaveformActive
-                    drawRoundRect(
-                        color = color.copy(alpha = 0.4f + level * 0.6f),
-                        topLeft = Offset(x, centerY - barHeight / 2),
-                        size = androidx.compose.ui.geometry.Size(barWidth, barHeight),
-                        cornerRadius = androidx.compose.ui.geometry.CornerRadius(barWidth / 2),
-                    )
+                CallControl(
+                    icon = if (state.isRecording) Icons.Default.StopCircle else Icons.Default.Mic,
+                    label = if (state.isRecording) "Stop" else "Record",
+                    tint = if (state.isRecording) Red400 else Slate50,
+                    bgColor = if (state.isRecording) GlassRed else GlassWhite,
+                    onClick = {
+                        context.startService(Intent(context, CallService::class.java).apply {
+                            action = if (state.isRecording) CallService.ACTION_STOP_RECORDING
+                            else CallService.ACTION_START_RECORDING
+                        })
+                        viewModel.setRecording(!state.isRecording)
+                    })
+
+                CallControl(
+                    icon = Icons.Default.VolumeUp, label = "Speaker",
+                    tint = Slate50, bgColor = GlassWhite, onClick = {})
+
+                CallControl(
+                    icon = Icons.Default.Replay, label = "Repeat",
+                    tint = Slate50, bgColor = GlassWhite, onClick = {})
+            }
+
+            Spacer(modifier = Modifier.height(20.dp))
+
+            Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
+                var isPressed by remember { mutableStateOf(false) }
+                val pressScale by animateFloatAsState(
+                    targetValue = if (isPressed) 0.92f else 1f,
+                    animationSpec = spring(dampingRatio = 0.5f, stiffness = 800f), label = "endCallPress"
+                )
+                Button(
+                    onClick = onEndCall,
+                    modifier = Modifier.size(64.dp).scale(pressScale), shape = CircleShape,
+                    colors = ButtonDefaults.buttonColors(containerColor = Red500),
+                    contentPadding = PaddingValues(0.dp),
+                    interactionSource = remember { MutableInteractionSource() }.also { src ->
+                        LaunchedEffect(src) {
+                            src.collectIsPressedAsState().let { isPressed = it.value }
+                        }
+                    },
+                ) {
+                    Icon(Icons.Default.PhoneForwarded, "End", modifier = Modifier.size(26.dp), tint = Slate50)
                 }
+                Text("End", style = MaterialTheme.typography.labelSmall, color = Red400, fontWeight = FontWeight.Medium)
             }
 
             Spacer(modifier = Modifier.height(16.dp))
+        }
+    }
+}
 
-            // ── Connection Quality ─────────────────
-            Row(
-                modifier = Modifier.fillMaxWidth(0.6f),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.Center,
-            ) {
-                val qualityLabel = when {
-                    state.connectionQuality > 0.7f -> "Excellent"
-                    state.connectionQuality > 0.4f -> "Good"
-                    else -> "Poor"
-                }
-                val qualityColor = when {
-                    state.connectionQuality > 0.7f -> Green400
-                    state.connectionQuality > 0.4f -> Amber400
-                    else -> Red400
-                }
-                repeat(5) { i ->
-                    Box(
-                        modifier = Modifier
-                            .width(8.dp)
-                            .height(if (i < (state.connectionQuality * 5).toInt()) 16.dp else 8.dp)
-                            .padding(horizontal = 2.dp)
-                            .clip(RoundedCornerShape(4.dp))
-                            .background(
-                                if (i < (state.connectionQuality * 5).toInt()) qualityColor
-                                else Slate700
-                            ),
-                    )
+@Composable
+private fun MessageBubble(msg: ChatBubble, isAi: Boolean) {
+    var visible by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        delay(if (isAi) 50 else 100)
+        visible = true
+    }
+
+    AnimatedVisibility(
+        visible = visible,
+        enter = slideInVertically(
+            initialOffsetY = { it / 2 },
+            animationSpec = spring(dampingRatio = 0.7f, stiffness = 300f)
+        ) + fadeIn(animationSpec = tween(200))
+    ) {
+        val emotionColor = emotionColors[msg.emotion] ?: Slate400
+        val emoji = emotionEmojis[msg.emotion] ?: ""
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = if (isAi) Arrangement.Start else Arrangement.End,
+        ) {
+            if (isAi) {
+                val avatarGradient = Brush.linearGradient(listOf(GradientBrandStart, GradientBrandEnd))
+                Box(modifier = Modifier.size(32.dp).clip(CircleShape).background(avatarGradient),
+                    contentAlignment = Alignment.Center) {
+                    Icon(Icons.Default.SmartToy, null, modifier = Modifier.size(18.dp), tint = Slate50)
                 }
                 Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    text = qualityLabel,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = qualityColor,
-                )
             }
 
-            Spacer(modifier = Modifier.weight(0.08f))
-
-            // ── Call Controls ──────────────────────
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(32.dp),
-                verticalAlignment = Alignment.CenterVertically,
+            Surface(
+                shape = RoundedCornerShape(
+                    topStart = if (isAi) 4.dp else 16.dp,
+                    topEnd = if (isAi) 16.dp else 4.dp,
+                    bottomStart = 16.dp, bottomEnd = 16.dp,
+                ),
+                color = if (isAi) Slate800 else Indigo800,
+                tonalElevation = if (isAi) 0.dp else 2.dp,
             ) {
-                CallControl(
-                    icon = if (state.isMuted) Icons.Default.MicOff else Icons.Default.Mic,
-                    label = if (state.isMuted) "Unmute" else "Mute",
-                    tint = if (state.isMuted) Amber400 else Slate50,
-                    bgColor = if (state.isMuted) GlassAmber else GlassWhite,
-                    onClick = { viewModel.toggleMute() },
-                )
-                CallControl(
-                    icon = Icons.Default.VolumeUp,
-                    label = "Speaker",
-                    tint = if (state.isSpeakerOn) Indigo400 else Slate50,
-                    bgColor = if (state.isSpeakerOn) GlassIndigo else GlassWhite,
-                    onClick = { viewModel.toggleSpeaker() },
-                )
-                CallControl(
-                    icon = Icons.Default.Keyboard,
-                    label = "Keypad",
-                    tint = Slate50,
-                    bgColor = GlassWhite,
-                    onClick = { },
-                )
-            }
-
-            Spacer(modifier = Modifier.height(32.dp))
-
-            // ── End Call Button ────────────────────
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                Button(
-                    onClick = onEndCall,
-                    modifier = Modifier.size(72.dp),
-                    shape = CircleShape,
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = Red500,
-                    ),
-                    contentPadding = PaddingValues(0.dp),
-                    elevation = ButtonDefaults.buttonElevation(
-                        defaultElevation = 8.dp,
-                        pressedElevation = 4.dp,
-                    ),
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.PhoneForwarded,
-                        contentDescription = "End Call",
-                        modifier = Modifier.size(28.dp),
-                        tint = Slate50,
-                    )
+                Column(modifier = Modifier.padding(12.dp).widthIn(max = 260.dp)) {
+                    if (isAi) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("AI", style = MaterialTheme.typography.labelSmall,
+                                color = emotionColor, fontWeight = FontWeight.Bold)
+                            if (emoji.isNotBlank()) {
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(emoji, fontSize = 12.sp)
+                            }
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Box(modifier = Modifier.size(5.dp).clip(CircleShape).background(emotionColor))
+                        }
+                        Spacer(modifier = Modifier.height(4.dp))
+                    }
+                    Text(msg.text, style = MaterialTheme.typography.bodyMedium, color = Slate100)
                 }
-                Text(
-                    text = "End",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = Red400,
-                    fontWeight = FontWeight.Medium,
-                )
             }
         }
     }
 }
 
 @Composable
-private fun CallControl(
-    icon: ImageVector,
-    label: String,
-    tint: Color,
-    bgColor: Color,
-    onClick: () -> Unit,
-) {
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+private fun AITypingIndicator() {
+    val infiniteTransition = rememberInfiniteTransition(label = "typingDots")
+    val dot1 by infiniteTransition.animateFloat(0f, 1f,
+        infiniteRepeatable(tween(600, easing = EaseInOutSine), RepeatMode.Reverse), label = "dot1")
+    val dot2 by infiniteTransition.animateFloat(0f, 1f,
+        infiniteRepeatable(tween(600, easing = EaseInOutSine, delayMillis = 200), RepeatMode.Reverse), label = "dot2")
+    val dot3 by infiniteTransition.animateFloat(0f, 1f,
+        infiniteRepeatable(tween(600, easing = EaseInOutSine, delayMillis = 400), RepeatMode.Reverse), label = "dot3")
+
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.Start,
     ) {
-        var pressed by remember { mutableStateOf(false) }
+        Box(modifier = Modifier.size(32.dp).clip(CircleShape)
+            .background(Brush.linearGradient(listOf(GradientBrandStart, GradientBrandEnd))),
+            contentAlignment = Alignment.Center) {
+            Icon(Icons.Default.SmartToy, null, modifier = Modifier.size(18.dp), tint = Slate50)
+        }
+        Spacer(modifier = Modifier.width(8.dp))
+        Surface(
+            shape = RoundedCornerShape(topStart = 4.dp, topEnd = 16.dp, bottomStart = 16.dp, bottomEnd = 16.dp),
+            color = Slate800,
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
+                horizontalArrangement = Arrangement.spacedBy(5.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(modifier = Modifier.size(7.dp).clip(CircleShape)
+                    .background(Indigo400.copy(alpha = 0.3f + dot1 * 0.7f)))
+                Box(modifier = Modifier.size(7.dp).clip(CircleShape)
+                    .background(Indigo400.copy(alpha = 0.3f + dot2 * 0.7f)))
+                Box(modifier = Modifier.size(7.dp).clip(CircleShape)
+                    .background(Indigo400.copy(alpha = 0.3f + dot3 * 0.7f)))
+            }
+        }
+    }
+}
+
+@Composable
+private fun WaveformBar(levels: List<Float>, isActive: Boolean) {
+    val infiniteTransition = rememberInfiniteTransition(label = "waveformGlow")
+    val glowAlpha by infiniteTransition.animateFloat(0.4f, 0.8f,
+        infiniteRepeatable(tween(1000, easing = EaseInOutSine), RepeatMode.Reverse), label = "glow")
+
+    Canvas(modifier = Modifier.fillMaxWidth().height(50.dp).padding(horizontal = 20.dp)) {
+        val barWidth = size.width / (levels.size * 2 - 1)
+        val centerY = size.height / 2
+        levels.forEachIndexed { i, level ->
+            val barHeight = level * size.height * 0.8f
+            val x = i * barWidth * 2
+            val baseAlpha = 0.4f + level * 0.6f
+            val alpha = if (isActive) (baseAlpha * (0.8f + glowAlpha * 0.2f)).coerceIn(0f, 1f) else baseAlpha * 0.5f
+            drawRoundRect(
+                color = WaveformActive.copy(alpha = alpha),
+                topLeft = Offset(x, centerY - barHeight / 2),
+                size = androidx.compose.ui.geometry.Size(barWidth, barHeight),
+                cornerRadius = androidx.compose.ui.geometry.CornerRadius(barWidth / 2),
+            )
+        }
+    }
+}
+
+@Composable
+private fun CallControl(icon: ImageVector, label: String, tint: Color, bgColor: Color, onClick: () -> Unit) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isPressed by interactionSource.collectIsPressedAsState()
+    val pressScale by animateFloatAsState(
+        targetValue = if (isPressed) 0.88f else 1f,
+        animationSpec = spring(dampingRatio = 0.5f, stiffness = 800f), label = "callControlPress"
+    )
+
+    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Surface(
             onClick = onClick,
             shape = CircleShape,
-            color = if (pressed) bgColor.copy(alpha = 0.3f) else bgColor,
+            color = bgColor,
             tonalElevation = 0.dp,
+            interactionSource = interactionSource,
         ) {
-            Box(
-                modifier = Modifier.size(60.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    imageVector = icon,
-                    contentDescription = label,
-                    modifier = Modifier.size(26.dp),
-                    tint = tint,
-                )
+            Box(modifier = Modifier.size(52.dp).scale(pressScale), contentAlignment = Alignment.Center) {
+                Icon(icon, label, modifier = Modifier.size(24.dp), tint = tint)
             }
         }
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelSmall,
-            color = Slate400,
-        )
+        Text(label, style = MaterialTheme.typography.labelSmall, color = Slate400)
     }
 }

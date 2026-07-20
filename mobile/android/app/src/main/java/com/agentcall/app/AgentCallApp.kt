@@ -3,19 +3,14 @@ package com.agentcall.app
 import android.app.Application
 import android.app.NotificationChannel
 import android.app.NotificationManager
-import com.agentcall.app.data.api.ApiClient
-import com.agentcall.app.data.api.TokenManager
+import com.agentcall.app.call.CallService
 import dagger.hilt.android.HiltAndroidApp
-import javax.inject.Inject
 
 @HiltAndroidApp
 class AgentCallApp : Application() {
 
-    @Inject lateinit var tokenManager: TokenManager
-
     override fun onCreate() {
         super.onCreate()
-        ApiClient.setTokenProvider { tokenManager.accessToken }
         createNotificationChannels()
     }
 
@@ -27,13 +22,14 @@ class AgentCallApp : Application() {
             "Incoming Calls",
             NotificationManager.IMPORTANCE_HIGH
         ).apply {
-            description = "Notifications for incoming AI-initiated calls"
+            description = "Notifications for incoming AI calls"
             setShowBadge(true)
             enableVibration(true)
+            lockscreenVisibility = NotificationCompat.VISIBILITY_PUBLIC
         }
 
         val ongoingCall = NotificationChannel(
-            CHANNEL_ONGOING_CALL,
+            CallService.CHANNEL_ONGOING_CALL,
             "Ongoing Call",
             NotificationManager.IMPORTANCE_LOW
         ).apply {
@@ -42,12 +38,34 @@ class AgentCallApp : Application() {
             enableVibration(false)
         }
 
+        val missedCalls = NotificationChannel(
+            CHANNEL_MISSED_CALLS,
+            "Missed Calls",
+            NotificationManager.IMPORTANCE_DEFAULT
+        ).apply {
+            description = "Notifications for missed AI calls"
+            setShowBadge(true)
+            enableVibration(true)
+        }
+
+        val taskUpdates = NotificationChannel(
+            CHANNEL_TASK_UPDATES,
+            "Task Updates",
+            NotificationManager.IMPORTANCE_DEFAULT
+        ).apply {
+            description = "Updates when AI tasks complete"
+            setShowBadge(true)
+        }
+
         manager.createNotificationChannel(incomingCalls)
         manager.createNotificationChannel(ongoingCall)
+        manager.createNotificationChannel(missedCalls)
+        manager.createNotificationChannel(taskUpdates)
     }
 
     companion object {
         const val CHANNEL_INCOMING_CALLS = "incoming_calls"
-        const val CHANNEL_ONGOING_CALL = "ongoing_call"
+        const val CHANNEL_MISSED_CALLS = "missed_calls"
+        const val CHANNEL_TASK_UPDATES = "task_updates"
     }
 }

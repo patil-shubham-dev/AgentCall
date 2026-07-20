@@ -1,6 +1,8 @@
 package com.agentcall.app.auth
 
+import android.os.Build
 import android.os.Bundle
+import android.transition.Fade
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.animation.*
@@ -36,6 +38,16 @@ import dagger.hilt.android.AndroidEntryPoint
 class AuthActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            overrideActivityTransition(
+                ComponentActivity.OVERRIDE_TRANSITION_OPEN,
+                Fade().apply { duration = 400 },
+                Fade().apply { duration = 300 }
+            )
+        }
+
+        enableEdgeToEdge()
         setContent {
             AgentCallTheme {
                 AuthScreen(

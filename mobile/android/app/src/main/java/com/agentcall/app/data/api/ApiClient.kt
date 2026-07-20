@@ -9,8 +9,7 @@ import retrofit2.Retrofit
 import java.util.concurrent.TimeUnit
 
 object ApiClient {
-
-    private const val BASE_URL = "https://api.agentcall.example.com/api/v1/"
+    private const val BASE_URL = "http://10.0.2.2:4000/api/v1/"
 
     private val json = Json {
         ignoreUnknownKeys = true
@@ -19,27 +18,13 @@ object ApiClient {
     }
 
     private val loggingInterceptor = HttpLoggingInterceptor().apply {
-        level = HttpLoggingInterceptor.Level.BODY
+        level = HttpLoggingInterceptor.Level.BASIC
     }
 
-    private var tokenProvider: (() -> String?)? = null
-
-    fun setTokenProvider(provider: () -> String?) {
-        tokenProvider = provider
-    }
-
-    val httpClient: OkHttpClient = OkHttpClient.Builder()
+    private val httpClient: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
-        .readTimeout(30, TimeUnit.SECONDS)
-        .writeTimeout(30, TimeUnit.SECONDS)
-        .addInterceptor { chain ->
-            val requestBuilder = chain.request().newBuilder()
-                .addHeader("Content-Type", "application/json")
-            tokenProvider?.invoke()?.let { token ->
-                requestBuilder.addHeader("Authorization", "Bearer $token")
-            }
-            chain.proceed(requestBuilder.build())
-        }
+        .readTimeout(120, TimeUnit.SECONDS)
+        .writeTimeout(120, TimeUnit.SECONDS)
         .addInterceptor(loggingInterceptor)
         .build()
 
