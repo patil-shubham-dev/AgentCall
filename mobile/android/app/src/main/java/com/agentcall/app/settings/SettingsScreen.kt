@@ -3,12 +3,12 @@ package com.agentcall.app.settings
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
-import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -17,305 +17,391 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.scale
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.agentcall.app.data.api.TokenManager
+import com.agentcall.app.data.api.ApiClient
+import com.agentcall.app.ui.composables.AmbientBackground
 import com.agentcall.app.ui.theme.*
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 import javax.inject.Inject
 
-@HiltViewModel
-class SettingsViewModel @Inject constructor(
-    private val tokenManager: TokenManager
-) : ViewModel() {
-    private val _deviceId = MutableStateFlow(tokenManager.deviceId ?: "Not registered")
-    val deviceId: StateFlow<String> = _deviceId.asStateFlow()
+enum class ConnectionTestStatus {
+    IDLE, TESTING, SUCCESS, FAILED
+}
 
-    fun logout() { tokenManager.clear() }
+@HiltViewModel
+class SettingsViewModel @Inject constructor() : ViewModel() {
+    private val _serverHost = MutableStateFlow(ApiClient.serverHost)
+    val serverHost: StateFlow<String> = _serverHost.asStateFlow()
+
+    private val _connectionStatus = MutableStateFlow("Connected")
+    val connectionStatus: StateFlow<String> = _connectionStatus.asStateFlow()
+
+    private val _testStatus = MutableStateFlow(ConnectionTestStatus.IDLE)
+    val testStatus: StateFlow<ConnectionTestStatus> = _testStatus.asStateFlow()
+
+    private val _testLatency = MutableStateFlow(0L)
+    val testLatency: StateFlow<Long> = _testLatency.asStateFlow()
+
+    fun updateServerHost(host: String) {
+        _serverHost.value = host
+    }
+
+    fun connect() {
+        val host = _serverHost.value.trim().ifBlank { "10.0.2.2" }
+        ApiClient.setServerHost(host)
+        _connectionStatus.value = "Reconnecting…"
+        com.agentcall.app.home.ServerConfigEvent.reconnectRequests.value++
+    }
+
+    fun testConnection() {
+        _testStatus.value = ConnectionTestStatus.TESTING
+        viewModelScope.launch {
+            val start = System.currentTimeMillis()
+            try {
+                val url = java.net.URL("http://${_serverHost.value.trim()}:4000/api/v1/health")
+                val conn = url.openConnection() as java.net.HttpURLConnection
+                conn.connectTimeout = 3000
+                conn.readTimeout = 3000
+                conn.requestMethod = "GET"
+                val responseCode = conn.responseCode
+                val elapsed = System.currentTimeMillis() - start
+                conn.disconnect()
+
+                _testLatency.value = elapsed
+                _testStatus.value = if (responseCode == 200) ConnectionTestStatus.SUCCESS else ConnectionTestStatus.FAILED
+            } catch (_: Exception) {
+                _testLatency.value = System.currentTimeMillis() - start
+                _testStatus.value = ConnectionTestStatus.FAILED
+            }
+        }
+    }
+
+    fun resetTest() {
+        _testStatus.value = ConnectionTestStatus.IDLE
+        _testLatency.value = 0L
+    }
 }
 
 @Composable
-fun SettingsScreen(viewModel: SettingsViewModel = hiltViewModel()) {
-    val deviceId by viewModel.deviceId.collectAsStateWithLifecycle()
-    var dndEnabled by remember { mutableStateOf(false) }
-    var storeTranscripts by remember { mutableStateOf(false) }
-    var incomingCallsEnabled by remember { mutableStateOf(true) }
-    var taskCompletionsEnabled by remember { mutableStateOf(true) }
+fun SettingsScreen(
+    viewModel: SettingsViewModel = hiltViewModel(),
+    onReconnect: () -> Unit = {},
+) {
+    val serverHost by viewModel.serverHost.collectAsStateWithLifecycle()
+    val connectionStatus by viewModel.connectionStatus.collectAsStateWithLifecycle()
+    val testStatus by viewModel.testStatus.collectAsStateWithLifecycle()
+    val testLatency by viewModel.testLatency.collectAsStateWithLifecycle()
+    val focusManager = LocalFocusManager.current
 
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(Slate900)
-            .verticalScroll(rememberScrollState()),
+            .background(Slate900),
     ) {
-        Spacer(modifier = Modifier.height(16.dp))
-        Text(
-            text = "Settings",
-            style = MaterialTheme.typography.headlineMedium,
-            color = Slate50,
-            modifier = Modifier.padding(horizontal = 24.dp),
-        )
-        Spacer(modifier = Modifier.height(20.dp))
+        // Header with ambient background behind
+        Box(modifier = Modifier.height(80.dp)) {
+            AmbientBackground(
+                accentColor = Indigo500,
+                density = 0.6f,
+                speedMultiplier = 0.5f,
+                modifier = Modifier.fillMaxSize(),
+            )
+            Column(modifier = Modifier.fillMaxSize()) {
+                Spacer(modifier = Modifier.height(16.dp))
+                Text(
+                    text = "Settings",
+                    style = MaterialTheme.typography.headlineMedium,
+                    color = Slate50,
+                    modifier = Modifier.padding(horizontal = 24.dp),
+                )
+                Text(
+                    text = "Configure your connection",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Slate400,
+                    modifier = Modifier.padding(horizontal = 24.dp),
+                )
+            }
+        }
 
-        SettingsSection(title = "Profile") {
-            SettingsCard {
-                Surface(
-                    onClick = {},
-                    shape = RoundedCornerShape(12.dp),
-                    color = Color.Transparent,
-                ) {
-                    Row(
-                        modifier = Modifier.padding(16.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(52.dp)
-                                .clip(CircleShape)
-                                .background(Brush.linearGradient(
-                                    colors = listOf(GradientBrandStart, GradientBrandEnd),
-                                )),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Person,
-                                contentDescription = null,
-                                tint = Slate50,
-                                modifier = Modifier.size(28.dp),
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState()),
+        ) {
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // ── Server Connection ────────────────────────
+            SettingsSection(title = "SERVER CONNECTION") {
+                GlassCard {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        // Status row
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            val dotAnim by rememberInfiniteTransition(label = "connDot").animateFloat(
+                                0f, 1f,
+                                infiniteRepeatable(tween(1500, easing = EaseInOutSine), RepeatMode.Reverse),
+                                label = "connDot"
                             )
-                        }
-                        Spacer(modifier = Modifier.width(14.dp))
-                        Column(modifier = Modifier.weight(1f)) {
+                            Box(
+                                modifier = Modifier
+                                    .size(10.dp)
+                                    .clip(CircleShape)
+                                    .background(
+                                        if (connectionStatus == "Connected") Green500.copy(alpha = 0.5f + dotAnim * 0.5f)
+                                        else Amber400.copy(alpha = 0.5f + dotAnim * 0.5f)
+                                    ),
+                            )
+                            Spacer(modifier = Modifier.width(10.dp))
                             Text(
-                                text = "Your Account",
+                                text = "Backend Server",
                                 style = MaterialTheme.typography.titleMedium,
                                 color = Slate50,
                             )
+                            Spacer(modifier = Modifier.weight(1f))
                             Text(
-                                text = deviceId.take(16) + "...",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = Slate400,
+                                text = connectionStatus,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = if (connectionStatus == "Connected") Green400 else Amber400,
+                                fontWeight = FontWeight.Medium,
                             )
                         }
-                        Icon(
-                            imageVector = Icons.Default.ChevronRight,
-                            contentDescription = null,
-                            tint = Slate600,
-                            modifier = Modifier.size(20.dp),
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        Text(
+                            text = "Enter your laptop's local IP address",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Slate400,
                         )
-                    }
-                }
-            }
-        }
 
-        SettingsSection(title = "Notifications") {
-            SettingsCard {
-                SettingsToggle(
-                    icon = Icons.Default.Notifications,
-                    iconTint = Indigo400,
-                    title = "Incoming calls",
-                    subtitle = "Get notified when an AI agent calls",
-                    checked = incomingCallsEnabled,
-                    onCheckedChange = { incomingCallsEnabled = it },
-                )
-                SettingsDivider()
-                SettingsToggle(
-                    icon = Icons.Default.TaskAlt,
-                    iconTint = Green400,
-                    title = "Task completions",
-                    subtitle = "Receive updates when tasks finish",
-                    checked = taskCompletionsEnabled,
-                    onCheckedChange = { taskCompletionsEnabled = it },
-                )
-            }
-        }
+                        Spacer(modifier = Modifier.height(10.dp))
 
-        SettingsSection(title = "Do Not Disturb") {
-            SettingsCard {
-                SettingsToggle(
-                    icon = Icons.Default.DoNotDisturb,
-                    iconTint = Amber400,
-                    title = "Quiet hours",
-                    subtitle = "Mute incoming calls during specific hours",
-                    checked = dndEnabled,
-                    onCheckedChange = { dndEnabled = it },
-                )
-                AnimatedVisibility(
-                    visible = dndEnabled,
-                    enter = expandVertically(animationSpec = spring(dampingRatio = 0.7f)) + fadeIn(),
-                    exit = shrinkVertically() + fadeOut(),
-                ) {
-                    Column {
-                        SettingsDivider()
+                        // IP input
+                        OutlinedTextField(
+                            value = serverHost,
+                            onValueChange = { viewModel.updateServerHost(it) },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                            placeholder = { Text("10.0.2.2", color = Slate500) },
+                            leadingIcon = {
+                                Icon(Icons.Default.Computer, null, tint = Indigo400, modifier = Modifier.size(20.dp))
+                            },
+                            keyboardOptions = KeyboardOptions(
+                                keyboardType = KeyboardType.Uri,
+                                imeAction = ImeAction.Go,
+                            ),
+                            keyboardActions = KeyboardActions(
+                                onGo = { focusManager.clearFocus(); viewModel.connect(); onReconnect() }
+                            ),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedTextColor = Slate50,
+                                unfocusedTextColor = Slate50,
+                                cursorColor = Indigo400,
+                                focusedBorderColor = Indigo600,
+                                unfocusedBorderColor = Slate700,
+                                focusedContainerColor = Slate800,
+                                unfocusedContainerColor = Slate800,
+                            ),
+                            shape = RoundedCornerShape(12.dp),
+                        )
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        // Buttons row
                         Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 16.dp, vertical = 12.dp),
-                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
                         ) {
-                            Icon(
-                                imageVector = Icons.Default.Schedule,
-                                contentDescription = null,
-                                tint = Slate500,
-                                modifier = Modifier.size(20.dp),
-                            )
-                            Spacer(modifier = Modifier.width(12.dp))
-                            Text(
-                                text = "22:00 — 07:00",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = Slate300,
-                            )
+                            Button(
+                                onClick = { focusManager.clearFocus(); viewModel.connect(); onReconnect() },
+                                modifier = Modifier.weight(1f),
+                                shape = RoundedCornerShape(12.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = Indigo600),
+                            ) {
+                                Icon(Icons.Default.Wifi, null, modifier = Modifier.size(18.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Connect")
+                            }
+
+                            OutlinedButton(
+                                onClick = {
+                                    focusManager.clearFocus()
+                                    viewModel.updateServerHost("10.0.2.2")
+                                    viewModel.connect()
+                                    onReconnect()
+                                },
+                                shape = RoundedCornerShape(12.dp),
+                                colors = ButtonDefaults.outlinedButtonColors(contentColor = Slate400),
+                                border = null,
+                            ) {
+                                Text("Reset")
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        // ── Connection Test ────────────────
+                        HorizontalDivider(color = Slate700.copy(alpha = 0.4f))
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.Speed, null, tint = Slate400, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Test Connection",
+                                style = MaterialTheme.typography.titleSmall, color = Slate50,
+                                fontWeight = FontWeight.Medium)
                             Spacer(modifier = Modifier.weight(1f))
-                            Surface(
-                                onClick = {},
-                                shape = RoundedCornerShape(8.dp),
-                                color = GlassIndigo,
+
+                            // Test result indicator
+                            AnimatedContent(
+                                targetState = testStatus,
+                                transitionSpec = {
+                                    fadeIn() + slideInHorizontally { it / 4 } togetherWith
+                                    fadeOut() + slideOutHorizontally { -it / 4 }
+                                },
+                                label = "testStatus",
+                            ) { status ->
+                                when (status) {
+                                    ConnectionTestStatus.IDLE -> {}
+                                    ConnectionTestStatus.TESTING -> {
+                                        val spin by rememberInfiniteTransition(label = "spin").animateFloat(
+                                            0f, 1f, infiniteRepeatable(tween(800, easing = LinearEasing), RepeatMode.Restart),
+                                            label = "spin"
+                                        )
+                                        Icon(Icons.Default.Sync, "Testing", tint = Indigo400,
+                                            modifier = Modifier.size(18.dp).clip(CircleShape).graphicsLayer {
+                                                rotationZ = spin * 360f
+                                            })
+                                    }
+                                    ConnectionTestStatus.SUCCESS -> {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Icon(Icons.Default.CheckCircle, null, tint = Green400, modifier = Modifier.size(18.dp))
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Text("${testLatency}ms", style = MaterialTheme.typography.labelSmall, color = Green400)
+                                        }
+                                    }
+                                    ConnectionTestStatus.FAILED -> {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Icon(Icons.Default.Error, null, tint = Red400, modifier = Modifier.size(18.dp))
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Text("Failed", style = MaterialTheme.typography.labelSmall, color = Red400)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        AnimatedVisibility(
+                            visible = testStatus != ConnectionTestStatus.TESTING,
+                            enter = fadeIn() + expandVertically(),
+                            exit = fadeOut() + shrinkVertically(),
+                        ) {
+                            Button(
+                                onClick = { viewModel.testConnection() },
+                                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                                shape = RoundedCornerShape(10.dp),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = when (testStatus) {
+                                        ConnectionTestStatus.SUCCESS -> Green600.copy(alpha = 0.2f)
+                                        ConnectionTestStatus.FAILED -> Red600.copy(alpha = 0.2f)
+                                        else -> Slate700
+                                    }
+                                ),
                             ) {
                                 Text(
-                                    text = "Edit",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = Indigo400,
-                                    fontWeight = FontWeight.SemiBold,
-                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                                    when (testStatus) {
+                                        ConnectionTestStatus.SUCCESS -> "Test Again"
+                                        ConnectionTestStatus.FAILED -> "Retry Test"
+                                        else -> "Ping Server"
+                                    },
+                                    color = when (testStatus) {
+                                        ConnectionTestStatus.SUCCESS -> Green400
+                                        ConnectionTestStatus.FAILED -> Red400
+                                        else -> Slate300
+                                    },
                                 )
                             }
                         }
-                    }
-                }
-            }
-        }
 
-        SettingsSection(title = "Privacy") {
-            SettingsCard {
-                SettingsToggle(
-                    icon = Icons.Default.Description,
-                    iconTint = Slate400,
-                    title = "Store transcripts",
-                    subtitle = "Keep call transcripts for review",
-                    checked = storeTranscripts,
-                    onCheckedChange = { storeTranscripts = it },
-                )
-                SettingsDivider()
-                ClickableRow(
-                    icon = Icons.Default.DeleteForever,
-                    iconTint = Red400,
-                    title = "Clear history",
-                    subtitle = "Remove all call records",
-                )
-            }
-        }
+                        Spacer(modifier = Modifier.height(8.dp))
 
-        SettingsSection(title = "Connected Agents") {
-            SettingsCard {
-                AgentRow(name = "OpenCode", status = "Active", statusColor = Green500)
-                SettingsDivider()
-                AgentRow(name = "Claude Code", status = "Active", statusColor = Green500)
-                SettingsDivider()
-                Surface(
-                    onClick = {},
-                    shape = RoundedCornerShape(12.dp),
-                    color = Color.Transparent,
-                ) {
-                    Row(
-                        modifier = Modifier.padding(16.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(36.dp)
-                                .clip(CircleShape)
-                                .background(GlassIndigo),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Add,
-                                contentDescription = null,
-                                tint = Indigo400,
-                                modifier = Modifier.size(20.dp),
-                            )
-                        }
-                        Spacer(modifier = Modifier.width(14.dp))
                         Text(
-                            text = "Add Agent",
-                            style = MaterialTheme.typography.titleMedium,
-                            color = Indigo400,
+                            text = "Default (10.0.2.2) works for Android emulator. " +
+                                    "Use your laptop's local IP for a real phone.",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Slate500,
+                            lineHeight = 16.sp,
                         )
                     }
                 }
             }
-        }
 
-        SettingsSection(title = "About") {
-            SettingsCard {
-                ClickableRow(
-                    icon = Icons.Default.Info,
-                    iconTint = Slate400,
-                    title = "Version",
-                    subtitle = "1.0.0",
-                )
-                SettingsDivider()
-                ClickableRow(
-                    icon = Icons.Default.Description,
-                    iconTint = Slate400,
-                    title = "Terms of Service",
-                )
-                SettingsDivider()
-                ClickableRow(
-                    icon = Icons.Default.Shield,
-                    iconTint = Slate400,
-                    title = "Privacy Policy",
-                )
-            }
-        }
-
-        Spacer(modifier = Modifier.height(24.dp))
-
-        var signOutPressed by remember { mutableStateOf(false) }
-        val signOutScale by animateFloatAsState(
-            targetValue = if (signOutPressed) 0.97f else 1f,
-            animationSpec = spring(dampingRatio = 0.5f, stiffness = 800f), label = "signOutScale"
-        )
-
-        OutlinedButton(
-            onClick = { viewModel.logout() },
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp)
-                .scale(signOutScale),
-            shape = RoundedCornerShape(16.dp),
-            colors = ButtonDefaults.outlinedButtonColors(contentColor = Red400),
-            border = ButtonDefaults.outlinedButtonBorder.copy(
-                brush = Brush.linearGradient(
-                    colors = listOf(Red500.copy(alpha = 0.3f), Red500.copy(alpha = 0.1f)),
-                ),
-            ),
-            interactionSource = remember { MutableInteractionSource() }.also { src ->
-                LaunchedEffect(src) {
-                    src.collectIsPressedAsState().let { signOutPressed = it.value }
+            // ── Network Info ──────────────────────────────
+            SettingsSection(title = "NETWORK INFO") {
+                GlassCard {
+                    Column(modifier = Modifier.padding(4.dp)) {
+                        InfoRow(
+                            icon = Icons.Default.Link,
+                            title = "HTTP API",
+                            subtitle = "http://$serverHost:4000/api/v1",
+                        )
+                        SettingsDivider()
+                        InfoRow(
+                            icon = Icons.Default.AltRoute,
+                            title = "WebSocket",
+                            subtitle = "ws://$serverHost:4001",
+                        )
+                        SettingsDivider()
+                        InfoRow(
+                            icon = Icons.Default.Cloud,
+                            title = "Connection Type",
+                            subtitle = "Local WiFi",
+                        )
+                    }
                 }
-            },
-        ) {
-            Icon(
-                imageVector = Icons.Default.Logout,
-                contentDescription = null,
-                modifier = Modifier.size(18.dp),
-            )
-            Spacer(modifier = Modifier.width(8.dp))
-            Text("Sign Out", fontWeight = FontWeight.Medium)
-        }
+            }
 
-        Spacer(modifier = Modifier.height(32.dp))
+            // ── About ─────────────────────────────────────
+            SettingsSection(title = "ABOUT") {
+                GlassCard {
+                    InfoRow(
+                        icon = Icons.Default.Info,
+                        title = "Version",
+                        subtitle = "1.0.0",
+                        onClick = {},
+                    )
+                    SettingsDivider()
+                    InfoRow(
+                        icon = Icons.Default.Code,
+                        title = "Stack",
+                        subtitle = "Kotlin · Jetpack Compose · MCP",
+                    )
+                    SettingsDivider()
+                    InfoRow(
+                        icon = Icons.Default.Shield,
+                        title = "Security",
+                        subtitle = "Local network only · No cloud",
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(32.dp))
+        }
     }
 }
 
@@ -324,171 +410,80 @@ private fun SettingsSection(title: String, content: @Composable () -> Unit) {
     Column(modifier = Modifier.padding(horizontal = 16.dp)) {
         Text(
             text = title,
-            style = MaterialTheme.typography.titleSmall,
-            color = Slate400,
+            style = MaterialTheme.typography.labelSmall,
+            color = Slate500,
             fontWeight = FontWeight.SemiBold,
-            letterSpacing = 0.5.sp,
-            modifier = Modifier.padding(start = 4.dp, bottom = 8.dp, top = 16.dp),
+            letterSpacing = 1.2.sp,
+            modifier = Modifier.padding(start = 4.dp, bottom = 8.dp, top = 12.dp),
         )
         content()
     }
 }
 
 @Composable
-private fun SettingsCard(content: @Composable () -> Unit) {
+private fun GlassCard(content: @Composable () -> Unit) {
     Surface(
         shape = RoundedCornerShape(16.dp),
-        color = Slate800,
+        color = Slate800.copy(alpha = 0.85f),
+        tonalElevation = 2.dp,
+        shadowElevation = 4.dp,
     ) {
         content()
     }
 }
 
 @Composable
-private fun SettingsToggle(
+private fun InfoRow(
     icon: ImageVector,
-    iconTint: Color,
-    title: String,
-    subtitle: String,
-    checked: Boolean,
-    onCheckedChange: (Boolean) -> Unit,
-) {
-    Surface(
-        onClick = { onCheckedChange(!checked) },
-        shape = RoundedCornerShape(12.dp),
-        color = Color.Transparent,
-    ) {
-        Row(
-            modifier = Modifier.padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Icon(
-                imageVector = icon,
-                contentDescription = null,
-                tint = iconTint,
-                modifier = Modifier.size(22.dp),
-            )
-            Spacer(modifier = Modifier.width(14.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = title,
-                    style = MaterialTheme.typography.titleMedium,
-                    color = Slate50,
-                )
-                Text(
-                    text = subtitle,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = Slate400,
-                )
-            }
-            Switch(
-                checked = checked,
-                onCheckedChange = onCheckedChange,
-                colors = SwitchDefaults.colors(
-                    checkedTrackColor = Indigo600,
-                    checkedThumbColor = Indigo400,
-                    uncheckedTrackColor = Slate700,
-                    uncheckedThumbColor = Slate500,
-                ),
-            )
-        }
-    }
-}
-
-@Composable
-private fun ClickableRow(
-    icon: ImageVector,
-    iconTint: Color,
     title: String,
     subtitle: String? = null,
+    onClick: (() -> Unit)? = null,
 ) {
     Surface(
-        onClick = {},
+        onClick = { onClick?.invoke() },
         shape = RoundedCornerShape(12.dp),
         color = Color.Transparent,
     ) {
         Row(
-            modifier = Modifier.padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Icon(
-                imageVector = icon,
-                contentDescription = null,
-                tint = iconTint,
-                modifier = Modifier.size(22.dp),
-            )
-            Spacer(modifier = Modifier.width(14.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = title,
-                    style = MaterialTheme.typography.titleMedium,
-                    color = Slate50,
-                )
-                if (subtitle != null) {
-                    Text(
-                        text = subtitle,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = Slate400,
-                    )
-                }
-            }
-            Icon(
-                imageVector = Icons.Default.ChevronRight,
-                contentDescription = null,
-                tint = Slate600,
-                modifier = Modifier.size(20.dp),
-            )
-        }
-    }
-}
-
-@Composable
-private fun AgentRow(name: String, status: String, statusColor: Color) {
-    Surface(
-        onClick = {},
-        shape = RoundedCornerShape(12.dp),
-        color = Color.Transparent,
-    ) {
-        Row(
-            modifier = Modifier.padding(16.dp),
+            modifier = Modifier
+                .padding(horizontal = 16.dp, vertical = 14.dp)
+                .fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Box(
                 modifier = Modifier
                     .size(36.dp)
                     .clip(CircleShape)
-                    .background(GlassIndigo),
+                    .background(Slate700.copy(alpha = 0.5f)),
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
-                    imageVector = Icons.Default.SmartToy,
+                    imageVector = icon,
                     contentDescription = null,
-                    tint = Indigo400,
+                    tint = Slate400,
                     modifier = Modifier.size(20.dp),
                 )
             }
             Spacer(modifier = Modifier.width(14.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = name,
-                    style = MaterialTheme.typography.titleMedium,
+                    text = title,
+                    style = MaterialTheme.typography.bodyMedium,
                     color = Slate50,
+                    fontWeight = FontWeight.Medium,
                 )
+                if (subtitle != null) {
+                    Text(
+                        text = subtitle,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Slate400,
+                        maxLines = 1,
+                    )
+                }
             }
-            val dotAnim by rememberInfiniteTransition(label = "agentDot").animateFloat(0f, 1f,
-                infiniteRepeatable(tween(1500, easing = EaseInOutSine), RepeatMode.Reverse), label = "agentStatus")
-            Box(
-                modifier = Modifier
-                    .size(6.dp)
-                    .clip(CircleShape)
-                    .background(statusColor.copy(alpha = 0.5f + dotAnim * 0.5f)),
-            )
-            Spacer(modifier = Modifier.width(6.dp))
-            Text(
-                text = status,
-                style = MaterialTheme.typography.labelSmall,
-                color = statusColor,
-            )
+            if (onClick != null) {
+                Icon(Icons.Default.ChevronRight, null, tint = Slate600, modifier = Modifier.size(18.dp))
+            }
         }
     }
 }
@@ -496,7 +491,7 @@ private fun AgentRow(name: String, status: String, statusColor: Color) {
 @Composable
 private fun SettingsDivider() {
     HorizontalDivider(
-        color = Slate700.copy(alpha = 0.5f),
-        modifier = Modifier.padding(start = 52.dp),
+        color = Slate700.copy(alpha = 0.3f),
+        modifier = Modifier.padding(start = 66.dp, end = 16.dp),
     )
 }

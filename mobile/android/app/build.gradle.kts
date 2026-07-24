@@ -81,9 +81,6 @@ dependencies {
     ksp(libs.hilt.compiler)
     implementation(libs.hilt.navigation.compose)
 
-    // Push
-    implementation(libs.firebase.messaging)
-
     // Security
     implementation(libs.security.crypto)
 }

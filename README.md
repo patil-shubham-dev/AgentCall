@@ -87,9 +87,10 @@ npm run dev
 ### Android App
 
 1. Open `mobile/android/` in Android Studio
-2. Update `ApiClient.BASE_URL` to your laptop's local IP (e.g., `http://192.168.1.42:4000`)
-3. Build and deploy to your phone
-4. Both devices must be on the same WiFi
+2. Build and deploy to your phone or emulator
+3. **On a real phone**: Open the app → tap **Settings** → enter your laptop's local IP (e.g. `192.168.1.42`) → tap **Connect**
+4. **On emulator**: The default `10.0.2.2` already points to your host machine — just open the app
+5. Both devices must be on the same WiFi
 
 ### MCP Server (for AI agents)
 
@@ -124,8 +125,26 @@ Add to `.cursor/mcp.json` or `.vscode/mcp.json`:
 }
 ```
 
-**ChatGPT:**
-Use ChatGPT Custom GPTs with the [VoiceBridge OpenAPI spec](voicebridge-openapi.json) via ngrok.
+**ChatGPT (via ngrok):**
+
+1. Start the MCP Server in SSE mode:
+   ```bash
+   cd mcp-server
+   MCP_TRANSPORT=sse MCP_API_KEY=vb-your-secret-key-here npm run dev
+   ```
+
+2. In another terminal, start ngrok to create a public HTTPS tunnel:
+   ```bash
+   ngrok http 3000
+   ```
+   → Copy the generated URL (e.g. `https://abc123.ngrok-free.app`)
+
+3. In ChatGPT's custom GPT settings, add an MCP Server:
+   - **MCP Server URL**: `https://abc123.ngrok-free.app/sse`
+   - **API Key**: `vb-your-secret-key-here` (set this via the `x-api-key` header)
+   - ChatGPT will scan and discover 5 tools: `create_call`, `send_message`, `get_transcript`, `complete_call`, `cancel_call`
+
+**Note**: The free ngrok tier gives you a random URL that resets each time. For a fixed URL, upgrade to a paid ngrok plan.
 
 ### Test It
 

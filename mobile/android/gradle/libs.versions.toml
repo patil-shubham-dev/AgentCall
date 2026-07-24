@@ -12,7 +12,6 @@ kotlinx-serialization = "1.6.3"
 kotlinx-coroutines = "1.8.1"
 lifecycle = "2.8.3"
 webrtc = "1.0.32006"
-firebase-messaging = "24.0.0"
 hilt-navigation-compose = "1.2.0"
 activity-compose = "1.9.0"
 core-ktx = "1.13.1"
@@ -40,7 +39,6 @@ webrtc = { group = "io.getstream", name = "stream-webrtc-android", version.ref =
 hilt-android = { group = "com.google.dagger", name = "hilt-android", version.ref = "hilt" }
 hilt-compiler = { group = "com.google.dagger", name = "hilt-android-compiler", version.ref = "hilt" }
 hilt-navigation-compose = { group = "androidx.hilt", name = "hilt-navigation-compose", version.ref = "hilt-navigation-compose" }
-firebase-messaging = { group = "com.google.firebase", name = "firebase-messaging-ktx", version.ref = "firebase-messaging" }
 security-crypto = { group = "androidx.security", name = "security-crypto", version.ref = "security-crypto" }
 
 [plugins]

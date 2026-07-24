@@ -43,16 +43,25 @@ class CallService : Service() {
 
     var callId: String? = null
     var textToSpeech: TextToSpeech? = null
-    var mediaRecorder: MediaRecorder? = null
-    var audioFile: File? = null
     var isRecording = false
     var isAiSpeaking = false
     var isPaused = false
 
+    // Barge-in detection (when AI is speaking, user interrupts)
     private var audioRecord: AudioRecord? = null
     private var bargeInJob: Job? = null
+
+    // Manual recording (user presses Record button)
+    private var recordingRecord: AudioRecord? = null
+    private var recordingJob: Job? = null
+    private var recordingPcmFile: File? = null
+
     private var currentEmotion: String = "neutral"
     private var bargeInCallback: ((String) -> Unit)? = null
+
+    // Last AI message text, for the Repeat button
+    private var lastAiMessage: String = ""
+    private var lastAiEmotion: String = "neutral"
 
     private val api: ApiService = ApiClient.create()
 
@@ -130,6 +139,11 @@ class CallService : Service() {
             ACTION_BARGE_IN -> {
                 val text = intent.getStringExtra(EXTRA_TEXT) ?: return START_NOT_STICKY
                 handleBargeInCommand(text)
+            }
+            ACTION_REPEAT_LAST -> {
+                if (lastAiMessage.isNotBlank()) {
+                    speakText(lastAiMessage, lastAiEmotion)
+                }
             }
             ACTION_END_CALL -> {
                 endCall()
@@ -402,7 +416,7 @@ class CallService : Service() {
         bargeInJob?.cancel()
         bargeInJob = null
         try { audioRecord?.stop() } catch (_: Exception) {}
-        audioRecord?.release()
+        try { audioRecord?.release() } catch (_: Exception) {}
         audioRecord = null
     }
 
@@ -430,16 +444,26 @@ class CallService : Service() {
                                     putString("text", event.content)
                                     putString("emotion", emotion)
                                 })
+                                // Store for Repeat button
+                                lastAiMessage = event.content
+                                lastAiEmotion = emotion
+                                // Notify the UI to show a chat bubble
+                                CallEventBus.emit(CallEvent.AiMessage(event.content, emotion))
                             }
                             is VoiceBridgeEvent.CallEnded -> {
+                                CallEventBus.emit(CallEvent.CallEnded)
                                 speakWithEmotion("Call ended.", "neutral", "end")
                                 delay(1500); stopSelf()
                             }
                             is VoiceBridgeEvent.CallCancelled -> {
+                                CallEventBus.emit(CallEvent.CallEnded)
                                 speakWithEmotion("Call was cancelled.", "neutral", "cancel")
                                 delay(1500); stopSelf()
                             }
-                            is VoiceBridgeEvent.Disconnected -> stopSelf()
+                            is VoiceBridgeEvent.Disconnected -> {
+                                CallEventBus.emit(CallEvent.CallEnded)
+                                stopSelf()
+                            }
                             else -> {}
                         }
                     }
@@ -451,32 +475,77 @@ class CallService : Service() {
     private fun startRecording() {
         if (isRecording) return
         try {
-            val dir = File(cacheDir, "voicebridge"); dir.mkdirs()
-            audioFile = File(dir, "recording_${System.currentTimeMillis()}.wav")
-            mediaRecorder = MediaRecorder().apply {
-                setAudioSource(MediaRecorder.AudioSource.MIC)
-                setOutputFormat(MediaRecorder.OutputFormat.THREE_GPP)
-                setAudioEncoder(MediaRecorder.AudioEncoder.AMR_NB)
-                setAudioSamplingRate(SAMPLE_RATE)
-                setAudioChannels(1)
-                setOutputFile(audioFile?.absolutePath)
-                prepare(); start()
+            val bufferSize = AudioRecord.getMinBufferSize(SAMPLE_RATE,
+                AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
+            if (bufferSize == AudioRecord.ERROR_BAD_VALUE) return
+
+            // Stop barge-in detection while recording (can't have two AudioRecord instances)
+            stopBargeInDetection()
+
+            recordingRecord = AudioRecord(MediaRecorder.AudioSource.MIC,
+                SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO,
+                AudioFormat.ENCODING_PCM_16BIT, bufferSize * 4)
+
+            if (recordingRecord?.state != AudioRecord.STATE_INITIALIZED) {
+                recordingRecord = null
+                return
             }
+
+            val dir = File(cacheDir, "recordings"); dir.mkdirs()
+            recordingPcmFile = File(dir, "recording_${System.currentTimeMillis()}.pcm")
+            val raf = RandomAccessFile(recordingPcmFile, "rw")
+
+            recordingRecord?.startRecording()
             isRecording = true
             updateNotification("Recording...")
+
+            recordingJob = scope.launch {
+                val buffer = ShortArray(bufferSize)
+                while (isActive && isRecording) {
+                    val read = recordingRecord?.read(buffer, 0, buffer.size) ?: break
+                    if (read > 0) {
+                        raf.writeShortArray(buffer, 0, read)
+                    }
+                }
+                raf.close()
+            }
         } catch (_: Exception) { isRecording = false }
     }
 
     private fun stopRecording() {
         if (!isRecording) return
+        isRecording = false
+
+        recordingJob?.cancel()
+        recordingJob = null
+
         try {
-            mediaRecorder?.apply { stop(); release() }; mediaRecorder = null
-            isRecording = false; updateNotification("Processing...")
-            val file = audioFile; val currentCallId = callId
-            if (file != null && file.exists() && currentCallId != null) {
-                scope.launch { uploadAudio(currentCallId, file); file.delete() }
+            recordingRecord?.stop()
+            recordingRecord?.release()
+        } catch (_: Exception) {}
+        recordingRecord = null
+
+        updateNotification("Processing...")
+
+        val pcmFile = recordingPcmFile
+        val currentCallId = callId
+
+        if (pcmFile != null && pcmFile.exists() && currentCallId != null) {
+            scope.launch {
+                try {
+                    val pcmData = pcmFile.readBytes()
+                    pcmFile.delete()
+
+                    // Wrap raw PCM in a WAV header so the backend can parse it
+                    val wavFile = File(cacheDir, "recording_${System.currentTimeMillis()}.wav")
+                    val wavHeader = createWavHeader(pcmData.size, SAMPLE_RATE)
+                    wavFile.writeBytes(wavHeader + pcmData)
+
+                    uploadAudio(currentCallId, wavFile)
+                    wavFile.delete()
+                } catch (_: Exception) {}
             }
-        } catch (_: Exception) { isRecording = false }
+        }
     }
 
     private suspend fun uploadAudio(callId: String, file: File) {
@@ -514,6 +583,8 @@ class CallService : Service() {
 
             speakWithEmotion("You said: ${response.text}", "neutral", "echo")
             dispatchToListeners("user_transcript", Bundle().apply { putString("text", response.text) })
+            // Notify the UI to show a user chat bubble
+            CallEventBus.emit(CallEvent.UserMessage(response.text))
         } catch (_: Exception) {
             speakWithEmotion("Sorry, I didn't catch that.", "calm", "err")
         }
@@ -597,6 +668,7 @@ class CallService : Service() {
         const val ACTION_STOP_RECORDING = "com.agentcall.action.STOP_RECORDING"
         const val ACTION_SPEAK = "com.agentcall.action.SPEAK"
         const val ACTION_BARGE_IN = "com.agentcall.action.BARGE_IN"
+        const val ACTION_REPEAT_LAST = "com.agentcall.action.REPEAT_LAST"
         const val ACTION_END_CALL = "com.agentcall.action.END_CALL"
         const val EXTRA_CALL_ID = "call_id"
         const val EXTRA_TEXT = "text"

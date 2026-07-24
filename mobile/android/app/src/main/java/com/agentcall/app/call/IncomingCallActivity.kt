@@ -26,12 +26,16 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.*
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.agentcall.app.data.api.ApiClient
 import com.agentcall.app.data.api.ApiService
+import com.agentcall.app.ui.composables.AmbientBackground
 import com.agentcall.app.ui.theme.*
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.launch
@@ -107,72 +111,118 @@ fun IncomingCallScreen(
 
     val laterOptions = listOf(5 to "5 min", 10 to "10 min", 15 to "15 min", 30 to "30 min", 60 to "1 hour")
 
+    // Priority colors
+    val (priorityLabel, priorityColor, themeAccent, themeGradient) = when (priority) {
+        "urgent" -> "URGENT" to Red400 to Red400 to listOf(Red500, Red600)
+        "high" -> "HIGH" to Amber400 to Amber400 to listOf(Amber500, Amber600)
+        "normal" -> "NORMAL" to Indigo400 to Indigo500 to listOf(Indigo500, GradientBrandEnd)
+        "low" -> "LOW" to Slate500 to Slate400 to listOf(Slate500, Slate600)
+        else -> priority.uppercase() to Slate500 to Indigo500 to listOf(Indigo500, GradientBrandEnd)
+    }
+
     val infiniteTransition = rememberInfiniteTransition(label = "incoming")
-    val pulseRing by infiniteTransition.animateFloat(0f, 1f,
-        infiniteRepeatable(tween(2000, easing = FastOutSlowInEasing), RepeatMode.Restart), label = "pulseRing")
+
+    // Expanding ring pulses (multiple layers)
+    val ring1 by infiniteTransition.animateFloat(0f, 1f,
+        infiniteRepeatable(tween(1800, easing = FastOutSlowInEasing), RepeatMode.Restart), label = "ring1")
+    val ring2 by infiniteTransition.animateFloat(0f, 1f,
+        infiniteRepeatable(tween(1800, easing = FastOutSlowInEasing, delayMillis = 600), RepeatMode.Restart), label = "ring2")
+    val ring3 by infiniteTransition.animateFloat(0f, 1f,
+        infiniteRepeatable(tween(1800, easing = FastOutSlowInEasing, delayMillis = 1200), RepeatMode.Restart), label = "ring3")
+
     val pulseDot by infiniteTransition.animateFloat(0f, 1f,
         infiniteRepeatable(tween(2000, easing = EaseInOutSine), RepeatMode.Reverse), label = "pulseDot")
-
-    val orbAnim by infiniteTransition.animateFloat(0f, 1f,
-        infiniteRepeatable(tween(8000, easing = LinearEasing), RepeatMode.Restart), label = "orbDrift")
-    val avatarGlow by infiniteTransition.animateFloat(0f, 1f,
-        infiniteRepeatable(tween(3000, easing = EaseInOutSine), RepeatMode.Reverse), label = "avatarGlow")
+    val orbDrift by infiniteTransition.animateFloat(0f, 1f,
+        infiniteRepeatable(tween(10000, easing = LinearEasing), RepeatMode.Restart), label = "orbDrift")
+    val glowSweep by infiniteTransition.animateFloat(0f, 1f,
+        infiniteRepeatable(tween(4000, easing = EaseInOutSine), RepeatMode.Reverse), label = "glowSweep")
 
     Box(modifier = Modifier.fillMaxSize().background(Slate900)) {
-        Canvas(modifier = Modifier.fillMaxSize()) {
-            val cx = size.width / 2
-            val cy = size.height * 0.3f
-            drawCircle(GradientBrandStart.copy(alpha = 0.12f * (1f - pulseRing)),
-                size.width * (0.15f + pulseRing * 0.1f) * 3f, Offset(cx, cy))
-            val orbOffsetX = sin(orbAnim * 2 * Math.PI.toFloat()) * 20f
-            drawCircle(GradientBrandEnd.copy(alpha = 0.06f), size.width * 0.4f,
-                Offset(size.width * 0.6f + orbOffsetX, size.height * 0.5f))
-            drawCircle(Indigo500.copy(alpha = 0.04f), size.width * 0.6f,
-                Offset(size.width * 0.3f - orbOffsetX, size.height * 0.7f))
-        }
+        // Animated ambient background with priority color
+        AmbientBackground(
+            accentColor = themeAccent,
+            secondaryColor = themeGradient.getOrElse(1) { GradientBrandEnd },
+            speedMultiplier = if (priority == "urgent") 2f else 1f,
+            density = 1.5f,
+        )
 
         Column(modifier = Modifier.fillMaxSize().padding(32.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             Spacer(modifier = Modifier.weight(0.12f))
 
-            Surface(shape = RoundedCornerShape(100.dp), color = GlassIndigo) {
+            // ── Incoming Call Badge ────────────────────
+            Surface(shape = RoundedCornerShape(100.dp), color = themeAccent.copy(alpha = 0.12f)) {
                 Row(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                     Box(modifier = Modifier.size(8.dp).clip(CircleShape)
-                        .background(Indigo400.copy(alpha = 0.5f + pulseDot * 0.5f)))
+                        .background(themeAccent.copy(alpha = 0.5f + pulseDot * 0.5f)))
                     Spacer(modifier = Modifier.width(8.dp))
                     Text("Incoming AI Call",
                         style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 1.sp),
-                        color = Indigo300, fontWeight = FontWeight.SemiBold)
+                        color = themeAccent, fontWeight = FontWeight.SemiBold)
                 }
             }
 
             Spacer(modifier = Modifier.weight(0.08f))
 
+            // ── Animated Avatar with Expanding Rings ───
             Box(
-                modifier = Modifier.size(160.dp).scale(0.97f + pulseRing * 0.03f),
+                modifier = Modifier.size(170.dp),
                 contentAlignment = Alignment.Center,
             ) {
-                Canvas(modifier = Modifier.size(160.dp)) {
-                    val maxRadius = size.minDimension / 2
-                    drawCircle(Indigo500.copy(alpha = 0.15f * (1f - pulseRing)), maxRadius)
-                    drawCircle(Indigo400.copy(alpha = 0.15f * (1f - pulseRing) * 0.5f),
-                        maxRadius * (0.35f + pulseRing * 0.12f))
+                // Expanding ring 1
+                Canvas(modifier = Modifier.fillMaxSize()) {
+                    val r = size.minDimension / 2
+                    val ringRadius = r * (0.5f + ring1 * 0.5f)
+                    drawCircle(
+                        color = themeAccent.copy(alpha = 0.12f * (1f - ring1)),
+                        radius = ringRadius,
+                    )
                 }
-                Box(modifier = Modifier.size(100.dp).clip(CircleShape)
-                    .background(Brush.linearGradient(listOf(GradientBrandStart, GradientBrandEnd))),
+                // Expanding ring 2
+                Canvas(modifier = Modifier.fillMaxSize()) {
+                    val r = size.minDimension / 2
+                    val ringRadius = r * (0.5f + ring2 * 0.5f)
+                    drawCircle(
+                        color = themeAccent.copy(alpha = 0.08f * (1f - ring2)),
+                        radius = ringRadius,
+                    )
+                }
+                // Expanding ring 3
+                Canvas(modifier = Modifier.fillMaxSize()) {
+                    val r = size.minDimension / 2
+                    val ringRadius = r * (0.5f + ring3 * 0.5f)
+                    drawCircle(
+                        color = themeAccent.copy(alpha = 0.05f * (1f - ring3)),
+                        radius = ringRadius,
+                    )
+                }
+
+                // Rotating glow sweep arc
+                Canvas(modifier = Modifier.size(140.dp)) {
+                    val sweep = 30f + glowSweep * 20f
+                    val rotation = glowSweep * 360f
+                    drawArc(
+                        color = themeAccent.copy(alpha = 0.2f),
+                        startAngle = rotation,
+                        sweepAngle = sweep,
+                        useCenter = false,
+                        style = Stroke(width = 2.5f),
+                        topLeft = Offset(4f, 4f),
+                        size = androidx.compose.ui.geometry.Size(size.width - 8f, size.height - 8f),
+                    )
+                }
+
+                // Main avatar circle with gradient
+                Box(modifier = Modifier.size(110.dp).clip(CircleShape)
+                    .background(Brush.linearGradient(listOf(themeGradient[0], themeGradient[1]))),
                     contentAlignment = Alignment.Center) {
-                    Canvas(modifier = Modifier.size(100.dp)) {
-                        val sweepAngle = avatarGlow * 60f
-                        drawArc(
-                            color = Color.White.copy(alpha = 0.15f),
-                            startAngle = -30f + avatarGlow * 360f,
-                            sweepAngle = sweepAngle,
-                            useCenter = false,
-                            style = Stroke(width = 3f),
-                            topLeft = Offset(8f, 8f),
-                            size = androidx.compose.ui.geometry.Size(size.width - 16f, size.height - 16f),
+                    // Inner glow
+                    Canvas(modifier = Modifier.size(110.dp)) {
+                        drawCircle(
+                            color = Color.White.copy(alpha = 0.08f + glowSweep * 0.08f),
+                            radius = size.minDimension / 2 * 0.85f,
                         )
                     }
-                    Icon(Icons.Default.Call, null, modifier = Modifier.size(52.dp), tint = Slate50)
+                    Icon(Icons.Default.Call, null, modifier = Modifier.size(54.dp), tint = Slate50)
                 }
             }
 
@@ -180,13 +230,7 @@ fun IncomingCallScreen(
             Text(callerName, style = MaterialTheme.typography.headlineSmall, color = Slate50, fontWeight = FontWeight.Bold)
             Spacer(modifier = Modifier.height(12.dp))
 
-            val (priorityLabel, priorityColor) = when (priority) {
-                "urgent" -> "URGENT" to Red400
-                "high" -> "HIGH" to Amber400
-                "normal" -> "NORMAL" to Indigo400
-                "low" -> "LOW" to Slate500
-                else -> priority.uppercase() to Slate500
-            }
+            // ── Priority Badge ─────────────────────────
             Surface(shape = RoundedCornerShape(6.dp), color = priorityColor.copy(alpha = 0.15f)) {
                 Text(priorityLabel,
                     style = MaterialTheme.typography.labelMedium.copy(letterSpacing = 1.5.sp, fontSize = 11.sp),
@@ -196,20 +240,29 @@ fun IncomingCallScreen(
 
             Spacer(modifier = Modifier.height(16.dp))
 
+            // ── Context Card ───────────────────────────
             if (contextSummary.isNotBlank()) {
-                Surface(modifier = Modifier.fillMaxWidth(0.85f), shape = RoundedCornerShape(16.dp),
-                    color = Slate800.copy(alpha = 0.7f)) {
+                Surface(
+                    modifier = Modifier.fillMaxWidth(0.85f),
+                    shape = RoundedCornerShape(16.dp),
+                    color = Slate800.copy(alpha = 0.7f),
+                ) {
                     Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.Top) {
                         Icon(Icons.Default.Info, null, modifier = Modifier.size(18.dp), tint = Slate400)
                         Spacer(modifier = Modifier.width(10.dp))
-                        Text(contextSummary, style = MaterialTheme.typography.bodyMedium,
-                            color = Slate300, textAlign = TextAlign.Start)
+                        Text(
+                            contextSummary,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = Slate300,
+                            textAlign = TextAlign.Start,
+                        )
                     }
                 }
             }
 
             Spacer(modifier = Modifier.weight(0.1f))
 
+            // ── Action Buttons / Later Picker ──────────
             if (showLaterPicker) {
                 Surface(
                     modifier = Modifier.fillMaxWidth(0.85f),
@@ -253,7 +306,7 @@ fun IncomingCallScreen(
                 }
             } else {
                 Row(horizontalArrangement = Arrangement.spacedBy(32.dp), verticalAlignment = Alignment.CenterVertically) {
-                    PressableActionButton(
+                    ActionButton(
                         icon = Icons.Default.PhoneForwarded,
                         label = "Decline",
                         iconTint = Red400,
@@ -263,7 +316,7 @@ fun IncomingCallScreen(
                         onClick = onDecline,
                     )
 
-                    PressableActionButton(
+                    ActionButton(
                         icon = Icons.Default.Call,
                         label = "Answer",
                         iconTint = Slate50,
@@ -272,9 +325,10 @@ fun IncomingCallScreen(
                         size = 72.dp,
                         onClick = onAnswer,
                         isSolid = true,
+                        solidColor = Green500,
                     )
 
-                    PressableActionButton(
+                    ActionButton(
                         icon = Icons.Default.Schedule,
                         label = "Later",
                         iconTint = Indigo300,
@@ -297,21 +351,26 @@ fun IncomingCallScreen(
 }
 
 @Composable
-private fun PressableActionButton(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
+private fun ActionButton(
+    icon: ImageVector,
     label: String,
     iconTint: Color,
     labelColor: Color,
     bgColor: Color,
-    size: androidx.compose.ui.unit.Dp,
+    size: Dp,
     onClick: () -> Unit,
     isSolid: Boolean = false,
+    solidColor: Color = Green500,
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val isPressed by interactionSource.collectIsPressedAsState()
     val pressScale by animateFloatAsState(
         targetValue = if (isPressed) 0.92f else 1f,
-        animationSpec = spring(dampingRatio = 0.5f, stiffness = 800f), label = "pressActionScale"
+        animationSpec = spring(dampingRatio = 0.5f, stiffness = 800f), label = "pressScale"
+    )
+    val pressElevation by animateDpAsState(
+        targetValue = if (isPressed) 4.dp else 8.dp,
+        animationSpec = spring(dampingRatio = 0.6f, stiffness = 600f), label = "pressElevation"
     )
 
     Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -320,9 +379,10 @@ private fun PressableActionButton(
                 onClick = onClick,
                 modifier = Modifier.size(size).scale(pressScale),
                 shape = CircleShape,
-                colors = ButtonDefaults.buttonColors(containerColor = Green500),
+                colors = ButtonDefaults.buttonColors(containerColor = solidColor),
                 contentPadding = PaddingValues(0.dp),
                 interactionSource = interactionSource,
+                elevation = ButtonDefaults.buttonElevation(defaultElevation = pressElevation),
             ) {
                 Icon(icon, label, modifier = Modifier.size(size * 0.44f), tint = iconTint)
             }
@@ -333,6 +393,7 @@ private fun PressableActionButton(
                 color = bgColor,
                 tonalElevation = 0.dp,
                 interactionSource = interactionSource,
+                shadowElevation = pressElevation,
             ) {
                 Box(modifier = Modifier.size(size).scale(pressScale), contentAlignment = Alignment.Center) {
                     Icon(icon, label, modifier = Modifier.size(size * 0.44f), tint = iconTint)

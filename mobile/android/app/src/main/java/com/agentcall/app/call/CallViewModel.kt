@@ -1,11 +1,5 @@
 package com.agentcall.app.call
 
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.tween
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.agentcall.app.data.api.ApiClient
@@ -48,6 +42,8 @@ data class ActiveCallUiState(
     val statusText: String = "Connecting...",
     val waveformLevels: List<Float> = List(40) { 0.08f },
     val peakWaveformLevel: Float = 0f,
+    val currentEmotion: String = "neutral",
+    val emotionHistory: List<String> = emptyList(),
 )
 
 @HiltViewModel
@@ -55,6 +51,7 @@ class CallViewModel @Inject constructor() : ViewModel() {
 
     private val api: ApiService = ApiClient.create()
     private var messageCounter = 0
+    private val emotionHistory = mutableListOf<String>()
 
     private val _uiState = MutableStateFlow(ActiveCallUiState())
     val uiState: StateFlow<ActiveCallUiState> = _uiState.asStateFlow()
@@ -76,9 +73,23 @@ class CallViewModel @Inject constructor() : ViewModel() {
                 )
             }
         }
+
+        // Listen for live call events from CallService (via the event bus)
+        viewModelScope.launch {
+            CallEventBus.events.collect { event ->
+                when (event) {
+                    is CallEvent.AiMessage -> addAiMessage(event.text, event.emotion)
+                    is CallEvent.UserMessage -> addUserTranscript(event.text)
+                    is CallEvent.CallEnded -> disconnect()
+                }
+            }
+        }
     }
 
     fun addAiMessage(text: String, emotion: String = "neutral") {
+        emotionHistory.add(emotion)
+        val topEmotions = emotionHistory.takeLast(5)
+
         val msg = ChatBubble(
             id = "ai_${messageCounter++}",
             role = "ai",
@@ -96,6 +107,8 @@ class CallViewModel @Inject constructor() : ViewModel() {
             },
             isAiSpeaking = true,
             isAITyping = false,
+            currentEmotion = emotion,
+            emotionHistory = topEmotions.toList(),
         )
     }
 
@@ -145,7 +158,7 @@ class CallViewModel @Inject constructor() : ViewModel() {
     fun tick() {
         val current = _uiState.value
         val t = current.elapsedSeconds.toFloat()
-        val levels = generateWaveform(t, !current.isRecording && !current.isAiSpeaking)
+        val levels = generateWaveform(t, !current.isRecording && !current.isAiSpeaking, current.currentEmotion)
         _uiState.value = current.copy(
             elapsedSeconds = current.elapsedSeconds + 1,
             waveformLevels = levels,
@@ -161,13 +174,20 @@ class CallViewModel @Inject constructor() : ViewModel() {
         )
     }
 
-    private fun generateWaveform(t: Float, silent: Boolean): List<Float> {
+    private fun generateWaveform(t: Float, silent: Boolean, emotion: String): List<Float> {
         val base = if (silent) 0.04f else 0.08f
+        val freqMod = when (emotion) {
+            "urgent" -> 1.5f
+            "excited" -> 1.3f
+            "thoughtful" -> 0.7f
+            "calm" -> 0.5f
+            else -> 1.0f
+        }
         return List(40) { i ->
             if (silent) {
                 base + 0.02f * abs(sin(t * 0.3f + i * 0.5f))
             } else {
-                val freq = 2f + 3f * abs(sin(i * 0.1f))
+                val freq = (2f + 3f * abs(sin(i * 0.1f))) * freqMod
                 val envelope = 1f - (i - 20f) * (i - 20f) / 400f
                 val signal = abs(sin(t * freq * 0.5f + i * 0.3f) * 0.7f + sin(t * 1.3f + i * 0.7f) * 0.3f)
                 (base + signal * envelope * 0.5f).coerceIn(0.02f, 0.95f)

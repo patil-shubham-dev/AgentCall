@@ -50,7 +50,8 @@ class SignalingClient @Inject constructor() {
     }
 
     private suspend fun connectInternal() {
-        val url = "ws://10.0.2.2:4001/phone?user_id=$currentUserId"
+        val host = com.agentcall.app.data.api.ApiClient.serverHost
+        val url = "ws://$host:4001/phone?user_id=$currentUserId"
         val request = Request.Builder().url(url).build()
 
         webSocket = client.newWebSocket(request, object : WebSocketListener() {

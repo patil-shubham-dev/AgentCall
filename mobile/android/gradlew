@@ -1,0 +1,19 @@
+#!/bin/sh
+
+# Gradle wrapper for AgentCall
+
+# Default JVM options
+DEFAULT_JVM_OPTS='"-Xmx2g" "-Dfile.encoding=UTF-8"'
+
+# Determine the Gradle wrapper jar
+SCRIPT_DIR="$( cd "$( dirname "$0" )" && pwd )"
+
+if [ -f "$SCRIPT_DIR/gradle/wrapper/gradle-wrapper.jar" ]; then
+    CLASSPATH=$SCRIPT_DIR/gradle/wrapper/gradle-wrapper.jar
+else
+    echo "Gradle wrapper jar not found"
+    exit 1
+fi
+
+# Execute Gradle
+java $DEFAULT_JVM_OPTS -classpath "$CLASSPATH" org.gradle.wrapper.GradleWrapperMain "$@"
