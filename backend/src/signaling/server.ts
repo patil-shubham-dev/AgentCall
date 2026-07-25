@@ -1,4 +1,5 @@
 import { WebSocketServer, WebSocket } from 'ws';
+import type { Server } from 'node:http';
 import { logger } from '../common/logger.js';
 import { config } from '../common/config.js';
 import * as voicebridge from '../voicebridge/service.js';
@@ -66,8 +67,8 @@ function startEvictionTimer(): NodeJS.Timeout {
   }, 30_000).unref();
 }
 
-export function createSignalingServer(port: number): WebSocketServer {
-  const wss = new WebSocketServer({ port });
+export function createSignalingServer(server: Server): WebSocketServer {
+  const wss = new WebSocketServer({ server, path: '/phone' });
   const evictionTimer = startEvictionTimer();
 
   wss.on('connection', (ws, req) => {
@@ -78,31 +79,26 @@ export function createSignalingServer(port: number): WebSocketServer {
     }
 
     const url = new URL(req.url ?? '/', 'http://localhost');
-    const path = url.pathname;
     const userId = url.searchParams.get('user_id') ?? 'solo-user';
 
-    if (path === '/phone') {
-      voicebridge.registerPhone(userId, ws);
-      ws.send(JSON.stringify({
-        type: 'connected',
-        payload: { user_id: userId, server: 'agentcall-voicebridge' },
-        timestamp: new Date().toISOString(),
-      }));
-      logger.info({ userId }, 'Phone connected to signaling');
+    voicebridge.registerPhone(userId, ws);
+    ws.send(JSON.stringify({
+      type: 'connected',
+      payload: { user_id: userId, server: 'agentcall-voicebridge' },
+      timestamp: new Date().toISOString(),
+    }));
+    logger.info({ userId }, 'Phone connected to signaling');
 
-      ws.on('message', (data) => {
-        if (data.toString().length > MAX_MESSAGE_SIZE) {
-          sendError(ws, 'MESSAGE_TOO_LARGE', `Max size: ${MAX_MESSAGE_SIZE} bytes`);
-          return;
-        }
-        if (!checkMessageRateLimit(ws)) {
-          sendError(ws, 'RATE_LIMITED', `Limit: ${RATE_LIMIT_MESSAGES}/${RATE_LIMIT_WINDOW_MS / 1000}s`);
-          return;
-        }
-      });
-    } else {
-      ws.close(4004, 'Unknown path. Use /phone for phone connections.');
-    }
+    ws.on('message', (data) => {
+      if (data.toString().length > MAX_MESSAGE_SIZE) {
+        sendError(ws, 'MESSAGE_TOO_LARGE', `Max size: ${MAX_MESSAGE_SIZE} bytes`);
+        return;
+      }
+      if (!checkMessageRateLimit(ws)) {
+        sendError(ws, 'RATE_LIMITED', `Limit: ${RATE_LIMIT_MESSAGES}/${RATE_LIMIT_WINDOW_MS / 1000}s`);
+        return;
+      }
+    });
 
     ws.on('close', () => {
       clientRateLimits.delete(ws);
@@ -122,6 +118,6 @@ export function createSignalingServer(port: number): WebSocketServer {
     clearInterval(evictionTimer);
   });
 
-  logger.info({ port }, 'Signaling server started (phone connections only)');
+  logger.info({ path: '/phone' }, 'Signaling server started (phone connections only)');
   return wss;
 }

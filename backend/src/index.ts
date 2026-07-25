@@ -104,11 +104,10 @@ async function main() {
     await app.listen({ port: config.port, host: '0.0.0.0' });
     logger.info({ port: config.port }, 'VoiceBridge HTTP API started');
 
-    signalingServer = createSignalingServer(config.signalingPort);
-    logger.info({ port: config.signalingPort }, 'Phone WebSocket signaling ready');
+    signalingServer = createSignalingServer(app.server);
     logger.info(`\n  VoiceBridge running — AI ↔ Human voice bridge`);
     logger.info(`  HTTP API:     http://localhost:${config.port}`);
-    logger.info(`  Phone WS:     ws://localhost:${config.signalingPort}/phone`);
+    logger.info(`  Phone WS:     ws://localhost:${config.port}/phone`);
     logger.info(`  STT engine:   ${config.stt.enabled ? 'Whisper (local)' : 'disabled'}`);
     logger.info(`  TTS engine:   Phone-side (Android TextToSpeech)\n`);
   } catch (err) {
