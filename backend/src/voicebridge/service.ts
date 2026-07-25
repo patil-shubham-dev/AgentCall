@@ -127,12 +127,13 @@ export function processTextMessage(
   const session = sessions.get(callId);
   if (!session) throw new Error(`Call session not found: ${callId}`);
 
-  logger.info({ callId, text: text.slice(0, 100) }, 'Processing user text message');
+  logger.info({ callId, text: text.slice(0, 100) }, '[STT] user text received');
 
   const bargeIn = detectBargeIn(text);
   addMessage(callId, 'user', text, 'text');
 
   if (bargeIn.detected) {
+    logger.info({ callId, action: bargeIn.action }, '[STT] barge-in detected');
     notifyPhone(session.userId, {
       type: 'barge_in_detected',
       callId,
@@ -141,7 +142,7 @@ export function processTextMessage(
     });
   }
 
-  logger.info({ callId, bargeIn: bargeIn.action }, 'Text message processed');
+  logger.info({ callId, bargeIn: bargeIn.action }, '[STT] text processed');
   return { text, bargeIn };
 }
 
@@ -232,26 +233,33 @@ export function getTranscript(callId: string): VoiceMessage[] | undefined {
 export function registerPhone(userId: string, ws: WebSocket): void {
   const existing = phoneConnections.get(userId);
   if (existing && existing.readyState === WebSocket.OPEN) {
+    logger.info({ userId }, '[WS] replacing existing connection');
     existing.close(1000, 'New connection replacing');
   }
   phoneConnections.set(userId, ws);
+  logger.info({ userId, activeConnections: phoneConnections.size }, '[WS] phone registered');
 
   ws.on('close', () => {
     if (phoneConnections.get(userId) === ws) {
       phoneConnections.delete(userId);
+      logger.info({ userId, activeConnections: phoneConnections.size }, '[WS] phone disconnected');
     }
   });
 
-  logger.info({ userId }, 'Phone registered via WebSocket');
+  ws.on('error', (err) => {
+    logger.error({ err, userId }, '[WS] phone connection error');
+  });
 }
 
 export function notifyPhone(userId: string, payload: Record<string, unknown>): boolean {
   const ws = phoneConnections.get(userId);
   if (ws && ws.readyState === WebSocket.OPEN) {
+    const msgType = (payload.type as string) ?? 'unknown';
     ws.send(JSON.stringify(payload));
+    logger.info({ userId, msgType }, '[WS] -> sent to phone');
     return true;
   }
-  logger.warn({ userId }, 'Phone not connected, message queued (not delivered)');
+  logger.warn({ userId, msgType: (payload.type as string) ?? 'unknown' }, '[WS] phone not connected, message not delivered');
   return false;
 }
 

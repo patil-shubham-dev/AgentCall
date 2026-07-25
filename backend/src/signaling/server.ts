@@ -73,13 +73,16 @@ export function createSignalingServer(server: Server): WebSocketServer {
 
   wss.on('connection', (ws, req) => {
     const ip = (req.headers['x-forwarded-for'] as string | undefined) ?? req.socket.remoteAddress ?? 'unknown';
+    logger.info({ ip }, '[WS] new connection attempt');
     if (!checkConnectionRateLimit(ip)) {
+      logger.warn({ ip }, '[WS] connection rate limited');
       ws.close(4003, 'Connection rate limited');
       return;
     }
 
     const url = new URL(req.url ?? '/', 'http://localhost');
     const userId = url.searchParams.get('user_id') ?? 'solo-user';
+    logger.info({ userId, ip, path: url.pathname }, '[WS] connection accepted');
 
     voicebridge.registerPhone(userId, ws);
     ws.send(JSON.stringify({
@@ -87,31 +90,40 @@ export function createSignalingServer(server: Server): WebSocketServer {
       payload: { user_id: userId, server: 'agentcall-voicebridge' },
       timestamp: new Date().toISOString(),
     }));
-    logger.info({ userId }, 'Phone connected to signaling');
+    logger.info({ userId, remoteAddress: ip }, '[WS] phone connected to signaling');
 
     ws.on('message', (data) => {
-      if (data.toString().length > MAX_MESSAGE_SIZE) {
+      const raw = data.toString();
+      const msgSize = raw.length;
+      if (msgSize > MAX_MESSAGE_SIZE) {
+        logger.warn({ userId, msgSize, maxSize: MAX_MESSAGE_SIZE }, '[WS] message too large');
         sendError(ws, 'MESSAGE_TOO_LARGE', `Max size: ${MAX_MESSAGE_SIZE} bytes`);
         return;
       }
       if (!checkMessageRateLimit(ws)) {
+        logger.warn({ userId }, '[WS] message rate limited');
         sendError(ws, 'RATE_LIMITED', `Limit: ${RATE_LIMIT_MESSAGES}/${RATE_LIMIT_WINDOW_MS / 1000}s`);
         return;
       }
+
+      let msgType = 'unknown';
+      try { msgType = JSON.parse(raw).type ?? 'unknown'; } catch {}
+      logger.info({ userId, msgType, msgSize }, '[WS] <- message from phone');
     });
 
-    ws.on('close', () => {
+    ws.on('close', (code, reason) => {
       clientRateLimits.delete(ws);
+      logger.info({ userId, code, reason: reason.toString() }, '[WS] phone disconnected');
     });
 
     ws.on('error', (err) => {
-      logger.error({ err, userId }, 'WebSocket error');
+      logger.error({ err, userId }, '[WS] phone WebSocket error');
       clientRateLimits.delete(ws);
     });
   });
 
   wss.on('error', (err) => {
-    logger.error({ err }, 'Signaling server error');
+    logger.error({ err }, '[WS] signaling server error');
   });
 
   wss.on('close', () => {

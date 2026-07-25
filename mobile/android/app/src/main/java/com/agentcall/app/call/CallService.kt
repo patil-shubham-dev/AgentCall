@@ -15,6 +15,7 @@ import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.agentcall.app.R
 import com.agentcall.app.data.api.ApiClient
@@ -106,8 +107,12 @@ class CallService : Service() {
 
     private suspend fun scheduleCallbackAndEnd(callId: String, minutes: Int) {
         try {
+            Log.d(TAG, "[HTTP] POST /calls/$callId/callback delay=$minutes")
             api.scheduleCallback(callId, mapOf("delay_minutes" to minutes))
-        } catch (_: Exception) {}
+            Log.d(TAG, "[HTTP] callback scheduled")
+        } catch (e: Exception) {
+            Log.e(TAG, "[HTTP] callback scheduling failed", e)
+        }
         speakWithEmotion("Okay, I'll call you back in $minutes minutes.", "calm", "callback_confirm")
         delay(3000)
         stopSelf()
@@ -127,6 +132,7 @@ class CallService : Service() {
                 textToSpeech?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
                     override fun onStart(utteranceId: String?) {
                         isAiSpeaking = true
+                        Log.d(TAG, "[TTS] start utteranceId=$utteranceId")
                         if (utteranceId == null) return
                         val parts = utteranceId.split(":")
                         if (parts.size >= 2) {
@@ -138,13 +144,18 @@ class CallService : Service() {
                     override fun onDone(utteranceId: String?) {
                         isAiSpeaking = false
                         if (utteranceId?.startsWith("breathe_") == true) return
+                        Log.d(TAG, "[TTS] done utteranceId=$utteranceId")
                         dispatchToListeners("ai_finished_speaking", null)
                     }
 
                     override fun onError(utteranceId: String?) {
                         isAiSpeaking = false
+                        Log.e(TAG, "[TTS] error utteranceId=$utteranceId")
                     }
                 })
+                Log.d(TAG, "[TTS] engine initialized")
+            } else {
+                Log.e(TAG, "[TTS] engine initialization failed status=$status")
             }
         }
     }
@@ -267,19 +278,21 @@ class CallService : Service() {
     // ── Optimized Barge-in Detection (in-memory circular buffer) ──
 
     private fun startBargeInDetection() {
-        if (bargeInJob?.isActive == true) return
+        if (bargeInJob?.isActive == true) { Log.d(TAG, "[VOICE] barge-in already running"); return }
+        Log.d(TAG, "[VOICE] starting barge-in detection")
         bargeInJob = scope.launch {
             try {
                 val bufferSize = AudioRecord.getMinBufferSize(SAMPLE_RATE,
                     AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
 
-                if (bufferSize == AudioRecord.ERROR_BAD_VALUE) return@launch
+                if (bufferSize == AudioRecord.ERROR_BAD_VALUE) { Log.w(TAG, "[VOICE] bad buffer size"); return@launch }
 
                 audioRecord = AudioRecord(MediaRecorder.AudioSource.MIC,
                     SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO,
                     AudioFormat.ENCODING_PCM_16BIT, bufferSize * 4)
 
                 if (audioRecord?.state != AudioRecord.STATE_INITIALIZED) {
+                    Log.w(TAG, "[VOICE] audio record could not initialize")
                     audioRecord = null
                     return@launch
                 }
@@ -294,13 +307,11 @@ class CallService : Service() {
                 var speechStartMs = -1L
                 var consecutiveSilenceMs = 0L
                 var speechDetected = false
-                val startTime = System.currentTimeMillis()
 
                 while (isActive && isAiSpeaking && !isPaused) {
                     val read = audioRecord?.read(buffer, 0, buffer.size) ?: break
                     if (read <= 0) continue
 
-                    // Write to circular buffer (in-memory, no disk I/O)
                     writeToCircularBuffer(buffer, read)
 
                     val rms = calculateRms(buffer, read)
@@ -309,6 +320,7 @@ class CallService : Service() {
                     if (!isSilence) {
                         if (speechStartMs == -1L) {
                             speechStartMs = System.currentTimeMillis()
+                            Log.d(TAG, "[VOICE] speech detected rms=${String.format("%.1f", rms)}")
                         }
                         consecutiveSilenceMs = 0
                         speechDetected = true
@@ -320,6 +332,7 @@ class CallService : Service() {
                         System.currentTimeMillis() - speechStartMs > BARGE_IN_BUFFER_MS &&
                         consecutiveSilenceMs > 400
                     ) {
+                        Log.d(TAG, "[VOICE] barge-in triggered")
                         isPaused = true
 
                         audioRecord?.stop()
@@ -335,7 +348,9 @@ class CallService : Service() {
                         return@launch
                     }
                 }
-            } catch (_: Exception) {}
+            } catch (e: Exception) {
+                Log.e(TAG, "[VOICE] barge-in error", e)
+            }
         }
     }
 
@@ -351,8 +366,11 @@ class CallService : Service() {
     private suspend fun processBargeInAudioInMemory() {
         val currentCallId = callId ?: return
         try {
+            Log.d(TAG, "[STT] barge-in started, transcribing")
             textToSpeech?.stop()
-            val text = transcribeWithSpeechRecognizer() ?: return
+            val text = transcribeWithSpeechRecognizer()
+            Log.d(TAG, "[STT] barge-in result: $text")
+            if (text == null) { Log.w(TAG, "[STT] barge-in returned null, ignoring"); return }
 
             handleBargeInCommand(text)
             sendUserTextToBackend(currentCallId, text)
@@ -361,45 +379,59 @@ class CallService : Service() {
                 isPaused = false
                 startVoiceSession(currentCallId)
             }
-        } catch (_: Exception) {}
+        } catch (e: Exception) {
+            Log.e(TAG, "[STT] barge-in error", e)
+        }
     }
 
     private suspend fun transcribeWithSpeechRecognizer(): String? = suspendCancellableCoroutine { cont ->
         try {
             val recognizer = SpeechRecognizer.createSpeechRecognizer(this)
-            if (recognizer == null) { cont.resume(null); return@suspendCancellableCoroutine }
+            if (recognizer == null) { Log.w(TAG, "[STT] SpeechRecognizer not available on this device"); cont.resume(null); return@suspendCancellableCoroutine }
 
             val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
                 putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
                 putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.US)
             }
 
+            Log.d(TAG, "[STT] starting SpeechRecognizer")
             recognizer.setRecognitionListener(object : RecognitionListener {
                 override fun onResults(results: Bundle?) {
                     val text = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()
+                    Log.d(TAG, "[STT] result: ${text?.take(100)}")
                     if (text != null && text.isNotBlank()) cont.resume(text) else cont.resume(null)
                     recognizer.destroy()
                 }
-                override fun onError(error: Int) { cont.resume(null); recognizer.destroy() }
-                override fun onReadyForSpeech(params: Bundle?) {}
-                override fun onBeginningOfSpeech() {}
+                override fun onError(error: Int) {
+                    Log.e(TAG, "[STT] recognition error code=$error")
+                    cont.resume(null); recognizer.destroy()
+                }
+                override fun onReadyForSpeech(params: Bundle?) { Log.d(TAG, "[STT] ready for speech") }
+                override fun onBeginningOfSpeech() { Log.d(TAG, "[STT] beginning of speech") }
                 override fun onRmsChanged(rmsdB: Float) {}
                 override fun onBufferReceived(buffer: ByteArray?) {}
-                override fun onEndOfSpeech() {}
+                override fun onEndOfSpeech() { Log.d(TAG, "[STT] end of speech") }
                 override fun onPartialResults(partialResults: Bundle?) {}
                 override fun onEvent(eventType: Int, params: Bundle?) {}
             })
 
             recognizer.startListening(intent)
             cont.invokeOnCancellation { recognizer.destroy() }
-        } catch (_: Exception) { cont.resume(null) }
+        } catch (e: Exception) {
+            Log.e(TAG, "[STT] failed to start SpeechRecognizer", e)
+            cont.resume(null)
+        }
     }
 
     private fun sendUserTextToBackend(callId: String, text: String) {
         scope.launch {
             try {
-                api.sendUserText(callId, mapOf("text" to text))
-            } catch (_: Exception) {}
+                Log.d(TAG, "[HTTP] POST /calls/$callId/user-text text=${text.take(100)}")
+                val resp = api.sendUserText(callId, mapOf("text" to text))
+                Log.d(TAG, "[HTTP] user-text response: bargeIn=${resp.bargeIn}")
+            } catch (e: Exception) {
+                Log.e(TAG, "[HTTP] POST /calls/$callId/user-text failed", e)
+            }
         }
     }
 
@@ -446,21 +478,28 @@ class CallService : Service() {
     private fun startVoiceSession(callId: String) {
         scope.launch {
             try {
+                Log.d(TAG, "[HTTP] GET /calls/$callId")
                 val call = api.getCall(callId)
                 val summary = call.result?.userResponse ?: call.result?.transcriptSummary ?: call.messageCount?.let {
                     "Continuing our conversation."
                 } ?: "AI needs your input."
+                Log.d(TAG, "[WS] starting voice session callId=$callId")
                 speakWithEmotion(summary, "calm", "resume")
 
                 launch {
                     signalingClient.events.collect { event ->
+                        Log.d(TAG, "[WS] event: ${event::class.simpleName}")
                         when (event) {
                             is VoiceBridgeEvent.AiMessage -> {
+                                Log.d(TAG, "[WS] ai_message callId=${event.callId} text=${event.content.take(100)}")
                                 val enriched = event.enrichedJson
                                 val emotion = if (enriched.isNotBlank()) {
                                     try {
                                         JSONObject(enriched).optJSONObject("emotion")?.optString("emotion", "neutral") ?: "neutral"
-                                    } catch (_: Exception) { "neutral" }
+                                    } catch (e: Exception) {
+                                        Log.e(TAG, "[WS] failed to parse enriched JSON", e)
+                                        "neutral"
+                                    }
                                 } else "neutral"
                                 speakText(event.content, emotion)
                                 dispatchToListeners("ai_message", Bundle().apply {
@@ -472,35 +511,46 @@ class CallService : Service() {
                                 CallEventBus.emit(CallEvent.AiMessage(event.content, emotion))
                             }
                             is VoiceBridgeEvent.CallEnded -> {
+                                Log.d(TAG, "[WS] call_ended callId=${event.callId}")
                                 CallEventBus.emit(CallEvent.CallEnded)
                                 speakWithEmotion("Call ended.", "neutral", "end")
                                 delay(1500); stopSelf()
                             }
                             is VoiceBridgeEvent.CallCancelled -> {
+                                Log.d(TAG, "[WS] call_cancelled callId=${event.callId}")
                                 CallEventBus.emit(CallEvent.CallEnded)
                                 speakWithEmotion("Call was cancelled.", "neutral", "cancel")
                                 delay(1500); stopSelf()
                             }
                             is VoiceBridgeEvent.Disconnected -> {
+                                Log.w(TAG, "[WS] disconnected from server")
                                 CallEventBus.emit(CallEvent.CallEnded)
                                 stopSelf()
+                            }
+                            is VoiceBridgeEvent.Error -> {
+                                Log.e(TAG, "[WS] error code=${event.code} message=${event.message}")
                             }
                             else -> {}
                         }
                     }
                 }
-            } catch (_: Exception) { stopSelf() }
+            } catch (e: Exception) {
+                Log.e(TAG, "[WS] voice session failed to start", e)
+                stopSelf()
+            }
         }
     }
 
     private fun startRecording() {
-        if (isRecording || speechRecognizer != null) return
+        if (isRecording || speechRecognizer != null) { Log.w(TAG, "[STT] already recording"); return }
         try {
             stopBargeInDetection()
 
-            val recognizer = SpeechRecognizer.createSpeechRecognizer(this) ?: return
+            val recognizer = SpeechRecognizer.createSpeechRecognizer(this)
+            if (recognizer == null) { Log.w(TAG, "[STT] SpeechRecognizer not available"); return }
             speechRecognizer = recognizer
             isRecording = true
+            Log.d(TAG, "[STT] recording started")
             updateNotification("Recording...")
 
             val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
@@ -515,10 +565,12 @@ class CallService : Service() {
                     isRecording = false
                     recognizer.destroy()
                     if (speechRecognizer == recognizer) speechRecognizer = null
+                    Log.d(TAG, "[STT] recording result: ${text?.take(100)}")
                     val currentCallId = callId
                     if (text != null && text.isNotBlank() && currentCallId != null) {
                         scope.launch { processUserText(text, currentCallId) }
                     } else {
+                        Log.w(TAG, "[STT] no text recognized")
                         updateNotification("Paused")
                     }
                 }
@@ -527,6 +579,7 @@ class CallService : Service() {
                     isRecording = false
                     recognizer.destroy()
                     if (speechRecognizer == recognizer) speechRecognizer = null
+                    Log.e(TAG, "[STT] recognition error code=$error")
                     speakWithEmotion("Sorry, I didn't catch that.", "calm", "err")
                     updateNotification("Paused")
                 }
@@ -541,21 +594,28 @@ class CallService : Service() {
             })
 
             recognizer.startListening(intent)
-        } catch (_: Exception) { isRecording = false; speechRecognizer = null }
+        } catch (e: Exception) {
+            Log.e(TAG, "[STT] failed to start recording", e)
+            isRecording = false; speechRecognizer = null
+        }
     }
 
     private fun stopRecording() {
-        if (!isRecording) return
+        if (!isRecording) { Log.w(TAG, "[STT] stopRecording called but not recording"); return }
         isRecording = false
+        Log.d(TAG, "[STT] recording stopped, waiting for transcription")
         updateNotification("Processing...")
         try {
             speechRecognizer?.stopListening()
-        } catch (_: Exception) {}
+        } catch (e: Exception) {
+            Log.e(TAG, "[STT] error stopping recording", e)
+        }
     }
 
     // ── Fixed TTS Shutdown (stop only, don't destroy) ──
 
     private fun endCall() {
+        Log.d(TAG, "[VOICE] ending call callId=$callId")
         stopBargeInDetection()
         signalingClient.disconnect()
         textToSpeech?.stop()
@@ -638,6 +698,7 @@ class CallService : Service() {
     }
 
     companion object {
+        const val TAG = "AgentCall"
         const val ACTION_START_CALL = "com.agentcall.action.START_CALL"
         const val ACTION_START_RECORDING = "com.agentcall.action.START_RECORDING"
         const val ACTION_STOP_RECORDING = "com.agentcall.action.STOP_RECORDING"

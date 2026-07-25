@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { config } from './common/config.js';
+import { logger } from './common/logger.js';
 import * as voicebridge from './voicebridge/service.js';
 import type { CreateCallInput } from './voicebridge/types.js';
 
@@ -26,8 +27,12 @@ async function getAuthUser(request: FastifyRequest): Promise<AuthContext> {
 export function registerRoutes(app: FastifyInstance): void {
   app.addHook('onRequest', async (request) => {
     const url = request.url ?? '';
-    if (url.startsWith('/api/v1/health')) return;
+    if (url.startsWith('/api/v1/health')) {
+      logger.info({ method: request.method, url }, '[HTTP] health check');
+      return;
+    }
     (request as FastifyRequest & { auth: AuthContext }).auth = await getAuthUser(request);
+    logger.info({ method: request.method, url, auth: (request as FastifyRequest & { auth: AuthContext }).auth }, '[HTTP] request');
   });
 
   app.get('/api/v1/health', {
@@ -212,6 +217,8 @@ export function registerRoutes(app: FastifyInstance): void {
     const wsScheme = request.protocol === 'https' ? 'wss' : 'ws';
     const wsHost = (request.headers['x-forwarded-host'] as string) ?? request.headers.host ?? `localhost:${config.port}`;
     const wsEndpoint = `${wsScheme}://${wsHost}/phone?user_id=${userId}`;
+
+    logger.info({ userId, wsEndpoint, proto: request.protocol, host: wsHost }, '[REGISTER] phone registration');
 
     return reply.status(200).send({
       status: 'registered',
