@@ -3,7 +3,9 @@ package com.agentcall.app.ui.theme
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
@@ -32,6 +34,33 @@ private val DarkColorScheme = darkColorScheme(
     inverseSurface = Slate200,
     inverseOnSurface = Slate900,
     inversePrimary = Indigo600,
+    surfaceTint = Indigo500,
+)
+
+// ── Light Color Scheme ──────────────────────
+private val LightColorScheme = lightColorScheme(
+    primary = Indigo600,
+    onPrimary = Color.White,
+    primaryContainer = Indigo100,
+    onPrimaryContainer = Indigo900,
+    secondary = Indigo500,
+    onSecondary = Color.White,
+    tertiary = Amber600,
+    onTertiary = Color.White,
+    background = LightBackground,
+    onBackground = LightOnBackground,
+    surface = LightSurface,
+    onSurface = LightOnSurface,
+    surfaceVariant = LightSurfaceVariant,
+    onSurfaceVariant = LightOnSurfaceVariant,
+    error = Red600,
+    onError = Color.White,
+    errorContainer = Color(0xFFFFDAD4),
+    outline = LightOutline,
+    outlineVariant = LightOutlineVariant,
+    inverseSurface = LightInverseSurface,
+    inverseOnSurface = LightInverseOnSurface,
+    inversePrimary = LightInversePrimary,
     surfaceTint = Indigo500,
 )
 
@@ -71,6 +100,13 @@ data class ExtendedColors(
     val slate700: Color = Slate700,
     val slate750: Color = Slate750,
     val slate850: Color = Slate850,
+    val lightBackground: Color = LightBackground,
+    val lightSurface: Color = LightSurface,
+    val lightSurfaceVariant: Color = LightSurfaceVariant,
+    val lightOnBackground: Color = LightOnBackground,
+    val lightOnSurface: Color = LightOnSurface,
+    val lightOnSurfaceVariant: Color = LightOnSurfaceVariant,
+    val isDark: Boolean = true,
 )
 
 val LocalExtendedColors = staticCompositionLocalOf { ExtendedColors() }
@@ -81,15 +117,39 @@ val MaterialTheme.extendedColors: ExtendedColors
 // ── Theme Composition ───────────────────────
 @Composable
 fun AgentCallTheme(
+    darkTheme: Boolean = isSystemInDarkTheme(),
     content: @Composable () -> Unit
 ) {
-    val extendedColors = ExtendedColors()
+    val colorScheme = if (darkTheme) DarkColorScheme else LightColorScheme
+    val extendedColors = if (darkTheme) {
+        ExtendedColors(isDark = true)
+    } else {
+        ExtendedColors(
+            surfaceElevated = LightSurfaceElevated,
+            surfaceDeep = LightSurfaceVariant,
+            textSecondary = LightOnSurfaceVariant,
+            textTertiary = LightOutline,
+            glassWhite = Color(0x0A000000),
+            glassWhiteLight = Color(0x14000000),
+            glassWhiteMedium = Color(0x26000000),
+            glassIndigo = Color(0x146366F1),
+            glassRed = Color(0x14EF4444),
+            glassGreen = Color(0x1422C55E),
+            glassAmber = Color(0x14F59E0B),
+            slate300 = LightOutline,
+            slate400 = LightOnSurfaceVariant,
+            slate700 = LightSurfaceVariant,
+            slate750 = LightSurfaceElevated,
+            slate850 = LightSurfaceVariant,
+            isDark = false,
+        )
+    }
 
-    androidx.compose.material3.MaterialTheme(
-        colorScheme = DarkColorScheme,
+    MaterialTheme(
+        colorScheme = colorScheme,
         typography = Typography,
         content = {
-            androidx.compose.runtime.CompositionLocalProvider(
+            CompositionLocalProvider(
                 LocalExtendedColors provides extendedColors,
                 content = content,
             )

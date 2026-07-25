@@ -65,7 +65,7 @@ class SettingsViewModel @Inject constructor() : ViewModel() {
     fun connect() {
         val host = _serverHost.value.trim().ifBlank { "10.0.2.2" }
         ApiClient.setServerHost(host)
-        _connectionStatus.value = "Reconnecting…"
+        _connectionStatus.value = "Reconnecting\u2026"
         com.agentcall.app.home.ServerConfigEvent.reconnectRequests.value++
     }
 
@@ -112,7 +112,7 @@ fun SettingsScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(Slate900),
+            .background(MaterialTheme.colorScheme.background),
     ) {
         // Header with ambient background behind
         Box(modifier = Modifier.height(80.dp)) {
@@ -127,13 +127,13 @@ fun SettingsScreen(
                 Text(
                     text = "Settings",
                     style = MaterialTheme.typography.headlineMedium,
-                    color = Slate50,
+                    color = MaterialTheme.colorScheme.onBackground,
                     modifier = Modifier.padding(horizontal = 24.dp),
                 )
                 Text(
                     text = "Configure your connection",
                     style = MaterialTheme.typography.bodySmall,
-                    color = Slate400,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(horizontal = 24.dp),
                 )
             }
@@ -170,7 +170,7 @@ fun SettingsScreen(
                             Text(
                                 text = "Backend Server",
                                 style = MaterialTheme.typography.titleMedium,
-                                color = Slate50,
+                                color = MaterialTheme.colorScheme.onSurface,
                             )
                             Spacer(modifier = Modifier.weight(1f))
                             Text(
@@ -186,7 +186,7 @@ fun SettingsScreen(
                         Text(
                             text = "Enter your laptop's local IP address",
                             style = MaterialTheme.typography.bodySmall,
-                            color = Slate400,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
 
                         Spacer(modifier = Modifier.height(10.dp))
@@ -197,7 +197,7 @@ fun SettingsScreen(
                             onValueChange = { viewModel.updateServerHost(it) },
                             modifier = Modifier.fillMaxWidth(),
                             singleLine = true,
-                            placeholder = { Text("10.0.2.2", color = Slate500) },
+                            placeholder = { Text("10.0.2.2", color = MaterialTheme.colorScheme.onSurfaceVariant) },
                             leadingIcon = {
                                 Icon(Icons.Default.Computer, null, tint = Indigo400, modifier = Modifier.size(20.dp))
                             },
@@ -209,13 +209,13 @@ fun SettingsScreen(
                                 onGo = { focusManager.clearFocus(); viewModel.connect(); onReconnect() }
                             ),
                             colors = OutlinedTextFieldDefaults.colors(
-                                focusedTextColor = Slate50,
-                                unfocusedTextColor = Slate50,
+                                focusedTextColor = MaterialTheme.colorScheme.onSurface,
+                                unfocusedTextColor = MaterialTheme.colorScheme.onSurface,
                                 cursorColor = Indigo400,
                                 focusedBorderColor = Indigo600,
-                                unfocusedBorderColor = Slate700,
-                                focusedContainerColor = Slate800,
-                                unfocusedContainerColor = Slate800,
+                                unfocusedBorderColor = MaterialTheme.colorScheme.outline,
+                                focusedContainerColor = MaterialTheme.colorScheme.surface,
+                                unfocusedContainerColor = MaterialTheme.colorScheme.surface,
                             ),
                             shape = RoundedCornerShape(12.dp),
                         )
@@ -246,7 +246,7 @@ fun SettingsScreen(
                                     onReconnect()
                                 },
                                 shape = RoundedCornerShape(12.dp),
-                                colors = ButtonDefaults.outlinedButtonColors(contentColor = Slate400),
+                                colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.onSurfaceVariant),
                                 border = null,
                             ) {
                                 Text("Reset")
@@ -256,14 +256,14 @@ fun SettingsScreen(
                         Spacer(modifier = Modifier.height(12.dp))
 
                         // ── Connection Test ────────────────
-                        HorizontalDivider(color = Slate700.copy(alpha = 0.4f))
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f))
                         Spacer(modifier = Modifier.height(12.dp))
 
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.Speed, null, tint = Slate400, modifier = Modifier.size(18.dp))
+                            Icon(Icons.Default.Speed, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(18.dp))
                             Spacer(modifier = Modifier.width(8.dp))
                             Text("Test Connection",
-                                style = MaterialTheme.typography.titleSmall, color = Slate50,
+                                style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurface,
                                 fontWeight = FontWeight.Medium)
                             Spacer(modifier = Modifier.weight(1f))
 
@@ -319,7 +319,7 @@ fun SettingsScreen(
                                     containerColor = when (testStatus) {
                                         ConnectionTestStatus.SUCCESS -> Green600.copy(alpha = 0.2f)
                                         ConnectionTestStatus.FAILED -> Red600.copy(alpha = 0.2f)
-                                        else -> Slate700
+                                        else -> MaterialTheme.colorScheme.surfaceVariant
                                     }
                                 ),
                             ) {
@@ -332,7 +332,7 @@ fun SettingsScreen(
                                     color = when (testStatus) {
                                         ConnectionTestStatus.SUCCESS -> Green400
                                         ConnectionTestStatus.FAILED -> Red400
-                                        else -> Slate300
+                                        else -> MaterialTheme.colorScheme.onSurface
                                     },
                                 )
                             }
@@ -344,7 +344,7 @@ fun SettingsScreen(
                             text = "Default (10.0.2.2) works for Android emulator. " +
                                     "Use your laptop's local IP for a real phone.",
                             style = MaterialTheme.typography.labelSmall,
-                            color = Slate500,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                             lineHeight = 16.sp,
                         )
                     }
@@ -364,7 +364,7 @@ fun SettingsScreen(
                         InfoRow(
                             icon = Icons.Default.AltRoute,
                             title = "WebSocket",
-                            subtitle = "ws://$serverHost:4001",
+                            subtitle = com.agentcall.app.data.api.ApiClient.getWsUrl("solo-user"),
                         )
                         SettingsDivider()
                         InfoRow(
@@ -389,13 +389,13 @@ fun SettingsScreen(
                     InfoRow(
                         icon = Icons.Default.Code,
                         title = "Stack",
-                        subtitle = "Kotlin · Jetpack Compose · MCP",
+                        subtitle = "Kotlin \u00B7 Jetpack Compose \u00B7 MCP",
                     )
                     SettingsDivider()
                     InfoRow(
                         icon = Icons.Default.Shield,
                         title = "Security",
-                        subtitle = "Local network only · No cloud",
+                        subtitle = "Local network only \u00B7 No cloud",
                     )
                 }
             }
@@ -411,7 +411,7 @@ private fun SettingsSection(title: String, content: @Composable () -> Unit) {
         Text(
             text = title,
             style = MaterialTheme.typography.labelSmall,
-            color = Slate500,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
             fontWeight = FontWeight.SemiBold,
             letterSpacing = 1.2.sp,
             modifier = Modifier.padding(start = 4.dp, bottom = 8.dp, top = 12.dp),
@@ -424,7 +424,7 @@ private fun SettingsSection(title: String, content: @Composable () -> Unit) {
 private fun GlassCard(content: @Composable () -> Unit) {
     Surface(
         shape = RoundedCornerShape(16.dp),
-        color = Slate800.copy(alpha = 0.85f),
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f),
         tonalElevation = 2.dp,
         shadowElevation = 4.dp,
     ) {
@@ -454,13 +454,13 @@ private fun InfoRow(
                 modifier = Modifier
                     .size(36.dp)
                     .clip(CircleShape)
-                    .background(Slate700.copy(alpha = 0.5f)),
+                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
                     imageVector = icon,
                     contentDescription = null,
-                    tint = Slate400,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.size(20.dp),
                 )
             }
@@ -469,20 +469,20 @@ private fun InfoRow(
                 Text(
                     text = title,
                     style = MaterialTheme.typography.bodyMedium,
-                    color = Slate50,
+                    color = MaterialTheme.colorScheme.onSurface,
                     fontWeight = FontWeight.Medium,
                 )
                 if (subtitle != null) {
                     Text(
                         text = subtitle,
                         style = MaterialTheme.typography.bodySmall,
-                        color = Slate400,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
                     )
                 }
             }
             if (onClick != null) {
-                Icon(Icons.Default.ChevronRight, null, tint = Slate600, modifier = Modifier.size(18.dp))
+                Icon(Icons.Default.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f), modifier = Modifier.size(18.dp))
             }
         }
     }
@@ -491,7 +491,7 @@ private fun InfoRow(
 @Composable
 private fun SettingsDivider() {
     HorizontalDivider(
-        color = Slate700.copy(alpha = 0.3f),
+        color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
         modifier = Modifier.padding(start = 66.dp, end = 16.dp),
     )
 }

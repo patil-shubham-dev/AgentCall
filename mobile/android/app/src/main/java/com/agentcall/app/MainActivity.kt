@@ -4,12 +4,8 @@ import android.content.Intent
 import android.os.Build
 import android.os.Bundle
 import android.transition.Fade
-import android.transition.Slide
-import android.view.Gravity
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -18,12 +14,10 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
@@ -78,11 +72,11 @@ fun MainApp(onCallClicked: (String) -> Unit = {}) {
     var selectedIndex by remember { mutableIntStateOf(0) }
 
     Scaffold(
-        containerColor = Slate900,
+        containerColor = MaterialTheme.colorScheme.background,
         bottomBar = {
             Surface(
                 modifier = Modifier.fillMaxWidth(),
-                color = Slate800.copy(alpha = 0.95f),
+                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.95f),
                 tonalElevation = 0.dp,
                 shadowElevation = 8.dp,
             ) {
@@ -92,6 +86,10 @@ fun MainApp(onCallClicked: (String) -> Unit = {}) {
                 ) {
                     navItems.forEachIndexed { index, item ->
                         val isSelected = selectedIndex == index
+                        val selectedColor = if (MaterialTheme.extendedColors.isDark) Indigo400 else Indigo600
+                        val unselectedColor = MaterialTheme.colorScheme.onSurfaceVariant
+                        val selectedBg = if (MaterialTheme.extendedColors.isDark) GlassIndigo else Color(0x146366F1)
+
                         Surface(
                             onClick = {
                                 selectedIndex = index
@@ -102,7 +100,7 @@ fun MainApp(onCallClicked: (String) -> Unit = {}) {
                                 }
                             },
                             shape = RoundedCornerShape(16.dp),
-                            color = if (isSelected) GlassIndigo else Color.Transparent,
+                            color = if (isSelected) selectedBg else Color.Transparent,
                             tonalElevation = 0.dp,
                         ) {
                             Row(
@@ -116,14 +114,14 @@ fun MainApp(onCallClicked: (String) -> Unit = {}) {
                                     imageVector = item.icon,
                                     contentDescription = item.label,
                                     modifier = Modifier.size(22.dp),
-                                    tint = if (isSelected) Indigo400 else Slate500,
+                                    tint = if (isSelected) selectedColor else unselectedColor,
                                 )
                                 if (isSelected) {
                                     Spacer(modifier = Modifier.width(6.dp))
                                     Text(
                                         text = item.label,
                                         style = MaterialTheme.typography.labelMedium,
-                                        color = Indigo400,
+                                        color = selectedColor,
                                         fontWeight = FontWeight.SemiBold,
                                     )
                                 }
