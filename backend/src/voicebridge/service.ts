@@ -1,7 +1,6 @@
 import crypto from 'node:crypto';
 import { WebSocket } from 'ws';
 import { logger } from '../common/logger.js';
-import { transcribeAudio } from './stt.js';
 import type {
   VoiceCallSession,
   VoiceMessage,
@@ -121,19 +120,17 @@ export function addAiMessage(callId: string, rawText: string): VoiceMessage | un
   return addMessage(callId, 'ai', enriched.cleanText, 'text', enriched);
 }
 
-export async function processAudioMessage(
+export function processTextMessage(
   callId: string,
-  wavBuffer: ArrayBuffer,
-): Promise<{ text: string; bargeIn: BargeInResult }> {
+  text: string,
+): { text: string; bargeIn: BargeInResult } {
   const session = sessions.get(callId);
   if (!session) throw new Error(`Call session not found: ${callId}`);
 
-  logger.info({ callId, sizeBytes: wavBuffer.byteLength }, 'Processing audio message');
-  const text = await transcribeAudio(wavBuffer);
+  logger.info({ callId, text: text.slice(0, 100) }, 'Processing user text message');
 
   const bargeIn = detectBargeIn(text);
-
-  addMessage(callId, 'user', text, 'audio');
+  addMessage(callId, 'user', text, 'text');
 
   if (bargeIn.detected) {
     notifyPhone(session.userId, {
@@ -144,7 +141,7 @@ export async function processAudioMessage(
     });
   }
 
-  logger.info({ callId, text: text.slice(0, 100), bargeIn: bargeIn.action }, 'Audio processed');
+  logger.info({ callId, bargeIn: bargeIn.action }, 'Text message processed');
   return { text, bargeIn };
 }
 

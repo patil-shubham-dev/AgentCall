@@ -27,6 +27,7 @@ async function main() {
     bodyLimit: config.security.bodyLimit,
     requestIdHeader: 'x-request-id',
     genReqId: () => crypto.randomUUID(),
+    trustProxy: true,
   });
 
   await app.register(helmet, {
@@ -58,11 +59,6 @@ async function main() {
 
   app.addHook('onRequest', async (request, reply) => {
     reply.header('X-Request-Id', request.id);
-  });
-
-  app.addContentTypeParser(['audio/wav', 'application/octet-stream'], { bodyLimit: config.security.bodyLimit }, (request, rawBody, done) => {
-    (request as unknown as Record<string, unknown>).rawBody = rawBody;
-    done(null);
   });
 
   app.setErrorHandler(async (error, request, reply) => {
@@ -108,7 +104,6 @@ async function main() {
     logger.info(`\n  VoiceBridge running — AI ↔ Human voice bridge`);
     logger.info(`  HTTP API:     http://localhost:${config.port}`);
     logger.info(`  Phone WS:     ws://localhost:${config.port}/phone`);
-    logger.info(`  STT engine:   ${config.stt.enabled ? 'Whisper (local)' : 'disabled'}`);
     logger.info(`  TTS engine:   Phone-side (Android TextToSpeech)\n`);
   } catch (err) {
     logger.error({ err }, 'Failed to start server');

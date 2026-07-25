@@ -7,14 +7,8 @@ function env(name: string, fallback?: string): string {
 export const config = {
   nodeEnv: env('NODE_ENV', 'development'),
   port: parseInt(env('PORT', '4000'), 10),
-  signalingPort: parseInt(env('SIGNALING_PORT', '4001'), 10),
 
   serviceToken: env('SERVICE_TOKEN', 'dev-service-token'),
-
-  stt: {
-    model: env('STT_MODEL', 'Xenova/whisper-base'),
-    enabled: env('STT_ENABLED', 'true') === 'true',
-  },
 
   signaling: {
     maxMessageSize: parseInt(env('SIGNALING_MAX_MESSAGE_SIZE', '262144'), 10),

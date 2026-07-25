@@ -15,18 +15,15 @@
         reverse_proxy backend-api:4000
     }
 
-    @ws {
-        path /ws/*
+    @phone {
+        path /phone*
     }
-    handle @ws {
-        reverse_proxy backend-api:4001 {
-            header_up Upgrade {>Upgrade}
-            header_up Connection {>Connection}
-        }
+    handle @phone {
+        reverse_proxy backend-api:4000
     }
 
     handle {
-        respond "AgentCall MCP" 200
+        respond "AgentCall" 200
     }
 
     header {

@@ -1,9 +1,5 @@
 FROM node:20-slim AS builder
 
-RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends \
-  build-essential python3 \
-  && rm -rf /var/lib/apt/lists/*
-
 WORKDIR /app
 
 COPY package.json package-lock.json ./
@@ -14,10 +10,6 @@ COPY src/ src/
 RUN npm run build
 
 FROM node:20-slim AS production
-
-RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends \
-  libstdc++6 libgomp1 \
-  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 

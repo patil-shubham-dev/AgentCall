@@ -18,16 +18,11 @@ object ApiClient {
     var serverHost: String = DEFAULT_HOST
         private set
 
-    /** Configurable WebSocket port. Default: 4001 */
-    var wsPort: Int = DEFAULT_WS_PORT
-        private set
-
     private const val DEFAULT_HOST = "10.0.2.2"
     private const val API_PORT = 4000
-    private const val DEFAULT_WS_PORT = 4001
 
     fun getHttpBaseUrl(): String = "http://$serverHost:$API_PORT/api/v1/"
-    fun getWsUrl(userId: String): String = "ws://$serverHost:$wsPort/phone?user_id=$userId"
+    fun getWsUrl(userId: String): String = "ws://$serverHost:$API_PORT/phone?user_id=$userId"
 
     /** Update the server host and rebuild the Retrofit instance. */
     fun setServerHost(host: String) {
@@ -35,14 +30,8 @@ object ApiClient {
         _retrofit = null
     }
 
-    /** Update the WebSocket port. */
-    fun setWsPort(port: Int) {
-        wsPort = if (port in 1..65535) port else DEFAULT_WS_PORT
-    }
-
     fun resetToDefault() {
         serverHost = DEFAULT_HOST
-        wsPort = DEFAULT_WS_PORT
         _retrofit = null
     }
 

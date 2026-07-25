@@ -1,7 +1,6 @@
 package com.agentcall.app.data.api
 
 import com.agentcall.app.data.model.*
-import okhttp3.MultipartBody
 import retrofit2.http.*
 
 interface ApiService {
@@ -36,10 +35,9 @@ interface ApiService {
     @POST("phone/register")
     suspend fun registerPhone(): PhoneRegisterResponse
 
-    @Multipart
-    @POST("calls/{callId}/audio")
-    suspend fun uploadAudio(
+    @POST("calls/{callId}/user-text")
+    suspend fun sendUserText(
         @Path("callId") callId: String,
-        @Part audio: MultipartBody.Part,
-    ): TranscribeResponse
+        @Body body: Map<String, String>,
+    ): UserTextResponse
 }

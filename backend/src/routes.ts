@@ -37,7 +37,6 @@ export function registerRoutes(app: FastifyInstance): void {
     version: '2.0.0',
     timestamp: new Date().toISOString(),
     uptime: process.uptime(),
-    voicebridge: { stt: config.stt.enabled ? 'whisper' : 'disabled', tts: 'phone-side' },
   }));
 
   app.post('/api/v1/calls', {
@@ -116,45 +115,26 @@ export function registerRoutes(app: FastifyInstance): void {
     });
   });
 
-  app.post('/api/v1/calls/:callId/audio', {
-    config: { rateLimit: { max: 10, timeWindow: '10 seconds' } },
+  app.post('/api/v1/calls/:callId/user-text', {
+    config: { rateLimit: moderateRateLimit },
   }, async (request, reply) => {
     const { callId } = request.params as { callId: string };
+    const { text } = request.body as { text: string };
 
-    const contentType = request.headers['content-type'] ?? '';
-    if (!contentType.includes('audio/wav') && !contentType.includes('application/octet-stream')) {
-      return reply.status(400).send({
-        error: 'VALIDATION_ERROR',
-        message: 'Content-Type must be audio/wav',
-      });
-    }
-
-    const rawBuffer = (request as unknown as { rawBody: Buffer }).rawBody;
-    if (!rawBuffer || rawBuffer.length < 44) {
-      return reply.status(400).send({
-        error: 'VALIDATION_ERROR',
-        message: 'Invalid audio data: too small',
-      });
-    }
-
-    if (!config.stt.enabled) {
-      return reply.status(503).send({
-        error: 'STT_DISABLED',
-        message: 'Speech-to-text is not enabled on this server',
-      });
+    if (!text || text.trim().length === 0) {
+      return reply.status(400).send({ error: 'VALIDATION_ERROR', message: 'text is required' });
     }
 
     try {
-      const audioBuf = rawBuffer.buffer.slice(rawBuffer.byteOffset, rawBuffer.byteOffset + rawBuffer.byteLength) as ArrayBuffer;
-      const text = await voicebridge.processAudioMessage(callId, audioBuf);
+      const result = voicebridge.processTextMessage(callId, text);
       return {
         call_id: callId,
-        text,
-        confidence: 'model_loaded',
+        text: result.text,
+        barge_in: result.bargeIn,
       };
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'STT processing failed';
-      return reply.status(500).send({ error: 'STT_ERROR', message });
+      const message = err instanceof Error ? err.message : 'Processing failed';
+      return reply.status(404).send({ error: 'NOT_FOUND', message });
     }
   });
 
@@ -228,10 +208,15 @@ export function registerRoutes(app: FastifyInstance): void {
   app.post('/api/v1/phone/register', async (request, reply) => {
     const { user_id } = request.body as { user_id?: string };
     const userId = user_id ?? 'solo-user';
+
+    const wsScheme = request.protocol === 'https' ? 'wss' : 'ws';
+    const wsHost = (request.headers['x-forwarded-host'] as string) ?? request.headers.host ?? `localhost:${config.port}`;
+    const wsEndpoint = `${wsScheme}://${wsHost}/phone?user_id=${userId}`;
+
     return reply.status(200).send({
       status: 'registered',
       user_id: userId,
-      ws_endpoint: `ws://localhost:${config.signalingPort}/phone?user_id=${userId}`,
+      ws_endpoint: wsEndpoint,
     });
   });
 }
