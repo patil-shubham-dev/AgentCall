@@ -3,6 +3,7 @@ package com.agentcall.app
 import android.app.Application
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.os.Build
 import com.agentcall.app.call.CallService
 import dagger.hilt.android.HiltAndroidApp
 
@@ -26,7 +27,19 @@ class AgentCallApp : Application() {
             setShowBadge(false)
             enableVibration(false)
         }
-
         manager.createNotificationChannel(ongoingCall)
+
+        val incomingCall = NotificationChannel(
+            CallService.CHANNEL_INCOMING_CALL,
+            "Incoming Calls",
+            NotificationManager.IMPORTANCE_HIGH
+        ).apply {
+            description = "Incoming AI call alerts"
+            setShowBadge(true)
+            enableVibration(true)
+            enableLights(true)
+            lockscreenVisibility = NotificationManager.IMPORTANCE_HIGH
+        }
+        manager.createNotificationChannel(incomingCall)
     }
 }

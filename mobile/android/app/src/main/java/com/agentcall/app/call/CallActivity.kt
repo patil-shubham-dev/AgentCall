@@ -71,7 +71,7 @@ class CallActivity : ComponentActivity() {
         }
 
         setContent {
-            AgentCallTheme {
+            AgentCallTheme(darkTheme = true) {
                 ActiveCallScreen(callId = callId, context = this@CallActivity,
                     onEndCall = {
                         startService(Intent(this@CallActivity, CallService::class.java).apply {
