@@ -8,20 +8,25 @@ import com.agentcall.app.data.api.ApiClient
 import com.agentcall.app.data.api.ApiService
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 data class HomeUiState(
     val isConnected: Boolean = false,
+    val isReconnecting: Boolean = false,
     val connectionQuality: ConnectionQuality = ConnectionQuality.UNKNOWN,
     val incomingCallId: String? = null,
     val incomingSummary: String? = null,
     val activeCallId: String? = null,
     val statusText: String = "Connecting...",
     val recentCalls: List<RecentCallEntry> = emptyList(),
+    val isLoading: Boolean = true,
 )
 
 enum class ConnectionQuality {
@@ -54,16 +59,34 @@ class HomeViewModel @Inject constructor(
     private val _uiState = MutableStateFlow(HomeUiState())
     val uiState: StateFlow<HomeUiState> = _uiState.asStateFlow()
 
+    private val _snackbarEvents = MutableSharedFlow<String>(extraBufferCapacity = 4)
+    val snackbarEvents: SharedFlow<String> = _snackbarEvents.asSharedFlow()
+
     private var eventsJob: kotlinx.coroutines.Job? = null
     private var connectionCheckJob: kotlinx.coroutines.Job? = null
 
     init {
+        // Track signaling client connection state for reconnection UI
+        viewModelScope.launch {
+            signalingClient.connectionState.collect { state ->
+                _uiState.value = _uiState.value.copy(
+                    isReconnecting = state == SignalingClient.ConnectionState.RECONNECTING,
+                    statusText = when (state) {
+                        SignalingClient.ConnectionState.CONNECTING -> "Connecting..."
+                        SignalingClient.ConnectionState.RECONNECTING -> "Reconnecting..."
+                        SignalingClient.ConnectionState.DISCONNECTED -> "Disconnected"
+                        SignalingClient.ConnectionState.CONNECTED -> _uiState.value.statusText
+                    },
+                )
+            }
+        }
+
         connect()
         // Watch for server IP changes from settings and reconnect
         viewModelScope.launch {
             ServerConfigEvent.reconnectRequests.collect { count ->
                 if (count > 0) {
-                    delay(200) // brief delay for config to settle
+                    delay(200)
                     reconnect()
                 }
             }
@@ -81,8 +104,10 @@ class HomeViewModel @Inject constructor(
                     is VoiceBridgeEvent.Connected -> {
                         _uiState.value = _uiState.value.copy(
                             isConnected = true,
+                            isReconnecting = false,
                             connectionQuality = ConnectionQuality.GOOD,
                             statusText = "Ready",
+                            isLoading = false,
                         )
                         checkActiveCall()
                     }
@@ -96,7 +121,6 @@ class HomeViewModel @Inject constructor(
                     is VoiceBridgeEvent.CallEnded,
                     is VoiceBridgeEvent.CallCancelled -> {
                         val current = _uiState.value
-                        // Add to recent calls if we had an active call
                         if (current.activeCallId != null) {
                             val entry = RecentCallEntry(
                                 callId = current.activeCallId,
@@ -121,9 +145,13 @@ class HomeViewModel @Inject constructor(
                     is VoiceBridgeEvent.Disconnected -> {
                         _uiState.value = _uiState.value.copy(
                             isConnected = false,
+                            isReconnecting = false,
                             connectionQuality = ConnectionQuality.UNKNOWN,
                             statusText = "Disconnected",
                         )
+                    }
+                    is VoiceBridgeEvent.Error -> {
+                        _snackbarEvents.tryEmit("Error: ${event.message}")
                     }
                     else -> {}
                 }
@@ -136,10 +164,10 @@ class HomeViewModel @Inject constructor(
         connectionCheckJob?.cancel()
         _uiState.value = _uiState.value.copy(
             isConnected = false,
+            isReconnecting = true,
             connectionQuality = ConnectionQuality.UNKNOWN,
-            statusText = "Connecting...",
+            statusText = "Reconnecting...",
         )
-        // Small delay so the disconnect propagates
         viewModelScope.launch {
             delay(300)
             connect()
@@ -155,7 +183,6 @@ class HomeViewModel @Inject constructor(
                 delay(5000)
                 val current = _uiState.value
                 if (!current.isConnected) continue
-                // Simulate ping check via the API health endpoint
                 try {
                     api.getActiveCall("solo-user")
                     goodPings++

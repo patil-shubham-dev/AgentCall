@@ -11,7 +11,6 @@ okhttp = "4.12.0"
 kotlinx-serialization = "1.6.3"
 kotlinx-coroutines = "1.8.1"
 lifecycle = "2.8.3"
-webrtc = "1.0.32006"
 hilt-navigation-compose = "1.2.0"
 activity-compose = "1.9.0"
 core-ktx = "1.13.1"
@@ -35,7 +34,6 @@ okhttp = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhtt
 okhttp-logging = { group = "com.squareup.okhttp3", name = "logging-interceptor", version.ref = "okhttp" }
 kotlinx-serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-serialization-json", version.ref = "kotlinx-serialization" }
 kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "kotlinx-coroutines" }
-webrtc = { group = "io.getstream", name = "stream-webrtc-android", version.ref = "webrtc" }
 hilt-android = { group = "com.google.dagger", name = "hilt-android", version.ref = "hilt" }
 hilt-compiler = { group = "com.google.dagger", name = "hilt-android-compiler", version.ref = "hilt" }
 hilt-navigation-compose = { group = "androidx.hilt", name = "hilt-navigation-compose", version.ref = "hilt-navigation-compose" }

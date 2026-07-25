@@ -39,12 +39,23 @@ import com.agentcall.app.ui.composables.AmbientBackground
 import com.agentcall.app.ui.theme.*
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.launch
+import java.util.concurrent.atomic.AtomicBoolean
 
 @AndroidEntryPoint
 class IncomingCallActivity : ComponentActivity() {
 
+    // Prevent stacking — if an instance is already processing, ignore
+    companion object {
+        private val isProcessing = AtomicBoolean(false)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        if (!isProcessing.compareAndSet(false, true)) {
+            finish()
+            return
+        }
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             overrideActivityTransition(
@@ -54,18 +65,19 @@ class IncomingCallActivity : ComponentActivity() {
             )
         }
 
-        val callId = intent.getStringExtra("call_id") ?: return
+        val callId = intent.getStringExtra("call_id") ?: run { isProcessing.set(false); finish(); return }
         val callerName = intent.getStringExtra("caller_name") ?: "AI Agent"
         val contextSummary = intent.getStringExtra("context_summary") ?: ""
         val priority = intent.getStringExtra("priority") ?: "normal"
 
         setContent {
-            AgentCallTheme {
+            AgentCallTheme(darkTheme = true) {
                 IncomingCallScreen(
                     callerName = callerName,
                     contextSummary = contextSummary,
                     priority = priority,
                     onAnswer = {
+                        CallService.cancelIncomingNotification(this@IncomingCallActivity)
                         val intent = Intent(this, CallActivity::class.java).apply {
                             putExtra("call_id", callId)
                             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
@@ -77,10 +89,16 @@ class IncomingCallActivity : ComponentActivity() {
                             putExtra(CallService.EXTRA_CALL_ID, callId)
                         }
                         startService(svcIntent)
+                        isProcessing.set(false)
                         finish()
                     },
-                    onDecline = { finish() },
+                    onDecline = {
+                        CallService.cancelIncomingNotification(this@IncomingCallActivity)
+                        isProcessing.set(false)
+                        finish()
+                    },
                     onLater = { minutes ->
+                        CallService.cancelIncomingNotification(this@IncomingCallActivity)
                         val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO)
                         scope.launch {
                             try {
@@ -88,11 +106,17 @@ class IncomingCallActivity : ComponentActivity() {
                                 api.scheduleCallback(callId, mapOf("delay_minutes" to minutes))
                             } catch (_: Exception) {}
                         }
+                        isProcessing.set(false)
                         finish()
                     },
                 )
             }
         }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        isProcessing.set(false)
     }
 }
 
@@ -122,7 +146,6 @@ fun IncomingCallScreen(
 
     val infiniteTransition = rememberInfiniteTransition(label = "incoming")
 
-    // Expanding ring pulses (multiple layers)
     val ring1 by infiniteTransition.animateFloat(0f, 1f,
         infiniteRepeatable(tween(1800, easing = FastOutSlowInEasing), RepeatMode.Restart), label = "ring1")
     val ring2 by infiniteTransition.animateFloat(0f, 1f,
@@ -132,13 +155,10 @@ fun IncomingCallScreen(
 
     val pulseDot by infiniteTransition.animateFloat(0f, 1f,
         infiniteRepeatable(tween(2000, easing = EaseInOutSine), RepeatMode.Reverse), label = "pulseDot")
-    val orbDrift by infiniteTransition.animateFloat(0f, 1f,
-        infiniteRepeatable(tween(10000, easing = LinearEasing), RepeatMode.Restart), label = "orbDrift")
     val glowSweep by infiniteTransition.animateFloat(0f, 1f,
         infiniteRepeatable(tween(4000, easing = EaseInOutSine), RepeatMode.Reverse), label = "glowSweep")
 
-    Box(modifier = Modifier.fillMaxSize().background(Slate900)) {
-        // Animated ambient background with priority color
+    Box(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         AmbientBackground(
             accentColor = themeAccent,
             secondaryColor = themeGradient.getOrElse(1) { GradientBrandEnd },
@@ -168,7 +188,6 @@ fun IncomingCallScreen(
                 modifier = Modifier.size(170.dp),
                 contentAlignment = Alignment.Center,
             ) {
-                // Expanding ring 1
                 Canvas(modifier = Modifier.fillMaxSize()) {
                     val r = size.minDimension / 2
                     val ringRadius = r * (0.5f + ring1 * 0.5f)
@@ -177,7 +196,6 @@ fun IncomingCallScreen(
                         radius = ringRadius,
                     )
                 }
-                // Expanding ring 2
                 Canvas(modifier = Modifier.fillMaxSize()) {
                     val r = size.minDimension / 2
                     val ringRadius = r * (0.5f + ring2 * 0.5f)
@@ -186,7 +204,6 @@ fun IncomingCallScreen(
                         radius = ringRadius,
                     )
                 }
-                // Expanding ring 3
                 Canvas(modifier = Modifier.fillMaxSize()) {
                     val r = size.minDimension / 2
                     val ringRadius = r * (0.5f + ring3 * 0.5f)
@@ -196,7 +213,6 @@ fun IncomingCallScreen(
                     )
                 }
 
-                // Rotating glow sweep arc
                 Canvas(modifier = Modifier.size(140.dp)) {
                     val sweep = 30f + glowSweep * 20f
                     val rotation = glowSweep * 360f
@@ -211,11 +227,9 @@ fun IncomingCallScreen(
                     )
                 }
 
-                // Main avatar circle with gradient
                 Box(modifier = Modifier.size(110.dp).clip(CircleShape)
                     .background(Brush.linearGradient(listOf(themeGradient[0], themeGradient[1]))),
                     contentAlignment = Alignment.Center) {
-                    // Inner glow
                     Canvas(modifier = Modifier.size(110.dp)) {
                         drawCircle(
                             color = Color.White.copy(alpha = 0.08f + glowSweep * 0.08f),
@@ -227,7 +241,7 @@ fun IncomingCallScreen(
             }
 
             Spacer(modifier = Modifier.height(20.dp))
-            Text(callerName, style = MaterialTheme.typography.headlineSmall, color = Slate50, fontWeight = FontWeight.Bold)
+            Text(callerName, style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.onBackground, fontWeight = FontWeight.Bold)
             Spacer(modifier = Modifier.height(12.dp))
 
             // ── Priority Badge ─────────────────────────
@@ -245,15 +259,15 @@ fun IncomingCallScreen(
                 Surface(
                     modifier = Modifier.fillMaxWidth(0.85f),
                     shape = RoundedCornerShape(16.dp),
-                    color = Slate800.copy(alpha = 0.7f),
+                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f),
                 ) {
                     Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.Top) {
-                        Icon(Icons.Default.Info, null, modifier = Modifier.size(18.dp), tint = Slate400)
+                        Icon(Icons.Default.Info, null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
                         Spacer(modifier = Modifier.width(10.dp))
                         Text(
                             contextSummary,
                             style = MaterialTheme.typography.bodyMedium,
-                            color = Slate300,
+                            color = MaterialTheme.colorScheme.onSurface,
                             textAlign = TextAlign.Start,
                         )
                     }
@@ -266,11 +280,11 @@ fun IncomingCallScreen(
             if (showLaterPicker) {
                 Surface(
                     modifier = Modifier.fillMaxWidth(0.85f),
-                    shape = RoundedCornerShape(20.dp), color = Slate800,
+                    shape = RoundedCornerShape(20.dp), color = MaterialTheme.colorScheme.surface,
                 ) {
                     Column(modifier = Modifier.padding(20.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                         Text("Call back in...",
-                            style = MaterialTheme.typography.titleMedium, color = Slate200,
+                            style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface,
                             fontWeight = FontWeight.SemiBold)
                         Spacer(modifier = Modifier.height(16.dp))
                         laterOptions.forEach { (mins, label) ->
@@ -279,7 +293,7 @@ fun IncomingCallScreen(
                                 modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp),
                                 onClick = { selectedMinutes = mins },
                                 shape = RoundedCornerShape(12.dp),
-                                color = if (isSelected) Indigo800 else Slate700,
+                                color = if (isSelected) Indigo800 else MaterialTheme.colorScheme.surfaceVariant,
                             ) {
                                 Row(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
                                     verticalAlignment = Alignment.CenterVertically) {
@@ -289,7 +303,7 @@ fun IncomingCallScreen(
                                         colors = RadioButtonDefaults.colors(selectedColor = Indigo400),
                                     )
                                     Spacer(modifier = Modifier.width(8.dp))
-                                    Text(label, style = MaterialTheme.typography.bodyLarge, color = Slate200)
+                                    Text(label, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface)
                                 }
                             }
                         }
@@ -343,7 +357,7 @@ fun IncomingCallScreen(
             Spacer(modifier = Modifier.height(24.dp))
             if (!showLaterPicker) {
                 Text("Answer, decline, or schedule for later",
-                    style = MaterialTheme.typography.labelSmall, color = Slate500, textAlign = TextAlign.Center)
+                    style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
             }
             Spacer(modifier = Modifier.weight(0.05f))
         }

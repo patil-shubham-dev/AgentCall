@@ -8,14 +8,10 @@
     kotlinx.serialization.KSerializer serializer(...);
 }
 
--keep,includedescriptorclasses class com.internetcalling.app.**$$serializer { *; }
--keepclassmembers class com.internetcalling.app.** {
+-keep,includedescriptorclasses class com.agentcall.app.**$$serializer { *; }
+-keepclassmembers class com.agentcall.app.** {
     *** Companion;
 }
--keepclasseswithmembers class com.internetcalling.app.** {
+-keepclasseswithmembers class com.agentcall.app.** {
     kotlinx.serialization.KSerializer serializer(...);
 }
-
--keep class org.webrtc.** { *; }
-
--keep class com.google.firebase.** { *; }

@@ -24,7 +24,6 @@ import okhttp3.MultipartBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 import java.io.File
-import java.io.RandomAccessFile
 import java.util.Locale
 import java.util.UUID
 import javax.inject.Inject
@@ -32,6 +31,13 @@ import javax.inject.Inject
 private const val SAMPLE_RATE = 16000
 private const val BARGE_IN_BUFFER_MS = 500
 private const val BARGE_IN_THRESHOLD = 3500
+private const val MAX_RETRIES = 3
+
+private data class CommandPattern(
+    val keywords: List<String>,
+    val matchers: List<Regex> = emptyList(),
+    val action: suspend (CallService, String, String) -> Unit,
+)
 
 @AndroidEntryPoint
 class CallService : Service() {
@@ -43,6 +49,7 @@ class CallService : Service() {
 
     var callId: String? = null
     var textToSpeech: TextToSpeech? = null
+    private var ttsInitialized = false
     var isRecording = false
     var isAiSpeaking = false
     var isPaused = false
@@ -51,10 +58,18 @@ class CallService : Service() {
     private var audioRecord: AudioRecord? = null
     private var bargeInJob: Job? = null
 
+    // In-memory circular buffer for barge-in to avoid disk I/O
+    private val bargeInCircularBuffer = ShortArray(SAMPLE_RATE * 3) // 3 seconds max
+    private var bargeInBufferWritePos = 0
+    private var bargeInBufferSampleCount = 0
+
     // Manual recording (user presses Record button)
     private var recordingRecord: AudioRecord? = null
     private var recordingJob: Job? = null
-    private var recordingPcmFile: File? = null
+
+    // In-memory recording buffer (avoids disk I/O)
+    private val recordingBuffer = mutableListOf<ShortArray>()
+    private val recordingBufferLock = Any()
 
     private var currentEmotion: String = "neutral"
     private var bargeInCallback: ((String) -> Unit)? = null
@@ -65,14 +80,59 @@ class CallService : Service() {
 
     private val api: ApiService = ApiClient.create()
 
+    // ── Configurable Command Patterns ──────────────
+    private val commandPatterns = listOf(
+        CommandPattern(
+            keywords = listOf("call me back", "later", "not now", "busy", "some time"),
+            matchers = listOf(Regex("""(\d+)\s*(?:min|m)""")),
+            action = { service, text, callId ->
+                val minutes = Regex("""(\d+)\s*(?:min|m)""").find(text)?.groupValues?.get(1)?.toIntOrNull() ?: 10
+                service.scheduleCallbackAndEnd(callId, minutes)
+            },
+        ),
+        CommandPattern(
+            keywords = listOf("wait", "hold on", "stop", "pause"),
+            matchers = listOf(Regex("^no$"), Regex("^wait")),
+            action = { service, _, _ ->
+                service.speakWithEmotion("Sure, take your time. Just press record when you're ready.", "calm", "wait_confirm")
+                service.isPaused = true
+            },
+        ),
+        CommandPattern(
+            keywords = listOf("what", "again", "repeat", "explain", "clarify"),
+            action = { service, _, _ ->
+                service.speakWithEmotion("Let me rephrase that.", "thoughtful", "rephrase_intro")
+                service.isPaused = false
+            },
+        ),
+        CommandPattern(
+            keywords = listOf("think", "let me", "moment", "hang on", "sec"),
+            action = { service, _, _ ->
+                service.speakWithEmotion("I'll wait.", "calm", "wait_confirm")
+                service.isPaused = true
+            },
+        ),
+    )
+
+    private suspend fun scheduleCallbackAndEnd(callId: String, minutes: Int) {
+        try {
+            api.scheduleCallback(callId, mapOf("delay_minutes" to minutes))
+        } catch (_: Exception) {}
+        speakWithEmotion("Okay, I'll call you back in $minutes minutes.", "calm", "callback_confirm")
+        delay(3000)
+        stopSelf()
+    }
+
     override fun onCreate() {
         super.onCreate()
         initTts()
     }
 
     private fun initTts() {
+        if (ttsInitialized && textToSpeech != null) return
         textToSpeech = TextToSpeech(this) { status ->
             if (status == TextToSpeech.SUCCESS) {
+                ttsInitialized = true
                 textToSpeech?.language = Locale.US
                 textToSpeech?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
                     override fun onStart(utteranceId: String?) {
@@ -125,7 +185,7 @@ class CallService : Service() {
             ACTION_START_CALL -> {
                 val id = intent.getStringExtra(EXTRA_CALL_ID) ?: return START_NOT_STICKY
                 callId = id
-                startForeground(NOTIFICATION_ID, createOngoingCallNotification("AI Call"))
+                startForeground(NOTIFICATION_ID_ONGOING, createOngoingCallNotification("AI Call"))
                 acquireWakeLock()
                 startVoiceSession(id)
             }
@@ -167,7 +227,7 @@ class CallService : Service() {
     }
 
     fun speakWithEmotion(rawText: String, emotion: String, utteranceId: String) {
-        val tts = textToSpeech ?: return
+        val tts = textToSpeech ?: run { initTts(); return }
         if (isPaused) return
 
         currentEmotion = emotion
@@ -214,7 +274,7 @@ class CallService : Service() {
         }
     }
 
-    private var bargeInAudioFile: File? = null
+    // ── Optimized Barge-in Detection (in-memory circular buffer) ──
 
     private fun startBargeInDetection() {
         if (bargeInJob?.isActive == true) return
@@ -234,26 +294,24 @@ class CallService : Service() {
                     return@launch
                 }
 
-                val dir = File(cacheDir, "barge_in")
-                dir.mkdirs()
-                bargeInAudioFile = File(dir, "barge_${System.currentTimeMillis()}.pcm")
-                val raf = RandomAccessFile(bargeInAudioFile, "rw")
+                // Reset circular buffer
+                bargeInBufferWritePos = 0
+                bargeInBufferSampleCount = 0
 
                 audioRecord?.startRecording()
 
                 val buffer = ShortArray(bufferSize)
-                var totalSamples = 0
                 var speechStartMs = -1L
                 var consecutiveSilenceMs = 0L
-                val speechDurationMs = 0L
                 var speechDetected = false
+                val startTime = System.currentTimeMillis()
 
                 while (isActive && isAiSpeaking && !isPaused) {
                     val read = audioRecord?.read(buffer, 0, buffer.size) ?: break
                     if (read <= 0) continue
 
-                    raf.writeShortArray(buffer, 0, read)
-                    totalSamples += read
+                    // Write to circular buffer (in-memory, no disk I/O)
+                    writeToCircularBuffer(buffer, read)
 
                     val rms = calculateRms(buffer, read)
                     val isSilence = rms < BARGE_IN_THRESHOLD
@@ -272,7 +330,6 @@ class CallService : Service() {
                         System.currentTimeMillis() - speechStartMs > BARGE_IN_BUFFER_MS &&
                         consecutiveSilenceMs > 400
                     ) {
-                        raf.close()
                         isPaused = true
 
                         audioRecord?.stop()
@@ -282,53 +339,69 @@ class CallService : Service() {
                         textToSpeech?.stop()
 
                         dispatchToListeners("barge_in_started", null)
-                        processBargeInAudio()
+                        processBargeInAudioInMemory()
 
                         bargeInJob?.cancel()
                         return@launch
                     }
                 }
-
-                raf.close()
             } catch (_: Exception) {}
         }
     }
 
-    private fun calculateRms(buffer: ShortArray, read: Int): Double {
-        var sum = 0.0
+    private fun writeToCircularBuffer(buffer: ShortArray, read: Int) {
+        val cap = bargeInCircularBuffer.size
         for (i in 0 until read) {
-            sum += buffer[i] * buffer[i]
+            bargeInCircularBuffer[bargeInBufferWritePos] = buffer[i]
+            bargeInBufferWritePos = (bargeInBufferWritePos + 1) % cap
+            if (bargeInBufferSampleCount < cap) bargeInBufferSampleCount++
         }
-        return Math.sqrt(sum / read)
     }
 
-    private suspend fun processBargeInAudio() {
+    private fun readCircularBuffer(): ShortArray {
+        val cap = bargeInCircularBuffer.size
+        val result = ShortArray(bargeInBufferSampleCount)
+        val start = if (bargeInBufferSampleCount < cap) 0
+            else (bargeInBufferWritePos - bargeInBufferSampleCount + cap) % cap
+        for (i in 0 until bargeInBufferSampleCount) {
+            result[i] = bargeInCircularBuffer[(start + i) % cap]
+        }
+        return result
+    }
+
+    private suspend fun processBargeInAudioInMemory() {
         try {
-            val pcmFile = bargeInAudioFile ?: return
-            if (!pcmFile.exists()) return
+            val pcmData = readCircularBuffer()
+            val pcmBytes = ByteArray(pcmData.size * 2)
+            for (i in pcmData.indices) {
+                pcmBytes[i * 2] = (pcmData[i].toInt() and 0xFF).toByte()
+                pcmBytes[i * 2 + 1] = ((pcmData[i].toInt() shr 8) and 0xFF).toByte()
+            }
 
             val wavFile = File(cacheDir, "barge_${System.currentTimeMillis()}.wav")
-            val pcmData = pcmFile.readBytes()
-            pcmFile.delete()
-
-            val wavHeader = createWavHeader(pcmData.size, SAMPLE_RATE)
-            wavFile.writeBytes(wavHeader + pcmData)
+            val wavHeader = createWavHeader(pcmBytes.size, SAMPLE_RATE)
+            wavFile.writeBytes(wavHeader + pcmBytes)
 
             val currentCallId = callId
             if (currentCallId == null) { wavFile.delete(); return }
 
-            val requestBody = wavFile.readBytes().toRequestBody("audio/wav".toMediaTypeOrNull())
-            val part = MultipartBody.Part.createFormData("audio", wavFile.name, requestBody)
-            val response = api.uploadAudio(currentCallId, part)
+            val responseText = retryWithBackoff {
+                val requestBody = wavFile.readBytes().toRequestBody("audio/wav".toMediaTypeOrNull())
+                val part = MultipartBody.Part.createFormData("audio", wavFile.name, requestBody)
+                api.uploadAudio(currentCallId, part).text
+            }
+
             wavFile.delete()
 
-            handleBargeInCommand(response.text)
+            if (responseText != null) {
+                handleBargeInCommand(responseText)
 
-            if (isPaused && !response.text.lowercase().contains("call me back")) {
-                isPaused = false
-                val currentId = callId
-                if (currentId != null) {
-                    startVoiceSession(currentId)
+                if (isPaused && !responseText.lowercase().contains("call me back")) {
+                    isPaused = false
+                    val currentId = callId
+                    if (currentId != null) {
+                        startVoiceSession(currentId)
+                    }
                 }
             }
         } catch (_: Exception) {}
@@ -338,42 +411,13 @@ class CallService : Service() {
         val lower = text.lowercase().trim()
         val currentCallId = callId ?: return
 
-        if (lower.contains("call me back") || lower.contains("later") ||
-            lower.contains("not now") || lower.contains("busy") || lower.contains("some time")
-        ) {
-            val minutes = Regex("""(\d+)\s*(?:min|m)""").find(lower)?.groupValues?.get(1)?.toIntOrNull() ?: 10
-            scope.launch {
-                try {
-                    api.scheduleCallback(currentCallId, mapOf("delay_minutes" to minutes))
-                } catch (_: Exception) {}
+        for (pattern in commandPatterns) {
+            val keywordMatch = pattern.keywords.any { lower.contains(it) }
+            val regexMatch = pattern.matchers.any { it.containsMatchIn(lower) }
+            if (keywordMatch || regexMatch) {
+                scope.launch { pattern.action(this@CallService, lower, currentCallId) }
+                return
             }
-            speakWithEmotion("Okay, I'll call you back in $minutes minutes.", "calm", "callback_confirm")
-            scope.launch { delay(3000); stopSelf() }
-            return
-        }
-
-        if (lower.contains("wait") || lower.contains("hold on") || lower.contains("stop") ||
-            lower.contains("pause") || lower == "no" || lower.startsWith("wait")
-        ) {
-            speakWithEmotion("Sure, take your time. Just press record when you're ready.", "calm", "wait_confirm")
-            isPaused = true
-            return
-        }
-
-        if (lower.contains("what") || lower.contains("again") || lower.contains("repeat") ||
-            lower.contains("explain") || lower.contains("clarify")
-        ) {
-            speakWithEmotion("Let me rephrase that.", "thoughtful", "rephrase_intro")
-            isPaused = false
-            return
-        }
-
-        if (lower.contains("think") || lower.contains("let me") || lower.contains("moment") ||
-            lower.contains("hang on") || lower.contains("sec")
-        ) {
-            speakWithEmotion("I'll wait.", "calm", "wait_confirm")
-            isPaused = true
-            return
         }
 
         dispatchToListeners("user_said", Bundle().apply { putString("text", text) })
@@ -444,10 +488,8 @@ class CallService : Service() {
                                     putString("text", event.content)
                                     putString("emotion", emotion)
                                 })
-                                // Store for Repeat button
                                 lastAiMessage = event.content
                                 lastAiEmotion = emotion
-                                // Notify the UI to show a chat bubble
                                 CallEventBus.emit(CallEvent.AiMessage(event.content, emotion))
                             }
                             is VoiceBridgeEvent.CallEnded -> {
@@ -479,7 +521,6 @@ class CallService : Service() {
                 AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
             if (bufferSize == AudioRecord.ERROR_BAD_VALUE) return
 
-            // Stop barge-in detection while recording (can't have two AudioRecord instances)
             stopBargeInDetection()
 
             recordingRecord = AudioRecord(MediaRecorder.AudioSource.MIC,
@@ -491,23 +532,21 @@ class CallService : Service() {
                 return
             }
 
-            val dir = File(cacheDir, "recordings"); dir.mkdirs()
-            recordingPcmFile = File(dir, "recording_${System.currentTimeMillis()}.pcm")
-            val raf = RandomAccessFile(recordingPcmFile, "rw")
+            synchronized(recordingBufferLock) { recordingBuffer.clear() }
 
             recordingRecord?.startRecording()
             isRecording = true
             updateNotification("Recording...")
 
             recordingJob = scope.launch {
-                val buffer = ShortArray(bufferSize)
+                val buf = ShortArray(bufferSize)
                 while (isActive && isRecording) {
-                    val read = recordingRecord?.read(buffer, 0, buffer.size) ?: break
+                    val read = recordingRecord?.read(buf, 0, buf.size) ?: break
                     if (read > 0) {
-                        raf.writeShortArray(buffer, 0, read)
+                        val chunk = buf.copyOf(read)
+                        synchronized(recordingBufferLock) { recordingBuffer.add(chunk) }
                     }
                 }
-                raf.close()
             }
         } catch (_: Exception) { isRecording = false }
     }
@@ -527,74 +566,99 @@ class CallService : Service() {
 
         updateNotification("Processing...")
 
-        val pcmFile = recordingPcmFile
-        val currentCallId = callId
+        val currentCallId = callId ?: return
+        scope.launch {
+            try {
+                // Calculate total samples
+                val totalSamples: Int
+                synchronized(recordingBufferLock) {
+                    totalSamples = recordingBuffer.sumOf { it.size }
+                }
+                if (totalSamples == 0) return@launch
 
-        if (pcmFile != null && pcmFile.exists() && currentCallId != null) {
-            scope.launch {
-                try {
-                    val pcmData = pcmFile.readBytes()
-                    pcmFile.delete()
+                val pcmData = ByteArray(totalSamples * 2)
+                var offset = 0
+                synchronized(recordingBufferLock) {
+                    for (chunk in recordingBuffer) {
+                        for (sample in chunk) {
+                            pcmData[offset++] = (sample.toInt() and 0xFF).toByte()
+                            pcmData[offset++] = ((sample.toInt() shr 8) and 0xFF).toByte()
+                        }
+                    }
+                    recordingBuffer.clear()
+                }
 
-                    // Wrap raw PCM in a WAV header so the backend can parse it
-                    val wavFile = File(cacheDir, "recording_${System.currentTimeMillis()}.wav")
-                    val wavHeader = createWavHeader(pcmData.size, SAMPLE_RATE)
-                    wavFile.writeBytes(wavHeader + pcmData)
+                val wavFile = File(cacheDir, "recording_${System.currentTimeMillis()}.wav")
+                val wavHeader = createWavHeader(pcmData.size, SAMPLE_RATE)
+                wavFile.writeBytes(wavHeader + pcmData)
 
-                    uploadAudio(currentCallId, wavFile)
-                    wavFile.delete()
-                } catch (_: Exception) {}
+                uploadAudio(currentCallId, wavFile)
+                wavFile.delete()
+            } catch (_: Exception) {}
+        }
+    }
+
+    // ── Retry with Exponential Backoff ──────────────
+
+    private suspend fun <T> retryWithBackoff(
+        maxRetries: Int = MAX_RETRIES,
+        initialDelayMs: Long = 500,
+        block: suspend () -> T,
+    ): T? {
+        var lastError: Exception? = null
+        for (attempt in 1..maxRetries) {
+            try {
+                return block()
+            } catch (e: Exception) {
+                lastError = e
+                if (attempt < maxRetries) {
+                    val delayMs = initialDelayMs * (1L shl (attempt - 1))
+                    updateNotification("Retrying (${attempt}/$maxRetries)...")
+                    delay(delayMs)
+                }
             }
         }
+        updateNotification("Connection issue")
+        return null
     }
 
     private suspend fun uploadAudio(callId: String, file: File) {
         try {
-            val requestBody = file.readBytes().toRequestBody("audio/wav".toMediaTypeOrNull())
-            val part = MultipartBody.Part.createFormData("audio", file.name, requestBody)
-            val response = api.uploadAudio(callId, part)
-            val lower = response.text.lowercase()
-
-            if (lower.contains("call me back") || lower.contains("later") || lower.contains("not now") || lower.contains("busy")) {
-                val minutes = Regex("""(\d+)\s*(?:min|m)""").find(lower)?.groupValues?.get(1)?.toIntOrNull() ?: 10
-                api.scheduleCallback(callId, mapOf("delay_minutes" to minutes))
-                speakWithEmotion("Okay, I'll call you back in $minutes minutes.", "calm", "cb")
-                delay(2000); stopSelf()
+            val responseText = retryWithBackoff {
+                val requestBody = file.readBytes().toRequestBody("audio/wav".toMediaTypeOrNull())
+                val part = MultipartBody.Part.createFormData("audio", file.name, requestBody)
+                api.uploadAudio(callId, part).text
+            } ?: run {
+                speakWithEmotion("Sorry, I didn't catch that.", "calm", "err")
                 return
             }
 
-            if (lower.contains("wait") || lower.contains("hold") || lower.startsWith("no")) {
-                speakWithEmotion("Sure, take your time. Press record when ready.", "calm", "wait")
-                isPaused = true
-                return
+            val lower = responseText.lowercase()
+            for (pattern in commandPatterns) {
+                val keywordMatch = pattern.keywords.any { lower.contains(it) }
+                val regexMatch = pattern.matchers.any { it.containsMatchIn(lower) }
+                if (keywordMatch || regexMatch) {
+                    pattern.action(this, lower, callId)
+                    return
+                }
             }
 
-            if (lower.contains("what") || lower.contains("again") || lower.contains("repeat")) {
-                speakWithEmotion("Let me rephrase that.", "thoughtful", "rep")
-                isPaused = false
-                return
-            }
-
-            if (lower.contains("think") || lower.contains("let me") || lower.contains("moment")) {
-                speakWithEmotion("I'll wait.", "calm", "wt")
-                isPaused = true
-                return
-            }
-
-            speakWithEmotion("You said: ${response.text}", "neutral", "echo")
-            dispatchToListeners("user_transcript", Bundle().apply { putString("text", response.text) })
-            // Notify the UI to show a user chat bubble
-            CallEventBus.emit(CallEvent.UserMessage(response.text))
+            speakWithEmotion("You said: $responseText", "neutral", "echo")
+            dispatchToListeners("user_transcript", Bundle().apply { putString("text", responseText) })
+            CallEventBus.emit(CallEvent.UserMessage(responseText))
         } catch (_: Exception) {
             speakWithEmotion("Sorry, I didn't catch that.", "calm", "err")
         }
     }
 
+    // ── Fixed TTS Shutdown (stop only, don't destroy) ──
+
     private fun endCall() {
         stopBargeInDetection()
         signalingClient.disconnect()
-        textToSpeech?.stop(); textToSpeech?.shutdown(); textToSpeech = null
-        releaseWakeLock(); stopForeground(STOP_FOREGROUND_REMOVE)
+        textToSpeech?.stop()
+        releaseWakeLock()
+        stopForeground(STOP_FOREGROUND_REMOVE)
     }
 
     private fun acquireWakeLock() {
@@ -638,6 +702,7 @@ class CallService : Service() {
             text.contains("Speaking") -> "\uD83D\uDDE3\uFE0F "
             text.contains("Processing") -> "\uD83D\uDD04 "
             text.contains("Paused") -> "\u23F8\uFE0F "
+            text.contains("Retrying") -> "\uD83D\uDD04 "
             else -> ""
         }
 
@@ -656,11 +721,19 @@ class CallService : Service() {
 
     private fun updateNotification(text: String) {
         val mgr = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        mgr.notify(NOTIFICATION_ID, createOngoingCallNotification(text))
+        mgr.notify(NOTIFICATION_ID_ONGOING, createOngoingCallNotification(text))
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
     override fun onDestroy() { scope.cancel(); endCall(); super.onDestroy() }
+
+    private fun calculateRms(buffer: ShortArray, read: Int): Double {
+        var sum = 0.0
+        for (i in 0 until read) {
+            sum += buffer[i] * buffer[i]
+        }
+        return Math.sqrt(sum / read)
+    }
 
     companion object {
         const val ACTION_START_CALL = "com.agentcall.action.START_CALL"
@@ -674,6 +747,42 @@ class CallService : Service() {
         const val EXTRA_TEXT = "text"
         const val EXTRA_EMOTION = "emotion"
         const val CHANNEL_ONGOING_CALL = "ongoing_call"
-        private const val NOTIFICATION_ID = 1001
+        const val CHANNEL_INCOMING_CALL = "incoming_call"
+        const val EXTRA_CALLER_NAME = "caller_name"
+        const val EXTRA_CONTEXT_SUMMARY = "context_summary"
+        const val EXTRA_PRIORITY = "priority"
+        private const val NOTIFICATION_ID_ONGOING = 1001
+        private const val NOTIFICATION_ID_INCOMING = 1002
+
+        fun showIncomingCallNotification(context: Context, callId: String, callerName: String, summary: String) {
+            val intent = Intent(context, IncomingCallActivity::class.java).apply {
+                putExtra("call_id", callId)
+                putExtra("caller_name", callerName)
+                putExtra("context_summary", summary)
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            }
+            val pi = PendingIntent.getActivity(context, callId.hashCode(), intent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+
+            val notification = NotificationCompat.Builder(context, CHANNEL_INCOMING_CALL)
+                .setContentTitle("Incoming AI Call")
+                .setContentText(summary.ifBlank { "AI Agent is calling..." })
+                .setSmallIcon(R.drawable.ic_agent)
+                .setColor(android.graphics.Color.parseColor("#6366F1"))
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setCategory(NotificationCompat.CATEGORY_CALL)
+                .setFullScreenIntent(pi, true)
+                .setAutoCancel(true)
+                .setOngoing(false)
+                .build()
+
+            val mgr = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            mgr.notify(NOTIFICATION_ID_INCOMING, notification)
+        }
+
+        fun cancelIncomingNotification(context: Context) {
+            val mgr = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            mgr.cancel(NOTIFICATION_ID_INCOMING)
+        }
     }
 }
