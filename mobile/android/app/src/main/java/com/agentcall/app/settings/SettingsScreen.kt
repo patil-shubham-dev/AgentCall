@@ -63,7 +63,7 @@ class SettingsViewModel @Inject constructor() : ViewModel() {
     }
 
     fun connect() {
-        val host = _serverHost.value.trim().ifBlank { "10.0.2.2" }
+        val host = _serverHost.value.trim().ifBlank { ApiClient.serverHost }
         ApiClient.setServerHost(host)
         _connectionStatus.value = "Reconnecting\u2026"
         com.agentcall.app.home.ServerConfigEvent.reconnectRequests.value++
@@ -74,7 +74,11 @@ class SettingsViewModel @Inject constructor() : ViewModel() {
         viewModelScope.launch {
             val start = System.currentTimeMillis()
             try {
-                val url = java.net.URL("http://${_serverHost.value.trim()}:4000/api/v1/health")
+                val host = _serverHost.value.trim()
+                val isDomain = !Regex("^[\\d.]+$").matches(host)
+                val scheme = if (isDomain) "https" else "http"
+                val port = if (isDomain) "" else ":4000"
+                val url = java.net.URL("$scheme://$host$port/api/v1/health")
                 val conn = url.openConnection() as java.net.HttpURLConnection
                 conn.connectTimeout = 3000
                 conn.readTimeout = 3000
@@ -184,7 +188,7 @@ fun SettingsScreen(
                         Spacer(modifier = Modifier.height(12.dp))
 
                         Text(
-                            text = "Enter your laptop's local IP address",
+                            text = "Enter server hostname or IP address",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -197,7 +201,7 @@ fun SettingsScreen(
                             onValueChange = { viewModel.updateServerHost(it) },
                             modifier = Modifier.fillMaxWidth(),
                             singleLine = true,
-                            placeholder = { Text("10.0.2.2", color = MaterialTheme.colorScheme.onSurfaceVariant) },
+                            placeholder = { Text("dydcghsn0my6-production-qgbb8wql.australia-southeast1.suga.run", color = MaterialTheme.colorScheme.onSurfaceVariant) },
                             leadingIcon = {
                                 Icon(Icons.Default.Computer, null, tint = Indigo400, modifier = Modifier.size(20.dp))
                             },
@@ -241,7 +245,8 @@ fun SettingsScreen(
                             OutlinedButton(
                                 onClick = {
                                     focusManager.clearFocus()
-                                    viewModel.updateServerHost("10.0.2.2")
+                                    com.agentcall.app.data.api.ApiClient.resetToDefault()
+                                    viewModel.updateServerHost(com.agentcall.app.data.api.ApiClient.serverHost)
                                     viewModel.connect()
                                     onReconnect()
                                 },
@@ -341,8 +346,7 @@ fun SettingsScreen(
                         Spacer(modifier = Modifier.height(8.dp))
 
                         Text(
-                            text = "Default (10.0.2.2) works for Android emulator. " +
-                                    "Use your laptop's local IP for a real phone.",
+                            text = "Default connects to production. Use a LAN IP (e.g. 192.168.1.100) for local dev.",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             lineHeight = 16.sp,
@@ -358,7 +362,7 @@ fun SettingsScreen(
                         InfoRow(
                             icon = Icons.Default.Link,
                             title = "HTTP API",
-                            subtitle = "http://$serverHost:4000/api/v1",
+                            subtitle = com.agentcall.app.data.api.ApiClient.getHttpBaseUrl(),
                         )
                         SettingsDivider()
                         InfoRow(
@@ -392,11 +396,11 @@ fun SettingsScreen(
                         subtitle = "Kotlin \u00B7 Jetpack Compose \u00B7 MCP",
                     )
                     SettingsDivider()
-                    InfoRow(
-                        icon = Icons.Default.Shield,
-                        title = "Security",
-                        subtitle = "Local network only \u00B7 No cloud",
-                    )
+                        InfoRow(
+                            icon = Icons.Default.Shield,
+                            title = "Security",
+                            subtitle = "HTTPS/WSS production · HTTP/WS local",
+                        )
                 }
             }
 

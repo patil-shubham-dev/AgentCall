@@ -10,19 +10,31 @@ import java.util.concurrent.TimeUnit
 
 /**
  * API client for the VoiceBridge backend.
- * Server host is configurable — defaults to 10.0.2.2 (Android emulator localhost).
- * Change it to your laptop's local IP when running on a real device.
+ * Server host is configurable — defaults to production URL.
+ * Use a LAN IP (e.g. 192.168.1.100) for local development.
  */
 object ApiClient {
-    /** Configurable server host (IP or hostname, no port). Default: 10.0.2.2 */
+    /** Configurable server host (IP or hostname, no port). Default: production URL */
     var serverHost: String = DEFAULT_HOST
         private set
 
-    private const val DEFAULT_HOST = "10.0.2.2"
+    private const val DEFAULT_HOST = "dydcghsn0my6-production-qgbb8wql.australia-southeast1.suga.run"
     private const val API_PORT = 4000
 
-    fun getHttpBaseUrl(): String = "http://$serverHost:$API_PORT/api/v1/"
-    fun getWsUrl(userId: String): String = "ws://$serverHost:$API_PORT/phone?user_id=$userId"
+    /** True when host is a domain name (not an IP address) → use HTTPS/WSS */
+    private fun isDomainHost(): Boolean = !serverHost.matches(Regex("^[\\d.]+$"))
+
+    fun getHttpBaseUrl(): String {
+        val scheme = if (isDomainHost()) "https" else "http"
+        val port = if (isDomainHost()) "" else ":$API_PORT"
+        return "$scheme://$serverHost$port/api/v1/"
+    }
+
+    fun getWsUrl(userId: String): String {
+        val scheme = if (isDomainHost()) "wss" else "ws"
+        val port = if (isDomainHost()) "" else ":$API_PORT"
+        return "$scheme://$serverHost$port/phone?user_id=$userId"
+    }
 
     /** Update the server host and rebuild the Retrofit instance. */
     fun setServerHost(host: String) {
