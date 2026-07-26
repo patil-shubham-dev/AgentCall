@@ -25,6 +25,9 @@ function now(): string {
 }
 
 export function createCall(input: CreateCallInput): VoiceCallSession {
+  const start = Date.now();
+  logger.info({ userId: input.userId, agentId: input.agentId, reason: input.reason }, '[createCall] entered');
+
   const session: VoiceCallSession = {
     id: newId(),
     userId: input.userId,
@@ -49,9 +52,12 @@ export function createCall(input: CreateCallInput): VoiceCallSession {
     createdAt: now(),
   };
 
-  sessions.set(session.id, session);
-  logger.info({ callId: session.id, reason: input.reason }, 'Call session created');
+  logger.info({ callId: session.id, elapsed: Date.now() - start }, '[createCall] session object built');
 
+  sessions.set(session.id, session);
+  logger.info({ callId: session.id, elapsed: Date.now() - start }, '[createCall] session stored');
+
+  logger.info({ callId: session.id, userId: session.userId, elapsed: Date.now() - start }, '[createCall] before notifyPhone');
   notifyPhone(session.userId, {
     type: 'call_incoming',
     callId: session.id,
@@ -60,7 +66,9 @@ export function createCall(input: CreateCallInput): VoiceCallSession {
     options: input.options,
     priority: input.priority,
   });
+  logger.info({ callId: session.id, elapsed: Date.now() - start }, '[createCall] after notifyPhone');
 
+  logger.info({ callId: session.id, elapsed: Date.now() - start }, 'Call session created');
   return session;
 }
 
@@ -252,14 +260,22 @@ export function registerPhone(userId: string, ws: WebSocket): void {
 }
 
 export function notifyPhone(userId: string, payload: Record<string, unknown>): boolean {
+  const start = Date.now();
+  const msgType = (payload.type as string) ?? 'unknown';
+  logger.info({ userId, msgType, phoneConnectionsSize: phoneConnections.size, hasConnection: phoneConnections.has(userId) }, '[notifyPhone] entered');
+
   const ws = phoneConnections.get(userId);
   if (ws && ws.readyState === WebSocket.OPEN) {
-    const msgType = (payload.type as string) ?? 'unknown';
-    ws.send(JSON.stringify(payload));
-    logger.info({ userId, msgType }, '[WS] -> sent to phone');
-    return true;
+    try {
+      ws.send(JSON.stringify(payload));
+      logger.info({ userId, msgType, elapsed: Date.now() - start }, '[WS] -> sent to phone');
+      return true;
+    } catch (sendErr) {
+      logger.error({ err: sendErr, userId, msgType, elapsed: Date.now() - start }, '[WS] -> send failed');
+      return false;
+    }
   }
-  logger.warn({ userId, msgType: (payload.type as string) ?? 'unknown' }, '[WS] phone not connected, message not delivered');
+  logger.warn({ userId, msgType, readyState: ws?.readyState, elapsed: Date.now() - start }, '[WS] phone not connected, message not delivered');
   return false;
 }
 

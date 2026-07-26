@@ -84,6 +84,15 @@ async function main() {
       return reply.status(400).send({ error: 'VALIDATION_ERROR', message: error.message, request_id: requestId });
     }
 
+    if (error instanceof SyntaxError || statusCode === 400) {
+      logger.warn({ err: error, requestId }, 'Bad request body');
+      return reply.status(400).send({
+        error: 'INVALID_REQUEST_BODY',
+        message: config.nodeEnv === 'production' ? 'Invalid request body' : error.message,
+        request_id: requestId,
+      });
+    }
+
     logger.error({ err: error, requestId }, 'Unhandled error');
     return reply.status(500).send({
       error: 'INTERNAL_ERROR',

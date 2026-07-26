@@ -4,6 +4,14 @@ import { logger } from './common/logger.js';
 import * as voicebridge from './voicebridge/service.js';
 import type { CreateCallInput } from './voicebridge/types.js';
 
+function inspectBody(body: unknown): string {
+  if (body === null || body === undefined) return String(body);
+  if (typeof body === 'object') {
+    try { return JSON.stringify(body); } catch { return String(body); }
+  }
+  return String(body);
+}
+
 const strictRateLimit = { max: 10, timeWindow: '1 minute' };
 const moderateRateLimit = { max: 60, timeWindow: '1 minute' };
 
@@ -47,7 +55,10 @@ export function registerRoutes(app: FastifyInstance): void {
   app.post('/api/v1/calls', {
     config: { rateLimit: moderateRateLimit },
   }, async (request, reply) => {
+    const start = Date.now();
     const body = request.body as Record<string, unknown>;
+    logger.info({ body: inspectBody(body) }, '[CALLS] step 1 - raw body');
+
     const userId = (body.user_id as string) ?? 'solo-user';
     const agentId = (body.agent_id as string) ?? 'ai-agent';
     const summary = (body.summary as string) ?? (body.context as Record<string, unknown> | undefined)?.summary as string ?? '';
@@ -55,6 +66,7 @@ export function registerRoutes(app: FastifyInstance): void {
     const taskId = (body.context as Record<string, unknown> | undefined)?.task_id as string | undefined;
     const options = (body.context as Record<string, unknown> | undefined)?.options as string[] | undefined;
     const priority = body.priority as string ?? 'normal';
+    logger.info({ userId, agentId, summary, reason, taskId, options, priority, elapsed: Date.now() - start }, '[CALLS] step 2 - parsed fields');
 
     if (!summary) {
       return reply.status(400).send({ error: 'VALIDATION_ERROR', message: 'summary is required in context' });
@@ -65,10 +77,12 @@ export function registerRoutes(app: FastifyInstance): void {
       return reply.status(400).send({ error: 'VALIDATION_ERROR', message: `reason must be one of: ${validReasons.join(', ')}` });
     }
 
+    logger.info({ elapsed: Date.now() - start }, '[CALLS] step 3 - before createCall');
     const session = voicebridge.createCall({
       userId, agentId, reason: reason as CreateCallInput['reason'],
       summary, taskId, options, priority: priority as CreateCallInput['priority'],
     });
+    logger.info({ callId: session.id, elapsed: Date.now() - start }, '[CALLS] step 4 - after createCall');
 
     return reply.status(201).send({
       call_id: session.id,
@@ -123,21 +137,33 @@ export function registerRoutes(app: FastifyInstance): void {
   app.post('/api/v1/calls/:callId/user-text', {
     config: { rateLimit: moderateRateLimit },
   }, async (request, reply) => {
-    const { callId } = request.params as { callId: string };
-    const { text } = request.body as { text: string };
-
-    if (!text || text.trim().length === 0) {
-      return reply.status(400).send({ error: 'VALIDATION_ERROR', message: 'text is required' });
-    }
-
     try {
+      logger.info({ body: inspectBody(request.body), params: request.params }, '[STT] user-text entered');
+      const { callId } = request.params as { callId: string };
+      const { text } = request.body as { text: string };
+
+      if (!text || text.trim().length === 0) {
+        return reply.status(400).send({ error: 'VALIDATION_ERROR', message: 'text is required' });
+      }
+
+      logger.info({ callId, text: text.slice(0, 100) }, '[STT] user-text processing');
       const result = voicebridge.processTextMessage(callId, text);
+      logger.info({ callId, bargeIn: result.bargeIn.action }, '[STT] user-text processed');
+
       return {
         call_id: callId,
         text: result.text,
         barge_in: result.bargeIn,
       };
     } catch (err) {
+      const error = err instanceof Error ? err : new Error(String(err));
+      logger.error({
+        err: error,
+        stack: error.stack,
+        cause: (error as Error & { cause?: unknown }).cause,
+        body: inspectBody(request.body),
+        params: request.params,
+      }, '[STT] user-text failed');
       const message = err instanceof Error ? err.message : 'Processing failed';
       return reply.status(404).send({ error: 'NOT_FOUND', message });
     }
@@ -211,9 +237,12 @@ export function registerRoutes(app: FastifyInstance): void {
   });
 
   app.post('/api/v1/phone/register', async (request, reply) => {
-    const { user_id } = request.body as { user_id?: string };
-    const userId = user_id ?? 'solo-user';
+    logger.info({ body: inspectBody(request.body), bodyType: typeof request.body }, '[REGISTER] entered');
 
+    const { user_id } = request.body as { user_id?: string };
+    logger.info({ user_id }, '[REGISTER] parsed body');
+
+    const userId = user_id ?? 'solo-user';
     const wsScheme = request.protocol === 'https' ? 'wss' : 'ws';
     const wsHost = (request.headers['x-forwarded-host'] as string) ?? request.headers.host ?? `localhost:${config.port}`;
     const wsEndpoint = `${wsScheme}://${wsHost}/phone?user_id=${userId}`;
