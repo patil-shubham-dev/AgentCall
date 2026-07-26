@@ -16,6 +16,21 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 128M
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
 
   mcp-server:
     build:
@@ -28,6 +43,21 @@ services:
     env_file: ../.env
     depends_on:
       - backend-api
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 64M
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
 
   caddy:
     image: caddy:2-alpine
@@ -43,6 +73,16 @@ services:
     depends_on:
       - backend-api
       - mcp-server
+    deploy:
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 128M
+        reservations:
+          cpus: '0.1'
+          memory: 64M
+    cap_add:
+      - NET_BIND_SERVICE
 
 volumes:
   caddy_data:

@@ -1,5 +1,4 @@
 import * as client from './client.js';
-import { logger } from './logger.js';
 
 function text(content: string) {
   return { content: [{ type: 'text' as const, text: content }] };
@@ -48,11 +47,11 @@ export const createCallTool = {
       priority: args.priority as string | undefined,
     });
 
-    if (result.error) return error(`Error: ${result.message ?? result.error}`);
+    if ('error' in result) return error(`Error: ${result.message ?? result.error}`);
 
     return text(JSON.stringify({
-      call_id: result.data!.call_id,
-      status: result.data!.status,
+      call_id: result.data.call_id,
+      status: result.data.status,
       instruction: 'Use send_message to send text to the user. Use get_transcript to see their response. Use complete_call when done.',
     }, null, 2));
   },
@@ -74,10 +73,10 @@ export const sendMessageTool = {
     const content = args.content as string;
 
     const result = await client.sendMessage(callId, content);
-    if (result.error) return error(`Error: ${result.message ?? result.error}`);
+    if ('error' in result) return error(`Error: ${result.message ?? result.error}`);
 
     return text(JSON.stringify({
-      message_id: result.data!.message_id,
+      message_id: result.data.message_id,
       sent: true,
       spoken_to_human: true,
       instruction: 'Use get_transcript to check if the human has responded.',
@@ -99,19 +98,19 @@ export const getTranscriptTool = {
     const callId = args.call_id as string;
     const result = await client.getTranscript(callId);
 
-    if (result.error) {
+    if ('error' in result) {
       const getResult = await client.getCall(callId);
-      if (getResult.error) return error(`Call not found: ${callId}`);
+      if ('error' in getResult) return error(`Call not found: ${callId}`);
       return text(JSON.stringify({
-        status: getResult.data!.status,
-        message_count: getResult.data!.message_count,
+        status: getResult.data.status,
+        message_count: getResult.data.message_count,
         instruction: 'Send a message with send_message, then check transcript again.',
       }, null, 2));
     }
 
     return text(JSON.stringify({
       call_id: callId,
-      messages: result.data!.messages,
+      messages: result.data.messages,
     }, null, 2));
   },
 };
@@ -142,7 +141,7 @@ export const completeCallTool = {
     const result = args.result as Record<string, unknown> | undefined;
 
     const r = await client.completeCall(callId, result);
-    if (r.error) return error(`Error: ${r.message ?? r.error}`);
+    if ('error' in r) return error(`Error: ${r.message ?? r.error}`);
 
     return text(JSON.stringify({
       status: 'completed',
@@ -168,7 +167,7 @@ export const cancelCallTool = {
     const reason = (args.reason as string) ?? 'resolved';
 
     const r = await client.cancelCall(callId, reason);
-    if (r.error) return error(`Error: ${r.message ?? r.error}`);
+    if ('error' in r) return error(`Error: ${r.message ?? r.error}`);
 
     return text(JSON.stringify({ status: 'cancelled', call_id: callId }, null, 2));
   },

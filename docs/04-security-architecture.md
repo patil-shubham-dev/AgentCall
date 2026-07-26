@@ -1,5 +1,15 @@
 # Security Architecture Document
 
+> **HISTORICAL DESIGN DOCUMENT**
+>
+> This document describes the original design process.
+> The implementation may differ.
+> Refer to [ARCHITECTURE_BASELINE.md](../ARCHITECTURE_BASELINE.md) for the current architecture.
+>
+> **Canonical references:** [API_SPEC.md](../API_SPEC.md) (auth model) | [SYSTEM_ARCHITECTURE.md](../SYSTEM_ARCHITECTURE.md)
+>
+> Note: The auth model described below (OAuth 2.0 + JWT) should align with [API_SPEC.md](../API_SPEC.md) which specifies JWT Bearer and X-Provider-Key authentication.
+
 ## AgentCall MCP
 
 **Version:** 1.0

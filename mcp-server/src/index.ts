@@ -7,7 +7,7 @@ import {
 import { logger } from './logger.js';
 import { tools } from './tools.js';
 import { startSSEServer } from './sse.js';
-import { config } from './config.js';
+import { validateConfig } from './config.js';
 
 /**
  * Creates an MCP Server instance with the tool handlers configured.
@@ -52,6 +52,7 @@ function createConfiguredServer(): Server {
 }
 
 async function main() {
+  validateConfig();
   const transportType = process.env.MCP_TRANSPORT ?? 'stdio';
 
   if (transportType === 'sse' || transportType === 'both') {

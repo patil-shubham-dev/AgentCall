@@ -3,8 +3,6 @@ package com.agentcall.app.call
 import android.content.Intent
 import android.os.Build
 import android.os.Bundle
-import android.transition.Fade
-import android.transition.Slide
 import android.view.Gravity
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -55,14 +53,6 @@ class IncomingCallActivity : ComponentActivity() {
         if (!isProcessing.compareAndSet(false, true)) {
             finish()
             return
-        }
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            overrideActivityTransition(
-                ComponentActivity.OVERRIDE_TRANSITION_OPEN,
-                Fade().apply { duration = 400 },
-                Slide(Gravity.BOTTOM).apply { duration = 300 }
-            )
         }
 
         val callId = intent.getStringExtra("call_id") ?: run { isProcessing.set(false); finish(); return }
@@ -136,13 +126,18 @@ fun IncomingCallScreen(
     val laterOptions = listOf(5 to "5 min", 10 to "10 min", 15 to "15 min", 30 to "30 min", 60 to "1 hour")
 
     // Priority colors
-    val (priorityLabel, priorityColor, themeAccent, themeGradient) = when (priority) {
-        "urgent" -> "URGENT" to Red400 to Red400 to listOf(Red500, Red600)
-        "high" -> "HIGH" to Amber400 to Amber400 to listOf(Amber500, Amber600)
-        "normal" -> "NORMAL" to Indigo400 to Indigo500 to listOf(Indigo500, GradientBrandEnd)
-        "low" -> "LOW" to Slate500 to Slate400 to listOf(Slate500, Slate600)
-        else -> priority.uppercase() to Slate500 to Indigo500 to listOf(Indigo500, GradientBrandEnd)
+    data class PriorityColors(val label: String, val color: Color, val accent: Color, val gradient: List<Color>)
+    val priorityColors = when (priority) {
+        "urgent" -> PriorityColors("URGENT", Red400, Red400, listOf(Red500, Red600))
+        "high" -> PriorityColors("HIGH", Amber400, Amber400, listOf(Amber500, Amber600))
+        "normal" -> PriorityColors("NORMAL", Indigo400, Indigo500, listOf(Indigo500, GradientBrandEnd))
+        "low" -> PriorityColors("LOW", Slate500, Slate400, listOf(Slate500, Slate600))
+        else -> PriorityColors(priority.uppercase(), Slate500, Indigo500, listOf(Indigo500, GradientBrandEnd))
     }
+    val priorityLabel = priorityColors.label
+    val priorityColor = priorityColors.color
+    val themeAccent = priorityColors.accent
+    val themeGradient = priorityColors.gradient
 
     val infiniteTransition = rememberInfiniteTransition(label = "incoming")
 

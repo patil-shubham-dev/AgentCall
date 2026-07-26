@@ -3,7 +3,6 @@ package com.agentcall.app
 import android.content.Intent
 import android.os.Build
 import android.os.Bundle
-import android.transition.Fade
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.*
@@ -31,14 +30,6 @@ import dagger.hilt.android.AndroidEntryPoint
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            overrideActivityTransition(
-                ComponentActivity.OVERRIDE_TRANSITION_OPEN,
-                Fade().apply { duration = 300 },
-                Fade().apply { duration = 200 }
-            )
-        }
 
         setContent {
             AgentCallTheme {

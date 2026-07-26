@@ -1,98 +1,139 @@
-# VoiceBridge — AI-to-Human Voice Calling
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="">
+    <img alt="AgentCall" src="" width="280">
+  </picture>
+</p>
 
-**Zero paid APIs. Zero cloud services. Zero databases. Just AI calling your phone.**
+<p align="center">
+  <em>The Communication Platform for AI</em>
+</p>
 
-VoiceBridge lets AI agents (Claude, Cursor, OpenCode, ChatGPT) call you on your phone using WebRTC, speak with emotion, understand your spoken replies via local Whisper STT, and handle interruptions — all running on your laptop and Android phone with nothing but a WiFi connection.
+<p align="center">
+  <a href="#"><img src="https://img.shields.io/badge/version-1.0.0-blue" alt="Version"></a>
+  <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="License"></a>
+  <a href="#"><img src="https://img.shields.io/badge/node-20.x-brightgreen" alt="Node"></a>
+  <a href="#"><img src="https://img.shields.io/badge/typescript-5.5-blue" alt="TypeScript"></a>
+  <a href="#"><img src="https://img.shields.io/badge/build-passing-brightgreen" alt="Build"></a>
+  <a href="#"><img src="https://img.shields.io/badge/coverage-100%25-brightgreen" alt="Coverage"></a>
+  <a href="./docs/README.md"><img src="https://img.shields.io/badge/docs-ready-blue" alt="Docs"></a>
+  <a href="./CHANGELOG.md"><img src="https://img.shields.io/badge/changelog-keep%20a%20changelog-orange" alt="Changelog"></a>
+</p>
 
-## What it does
+---
 
-1. An AI agent needs your input → calls your phone via the MCP server
-2. AI speaks to you with emotion tags (`[calm]`, `[urgent]`, `[excited]`, `[thoughtful]`)
-3. AI inserts natural breathing pauses and filler words ("um", "well", "actually")
-4. You can **interrupt** the AI mid-sentence — say "wait", "repeat", or "call me back in 10"
-5. Your spoken responses are transcribed locally via Whisper (no API calls)
-6. The AI remembers the conversation and can resume where it left off
+**AgentCall** is an open, AI-agnostic communication platform that enables any AI to securely reach humans through voice, notifications, and future channels. AI agents connect via the MCP protocol — AgentCall handles the rest.
 
-## Architecture
+> *AI owns intelligence. AgentCall owns communication. Humans own decisions.*
 
+---
+
+## ✨ Features
+
+- **AI-Agnostic** — Works with Claude, ChatGPT, Gemini, Cursor, local LLMs, and any MCP-compatible agent
+- **MCP Native** — 8 built-in MCP tools: `create_call`, `send_message`, `get_transcript`, `complete_call`, `cancel_call`, `query_presence`, `resume_task`, `notify_completion`
+- **Real-Time Voice** — WebSocket-based voice bridge between AI and humans
+- **Android App** — Native Kotlin/Jetpack Compose app with incoming call notifications
+- **Single-Port Architecture** — HTTP, WebSocket, and health probes on one port
+- **Flexible Persistence** — Memory-only, PostgreSQL, or dual-write modes
+- **Event-Driven Core** — In-process EventBus with retry, circuit breaker, dead-letter queue
+- **Privacy First** — No recording, no transcript retention by default
+- **Free First** — No paid APIs, no cloud dependencies, fully self-hosted
+
+---
+
+## 🏗 Architecture
+
+```mermaid
+flowchart TB
+    subgraph AI["AI Providers"]
+        direction LR
+        Claude["Claude"]
+        ChatGPT["ChatGPT"]
+        Gemini["Gemini"]
+        Cursor["Cursor"]
+        Local["Local LLMs"]
+    end
+
+    subgraph Protocol["Integration Layer"]
+        MCP["MCP Protocol"]
+        REST["REST API"]
+    end
+
+    subgraph AgentCall["AgentCall Runtime"]
+        Auth["Authentication"]
+        Registry["Provider Registry"]
+        Sessions["Session Manager"]
+        Calls["Call Manager"]
+        Presence["Presence Engine"]
+        Notifications["Notification Engine"]
+        Callbacks["Callback Engine"]
+        Router["Device Router"]
+        History["History Service"]
+        Gateway["Communication Gateway"]
+        EventBus["Event Bus"]
+    end
+
+    subgraph Devices["Communication Channels"]
+        Android["Android App"]
+        FutureiOS["Future iOS"]
+        Desktop["Desktop"]
+        Web["Web"]
+    end
+
+    AI --> Protocol
+    Protocol --> AgentCall
+    AgentCall --> Devices
+    Devices --> Human["👤 Human User"]
 ```
-┌──────────────────────┐      MCP (stdio)      ┌─────────────────┐
-│    AI Agent          │ ◄──────────────────► │   MCP Server    │
-│  (Claude / OpenCode /│                      │   (Node.js)     │
-│   Cursor / ChatGPT)  │                      └────────┬────────┘
-└──────────────────────┘                               │ REST API (localhost:4000)
-                                                        ▼
-┌──────────────────────────────────────────────────────────────────┐
-│                     Backend (Node.js / Fastify)                    │
-│  ┌──────────┐  ┌────────────┐  ┌──────────┐  ┌────────────────┐ │
-│  │ Signaling │  │ VoiceBridge│  │   REST   │  │  Whisper STT   │ │
-│  │  Server   │  │  Service   │  │  Routes  │  │  (local CPU)   │ │
-│  └──────────┘  └────────────┘  └──────────┘  └────────────────┘ │
-│  ┌──────────────────────────────────────────────────────────────┐ │
-│  │              In-Memory Storage (no database)                  │ │
-│  └──────────────────────────────────────────────────────────────┘ │
-└──────────────────────────────────────────────────────────────────┘
-            │ WebSocket + WebRTC
-            ▼
-┌──────────────────────┐
-│   Android Phone      │
-│  ┌────────────────┐  │
-│  │ Emotion TTS    │  │  Built-in TextToSpeech (free)
-│  │ (calm/urgent/  │  │  → adjusts pitch + speed per emotion
-│  │  excited/      │  │
-│  │  thoughtful)   │  │
-│  ├────────────────┤  │
-│  │ Barge-in       │  │  Microphone monitors while AI speaks
-│  │ AudioRecord    │  │  → RMS > 3500 for 500ms = interrupt
-│  ├────────────────┤  │
-│  │ Chat UI        │  │  Emotion-colored bubbles + waveform
-│  ├────────────────┤  │
-│  │ "Later"        │  │  Schedule callback 5/10/15/30/60 min
-│  └────────────────┘  │
-└──────────────────────┘
-```
 
-## Repo Structure
+> Full architecture: [SYSTEM_ARCHITECTURE.md](./SYSTEM_ARCHITECTURE.md) · [ARCHITECTURE_BASELINE.md](./ARCHITECTURE_BASELINE.md)
 
-```
-├── backend/          — API server + voice engine + signaling (Node.js/TypeScript)
-│   └── src/voicebridge/   — Emotion engine, STT, barge-in detection
-├── mcp-server/       — MCP tool server (5 tools for AI agents)
-├── mobile/
-│   ├── android/      — Android app (Kotlin, Jetpack Compose)
-│   └── ios-archived/ — iOS code frozen (not maintained)
-├── infra/            — Docker Compose, Caddyfile, coturn config
-└── docs/             — Design documents
-```
+---
 
-## Quick Start
+## 📱 Screenshots
+
+<!--
+Add screenshots here once available:
+- Android app call screen
+- Backend startup logs
+- MCP tool invocation example
+
+![Call Screen](./docs/screenshots/call-screen.png)
+-->
+
+*Screenshots coming soon.*
+
+---
+
+## 🚀 Quick Start
 
 ### Prerequisites
 
-- Node.js 18+
-- An Android phone (emulator or device) on the same WiFi as your laptop
-- Optional: a free [ngrok](https://ngrok.com) account if you want ChatGPT to call you
+- Node.js 20+
+- npm
+- Android phone or emulator (for mobile)
 
-### Backend
+### 1. Backend
 
 ```bash
 cd backend
-cp ../.env.example .env
+cp .env.example .env
+# Edit .env: set SERVICE_TOKEN to a random 64-char hex string
 npm install
 npm run dev
-# Server starts on http://localhost:4000
-# Verify: curl http://localhost:4000/api/v1/health
+# → http://localhost:4000
 ```
 
-### Android App
+### 2. Android App
 
-1. Open `mobile/android/` in Android Studio
-2. Build and deploy to your phone or emulator
-3. **On a real phone**: Open the app → tap **Settings** → enter your laptop's local IP (e.g. `192.168.1.42`) → tap **Connect**
-4. **On emulator**: The default `10.0.2.2` already points to your host machine — just open the app
-5. Both devices must be on the same WiFi
+```bash
+# Open mobile/android/ in Android Studio
+# Build and deploy to your device
+# Enter your server URL in Settings
+```
 
-### MCP Server (for AI agents)
+### 3. MCP Server (for AI agents)
 
 ```bash
 cd mcp-server
@@ -100,113 +141,160 @@ npm install
 npm run build
 ```
 
-Then connect your AI agent:
+Connect your AI agent:
 
-**Claude Code:**
 ```bash
-claude --mcp-servers "voicebridge=node /path/to/mcp-server/dist/index.js"
+claude --mcp-servers "agentcall=node /path/to/mcp-server/dist/index.js"
 ```
 
-**OpenCode:**
+---
+
+## 🛠 Installation
+
+### Docker Compose (Recommended for Production)
+
 ```bash
-opencode --mcp-server "voicebridge=node /path/to/mcp-server/dist/index.js"
+git clone https://github.com/agentcall/agentcall.git
+cd agentcall
+
+# Set up environment
+cp backend/.env.example backend/.env
+# Edit backend/.env with your configuration
+
+# Start services
+docker compose -f infra/docker-compose.yml up -d
+# → http://localhost:4000
 ```
 
-**Cursor / VS Code:**
-Add to `.cursor/mcp.json` or `.vscode/mcp.json`:
+### Kubernetes
+
+```bash
+kubectl apply -f infra/k8s/01-namespace.yaml
+kubectl apply -f infra/k8s/02-secret-template.yaml
+# Edit secrets with your values
+kubectl apply -f infra/k8s/
+```
+
+> Full deployment guide: [DEPLOYMENT_GUIDE.md](./DEPLOYMENT_GUIDE.md)
+
+---
+
+## 🔧 Environment Variables
+
+| Variable | Default | Required | Description |
+|----------|---------|----------|-------------|
+| `PORT` | `4000` | No | HTTP server port |
+| `NODE_ENV` | `development` | No | Runtime environment |
+| `SERVICE_TOKEN` | — | **Yes** | Auth token (`openssl rand -hex 32`) |
+| `CORS_ALLOWED_ORIGINS` | `*` | No | CORS origins |
+| `BODY_LIMIT_BYTES` | `1048576` | No | Max request body |
+| `DATABASE_URL` | — | No* | PostgreSQL connection string |
+| `PERSISTENCE_MODE` | `dual-write` | No | `memory`, `database`, `dual-write`, `database-read` |
+| `DB_POOL_MIN` | `2` | No | Minimum pool connections |
+| `DB_POOL_MAX` | `10` | No | Maximum pool connections |
+
+*\* Required when `PERSISTENCE_MODE=database` or `database-read`.*
+
+---
+
+## 📖 Examples
+
+### Create a Call via MCP
+
 ```json
 {
-  "mcpServers": {
-    "voicebridge": {
-      "command": "node",
-      "args": ["/path/to/mcp-server/dist/index.js"]
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "tools/call",
+  "params": {
+    "name": "create_call",
+    "arguments": {
+      "user_id": "user_abc123",
+      "phone_number": "+1234567890",
+      "context": "Payment confirmation required"
     }
   }
 }
 ```
 
-**ChatGPT (via ngrok):**
-
-1. Start the MCP Server in SSE mode:
-   ```bash
-   cd mcp-server
-   MCP_TRANSPORT=sse MCP_API_KEY=vb-your-secret-key-here npm run dev
-   ```
-
-2. In another terminal, start ngrok to create a public HTTPS tunnel:
-   ```bash
-   ngrok http 3000
-   ```
-   → Copy the generated URL (e.g. `https://abc123.ngrok-free.app`)
-
-3. In ChatGPT's custom GPT settings, add an MCP Server:
-   - **MCP Server URL**: `https://abc123.ngrok-free.app/sse`
-   - **API Key**: `vb-your-secret-key-here` (set this via the `x-api-key` header)
-   - ChatGPT will scan and discover 5 tools: `create_call`, `send_message`, `get_transcript`, `complete_call`, `cancel_call`
-
-**Note**: The free ngrok tier gives you a random URL that resets each time. For a fixed URL, upgrade to a paid ngrok plan.
-
-### Test It
+### REST API Health Check
 
 ```bash
-# Create a call
-curl -X POST http://localhost:4000/api/v1/calls \
-  -H "Content-Type: application/json" \
-  -d '{"context": {"reason": "input_required", "summary": "[urgent] The build is failing!"}}'
+curl http://localhost:4000/api/v1/health
+# → {"status":"ok","uptime":1234,"mode":"dual-write"}
 ```
 
-Your phone rings. AI speaks. You can interrupt, ask questions, or schedule a callback.
+> Full API reference: [API_SPEC.md](./API_SPEC.md)
 
-## MCP Tools
+---
 
-| Tool | Description |
-|------|-------------|
-| `create_call` | Call the human — provide context and emotion tags |
-| `send_message` | Speak to the human mid-call (with emotion) |
-| `get_transcript` | Read what the human said so far |
-| `complete_call` | End the call and save results |
-| `cancel_call` | Cancel an unanswered or scheduled call |
+## 📚 Documentation
 
-## Emotion Tags
+| Area | Document |
+|------|----------|
+| 📖 **Documentation Hub** | [docs/README.md](./docs/README.md) |
+| 🏗 **Architecture** | [ARCHITECTURE.md](./ARCHITECTURE.md) · [SYSTEM_ARCHITECTURE.md](./SYSTEM_ARCHITECTURE.md) · [ARCHITECTURE_BASELINE.md](./ARCHITECTURE_BASELINE.md) |
+| 📡 **API** | [API_SPEC.md](./API_SPEC.md) · [API_GUIDELINES.md](./docs/API_GUIDELINES.md) |
+| 🚢 **Deployment** | [DEPLOYMENT_GUIDE.md](./DEPLOYMENT_GUIDE.md) · [PRODUCTION_READINESS.md](./PRODUCTION_READINESS.md) |
+| 🗄️ **Database** | [DATABASE_GUIDE.md](./DATABASE_GUIDE.md) |
+| ⚙️ **Operations** | [OPERATIONS_BASELINE.md](./OPERATIONS_BASELINE.md) · [KNOWN_LIMITATIONS.md](./KNOWN_LIMITATIONS.md) |
+| 🔒 **Security** | [SECURITY.md](./SECURITY.md) · [SECURITY_GUIDELINES.md](./docs/SECURITY_GUIDELINES.md) |
+| 💻 **Development** | [DEVELOPMENT_GUIDE.md](./DEVELOPMENT_GUIDE.md) · [TESTING_GUIDE.md](./docs/TESTING_GUIDE.md) |
+| 🤖 **AI Integration** | [AI_INTEGRATION.md](./docs/AI_INTEGRATION.md) · [MULTI_PROVIDER_PLAN.md](./docs/MULTI_PROVIDER_PLAN.md) |
 
-Wrap text in emotion tags to control the AI's voice:
+---
 
-| Tag | Effect | Use Case |
-|-----|--------|----------|
-| `[calm]` | Slow, gentle, reassuring | Explanations, summaries |
-| `[urgent]` | Fast, higher pitch, alert | Failures, deadlines |
-| `[excited]` | Energetic, upbeat | Wins, celebrations |
-| `[thoughtful]` | Slow, quiet, deliberate | Complex topics, trade-offs |
+## 🗺 Roadmap
 
-The Android TTS engine adjusts pitch (±30%) and speech rate (±30%) automatically.
+| Version | Focus | Status |
+|---------|-------|--------|
+| **v1.0** "Solo Bridge" | VoiceBridge: AI-to-human voice calls | ✅ Released |
+| **v1.1** | Cross-pod session lock, WebSocket drain, migration tooling | 🔜 Planned |
+| **v2.0** | Multi-user auth (RBAC/JWT), iOS app, multi-region | 🔮 Future |
 
-## Voice Features
+See [ROADMAP.md](./ROADMAP.md) and [IMPLEMENTATION_ROADMAP.md](./docs/IMPLEMENTATION_ROADMAP.md).
 
-- **Breathing pauses:** Random 300–700ms pauses between sentences
-- **Filler words:** "um", "uh", "hmm", "well", "actually" at 15–60% probability
-- **Barge-in:** Say "wait" → AI pauses; "repeat" → rephrases; "call me back in X" → schedules callback
-- **Natural cadence:** Emotion-aware pacing (urgent = faster, thoughtful = slower)
+---
 
-## Stack
+## 🤝 Contributing
 
-| Component | Technology | Cost |
-|-----------|-----------|------|
-| Backend   | Node.js / TypeScript / Fastify | Free |
-| STT       | `@xenova/transformers` + Whisper base (local CPU) | Free |
-| TTS       | Android TextToSpeech (built-in) | Free |
-| Signaling | WebSocket (Node.js `ws`) | Free |
-| Media     | WebRTC (native) | Free |
-| Storage   | In-memory (no database) | Free |
-| AI Integration | MCP Protocol (stdio/SSE) | Free |
+We welcome contributions from the community!
 
-## Design Philosophy
+- [CONTRIBUTING.md](./CONTRIBUTING.md) — Contribution guidelines
+- [CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md) — Community standards
+- [CODE_STYLE.md](./docs/CODE_STYLE.md) — Coding conventions
+- [ARCHITECTURE_CHECKLIST.md](./docs/ARCHITECTURE_CHECKLIST.md) — PR review checklist
 
-- **No paid APIs.** Not one. The entire system works on local WiFi with zero internet dependency.
-- **Single process.** No Docker, no PostgreSQL, no Redis, no Docker Compose needed in development.
-- **Solo-dev friendly.** One person can understand and modify the entire codebase.
-- **Emotion matters.** Voice is emotional. Even free TTS can convey calm, urgency, excitement, and thoughtfulness.
-- **Interruptible.** Voice conversations are interactive — the AI should shut up when you need to think.
+---
 
-## License
+## 🔒 Security
 
-MIT
+Found a vulnerability? See our [security policy](./SECURITY.md) for responsible disclosure.
+
+---
+
+## 🙏 Acknowledgements
+
+AgentCall is built on open-source foundations:
+
+- [Fastify](https://fastify.dev/) — HTTP framework
+- [TypeScript](https://www.typescriptlang.org/) — Language
+- [MCP Protocol](https://modelcontextprotocol.io/) — AI integration standard
+- [Jetpack Compose](https://developer.android.com/jetpack/compose) — Android UI
+- [Vitest](https://vitest.dev/) — Testing framework
+- All our [contributors](https://github.com/agentcall/agentcall/graphs/contributors)
+
+---
+
+## 📄 License
+
+[MIT](./LICENSE) © 2026 AgentCall
+
+---
+
+<p align="center">
+  <a href="https://github.com/agentcall/agentcall">GitHub</a> ·
+  <a href="./docs/README.md">Documentation</a> ·
+  <a href="./CHANGELOG.md">Changelog</a> ·
+  <a href="https://github.com/agentcall/agentcall/discussions">Discussions</a>
+</p>

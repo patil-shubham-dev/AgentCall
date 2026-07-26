@@ -1,9 +1,15 @@
-# Infrastructure & CI/CD Plan
+# Infrastructure & CI/CD Plan — [DEPRECATED]
+
+> **⚠️ DEPRECATED: This document describes the previous infrastructure plan and is retained for historical context only.**
+>
+> **Current state:** See [INFRASTRUCTURE.md](./INFRASTRUCTURE.md) for the current deployment.
+> **Target architecture:** See [SYSTEM_ARCHITECTURE.md](../SYSTEM_ARCHITECTURE.md) for the target infrastructure.
+> **Reason for deprecation:** This plan assumed a Hetzner VPS-based deployment with full Docker Compose (PostgreSQL, Redis, coturn, Caddy). The current deployment uses Suga PaaS with in-memory storage. Infrastructure priorities have shifted to align with the new runtime services architecture.
 
 ## AgentCall MCP
 
-**Version:** 1.0
-**Status:** Draft
+**Version:** 1.0 (Historical)
+**Status:** Deprecated
 
 ---
 

@@ -1,5 +1,13 @@
 # Privacy & Compliance Document
 
+> **HISTORICAL DESIGN DOCUMENT**
+>
+> This document describes the original design process.
+> The implementation may differ.
+> Refer to [ARCHITECTURE_BASELINE.md](../ARCHITECTURE_BASELINE.md) for the current architecture.
+>
+> **Canonical references:** [PRODUCT_VISION.md](../PRODUCT_VISION.md) (privacy-first philosophy) | [SYSTEM_ARCHITECTURE.md](../SYSTEM_ARCHITECTURE.md) (data ownership rules)
+
 ## AgentCall MCP
 
 **Version:** 1.0

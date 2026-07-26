@@ -1,10 +1,16 @@
-# MVP Scope & Milestone Plan
+# MVP Scope & Milestone Plan — [DEPRECATED]
+
+> **⚠️ DEPRECATED: This document describes the previous MVP plan and is retained for historical context only.**
+>
+> **Current priorities:** See [ROADMAP.md](../ROADMAP.md) for the current development roadmap.
+> **System architecture:** See [SYSTEM_ARCHITECTURE.md](../SYSTEM_ARCHITECTURE.md).
+> **Reason for deprecation:** The previous MVP scope assumed WebRTC-based calling with PostgreSQL, Redis, coturn, and push notifications as core requirements. The new product vision (PRODUCT_VISION.md) prioritizes provider isolation, presence, notifications, and callbacks as the foundation, with a phased approach to infrastructure. See [DOCUMENTATION_MIGRATION_REPORT.md](./reports/DOCUMENTATION_MIGRATION_REPORT.md) for details.
 
 ## AgentCall MCP
 
-**Version:** 1.0
-**Status:** Draft
-**Timeline:** 10 weeks (moderate pace)
+**Version:** 1.0 (Historical)
+**Status:** Deprecated
+**Timeline:** 10 weeks (original estimate)
 
 ---
 

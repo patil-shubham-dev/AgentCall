@@ -285,15 +285,15 @@ fun HomeScreen(
 
 @Composable
 private fun LoadingSkeleton() {
+    val shimmerTransition = rememberInfiniteTransition(label = "shimmer")
+    val shimmerAlpha by shimmerTransition.animateFloat(0.3f, 0.7f,
+        infiniteRepeatable(tween(1000, easing = EaseInOutSine), RepeatMode.Reverse), label = "shimmerAlpha")
+
     Column(
         modifier = Modifier.fillMaxWidth().padding(48.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Spacer(modifier = Modifier.weight(1f))
-        val shimmerTransition = rememberInfiniteTransition(label = "shimmer")
-        val shimmerAlpha by shimmerTransition.animateFloat(0.3f, 0.7f,
-            infiniteRepeatable(tween(1000, easing = EaseInOutSine), RepeatMode.Reverse), label = "shimmerAlpha")
-
         Box(
             modifier = Modifier.size(80.dp).clip(CircleShape)
                 .background(MaterialTheme.colorScheme.surface.copy(alpha = shimmerAlpha)),
@@ -316,10 +316,10 @@ private fun LoadingSkeleton() {
 
 @Composable
 private fun DisconnectedContent(waitingScale: Float, waitingPulse: Float) {
-    Spacer(modifier = Modifier.weight(1f))
     Column(
-        modifier = Modifier.fillMaxWidth().padding(48.dp),
+        modifier = Modifier.fillMaxSize(),
         horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
     ) {
         Box(
             modifier = Modifier.size(80.dp).scale(waitingScale).clip(CircleShape)
@@ -350,21 +350,20 @@ private fun DisconnectedContent(waitingScale: Float, waitingPulse: Float) {
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center,
-            modifier = Modifier.padding(top = 8.dp, horizontal = 24.dp),
+            modifier = Modifier.padding(start = 24.dp, top = 8.dp, end = 24.dp),
         )
     }
-    Spacer(modifier = Modifier.weight(1f))
 }
 
 @Composable
 private fun ReconnectingContent(waitingScale: Float, waitingPulse: Float) {
-    Spacer(modifier = Modifier.weight(1f))
+    val spin by rememberInfiniteTransition(label = "reconnectSpin").animateFloat(0f, 1f,
+        infiniteRepeatable(tween(1200, easing = LinearEasing), RepeatMode.Restart), label = "spin")
     Column(
-        modifier = Modifier.fillMaxWidth().padding(48.dp),
+        modifier = Modifier.fillMaxSize(),
         horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
     ) {
-        val spin by rememberInfiniteTransition(label = "reconnectSpin").animateFloat(0f, 1f,
-            infiniteRepeatable(tween(1200, easing = LinearEasing), RepeatMode.Restart), label = "spin")
         Box(
             modifier = Modifier.size(80.dp).scale(waitingScale).clip(CircleShape)
                 .background(
@@ -394,10 +393,9 @@ private fun ReconnectingContent(waitingScale: Float, waitingPulse: Float) {
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center,
-            modifier = Modifier.padding(top = 8.dp, horizontal = 24.dp),
+            modifier = Modifier.padding(start = 24.dp, top = 8.dp, end = 24.dp),
         )
     }
-    Spacer(modifier = Modifier.weight(1f))
 }
 
 @Composable
@@ -407,129 +405,135 @@ private fun ReadyContent(
     recentCalls: List<RecentCallEntry>,
     onCallClicked: (String) -> Unit,
 ) {
-    Spacer(modifier = Modifier.weight(0.5f))
     Column(
-        modifier = Modifier.fillMaxWidth().padding(48.dp),
+        modifier = Modifier.fillMaxSize(),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Box(
-            modifier = Modifier.size(80.dp).scale(waitingScale).clip(CircleShape)
-                .background(
-                    Brush.linearGradient(
-                        listOf(
-                            Indigo500.copy(alpha = 0.1f + waitingPulse * 0.1f),
-                            Indigo700.copy(alpha = 0.05f),
-                        )
-                    )
-                ),
-            contentAlignment = Alignment.Center,
-        ) {
-            Canvas(modifier = Modifier.size(80.dp)) {
-                val sweep = waitingPulse * 120f
-                drawArc(
-                    color = Indigo400.copy(alpha = 0.3f),
-                    startAngle = -60f + waitingPulse * 360f,
-                    sweepAngle = sweep,
-                    useCenter = false,
-                    style = Stroke(width = 2.5f),
-                )
-            }
-            Icon(
-                Icons.Default.PhoneCallback, null,
-                modifier = Modifier.size(36.dp),
-                tint = Indigo400.copy(alpha = 0.7f + waitingPulse * 0.3f),
-            )
-        }
-        Spacer(modifier = Modifier.height(20.dp))
-        Text(
-            "Connected",
-            style = MaterialTheme.typography.titleLarge,
-            color = MaterialTheme.colorScheme.onBackground,
-            fontWeight = FontWeight.Bold,
-        )
-        Text(
-            "Waiting for AI to call...",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = TextAlign.Center,
-            modifier = Modifier.padding(top = 6.dp),
-        )
-        Spacer(modifier = Modifier.height(8.dp))
-        Surface(
-            shape = RoundedCornerShape(100.dp),
-            color = GlassGreen,
-        ) {
-            Row(
-                modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Box(
-                    modifier = Modifier.size(6.dp).clip(CircleShape)
-                        .background(Green500.copy(alpha = 0.6f + waitingPulse * 0.4f))
-                )
-                Spacer(modifier = Modifier.width(6.dp))
-                Text(
-                    "Your phone will ring when an agent needs you",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = Green400,
-                )
-            }
-        }
-    }
-
-    // ── Recent Calls ──────────────────────────
-    if (recentCalls.isNotEmpty()) {
-        Spacer(modifier = Modifier.height(24.dp))
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Icon(Icons.Default.History, null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
-            Spacer(modifier = Modifier.width(6.dp))
-            Text(
-                "Recent Calls",
-                style = MaterialTheme.typography.titleSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                fontWeight = FontWeight.SemiBold,
-                letterSpacing = 0.5.sp,
-            )
-        }
-        Spacer(modifier = Modifier.height(8.dp))
-        LazyColumn(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            items(recentCalls.take(5), key = { it.callId }) { call ->
-                RecentCallCard(call, onCallClicked)
-            }
-        }
-        Spacer(modifier = Modifier.weight(0.5f))
-    } else {
-        // ── Empty State ─────────────────────────
         Spacer(modifier = Modifier.weight(0.3f))
         Column(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 48.dp),
+            modifier = Modifier.fillMaxWidth().padding(48.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Icon(
-                Icons.Default.PhoneCallback, null,
-                modifier = Modifier.size(40.dp),
-                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
-            )
-            Spacer(modifier = Modifier.height(12.dp))
+            Box(
+                modifier = Modifier.size(80.dp).scale(waitingScale).clip(CircleShape)
+                    .background(
+                        Brush.linearGradient(
+                            listOf(
+                                Indigo500.copy(alpha = 0.1f + waitingPulse * 0.1f),
+                                Indigo700.copy(alpha = 0.05f),
+                            )
+                        )
+                    ),
+                contentAlignment = Alignment.Center,
+            ) {
+                Canvas(modifier = Modifier.size(80.dp)) {
+                    val sweep = waitingPulse * 120f
+                    drawArc(
+                        color = Indigo400.copy(alpha = 0.3f),
+                        startAngle = -60f + waitingPulse * 360f,
+                        sweepAngle = sweep,
+                        useCenter = false,
+                        style = Stroke(width = 2.5f),
+                    )
+                }
+                Icon(
+                    Icons.Default.PhoneCallback, null,
+                    modifier = Modifier.size(36.dp),
+                    tint = Indigo400.copy(alpha = 0.7f + waitingPulse * 0.3f),
+                )
+            }
+            Spacer(modifier = Modifier.height(20.dp))
             Text(
-                "No recent calls",
-                style = MaterialTheme.typography.titleSmall,
+                "Connected",
+                style = MaterialTheme.typography.titleLarge,
+                color = MaterialTheme.colorScheme.onBackground,
+                fontWeight = FontWeight.Bold,
+            )
+            Text(
+                "Waiting for AI to call...",
+                style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Text(
-                "Your completed calls will appear here",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
                 textAlign = TextAlign.Center,
+                modifier = Modifier.padding(top = 6.dp),
             )
+            Spacer(modifier = Modifier.height(8.dp))
+            Surface(
+                shape = RoundedCornerShape(100.dp),
+                color = GlassGreen,
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Box(
+                        modifier = Modifier.size(6.dp).clip(CircleShape)
+                            .background(Green500.copy(alpha = 0.6f + waitingPulse * 0.4f))
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        "Your phone will ring when an agent needs you",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Green400,
+                    )
+                }
+            }
         }
-        Spacer(modifier = Modifier.weight(1f))
+
+        // ── Recent Calls ──────────────────────────
+        if (recentCalls.isNotEmpty()) {
+            Spacer(modifier = Modifier.height(24.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(Icons.Default.History, null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    "Recent Calls",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontWeight = FontWeight.SemiBold,
+                    letterSpacing = 0.5.sp,
+                )
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            LazyColumn(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                items(recentCalls.take(5), key = { it.callId }) { call ->
+                    RecentCallCard(call, onCallClicked)
+                }
+            }
+            Spacer(modifier = Modifier.weight(0.2f))
+        } else {
+            // ── Empty State ─────────────────────────
+            Column(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 48.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Spacer(modifier = Modifier.weight(0.2f))
+                Icon(
+                    Icons.Default.PhoneCallback, null,
+                    modifier = Modifier.size(40.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                Text(
+                    "No recent calls",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    "Your completed calls will appear here",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                    textAlign = TextAlign.Center,
+                )
+                Spacer(modifier = Modifier.weight(0.5f))
+            }
+        }
+        Spacer(modifier = Modifier.weight(0.1f))
     }
 }
 

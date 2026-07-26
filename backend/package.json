@@ -1,6 +1,6 @@
 {
   "name": "@agentcall/voicebridge",
-  "version": "2.0.0",
+  "version": "1.0.0",
   "private": true,
   "type": "module",
   "description": "VoiceBridge — AI ↔ Human voice bridge. No DB, no Redis, no paid APIs.",
@@ -9,7 +9,11 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "lint": "eslint src/ --ext .ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "test:load": "tsx src/__tests__/load-test.ts"
   },
   "dependencies": {
     "@fastify/compress": "^7.0.3",
@@ -18,17 +22,20 @@
     "@fastify/rate-limit": "^9.1.0",
     "dotenv": "^16.4.0",
     "fastify": "^4.28.0",
+    "pg": "^8.22.0",
     "pino": "^9.1.0",
     "pino-pretty": "^11.1.0",
     "ws": "^8.17.0"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",
+    "@types/pg": "^8.20.0",
     "@types/ws": "^8.5.10",
     "@typescript-eslint/eslint-plugin": "^7.0.0",
     "@typescript-eslint/parser": "^7.0.0",
     "eslint": "^8.57.0",
     "tsx": "^4.16.0",
-    "typescript": "^5.5.0"
+    "typescript": "^5.5.0",
+    "vitest": "^4.1.10"
   }
 }

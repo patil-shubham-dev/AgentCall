@@ -3,11 +3,6 @@ package com.agentcall.app.call
 import android.app.*
 import android.content.Context
 import android.content.Intent
-import android.graphics.Color
-import android.media.AudioFormat
-import android.media.AudioRecord
-import android.media.MediaRecorder
-import android.os.Bundle
 import android.os.IBinder
 import android.os.PowerManager
 import android.speech.RecognitionListener
@@ -22,19 +17,9 @@ import com.agentcall.app.data.api.ApiClient
 import com.agentcall.app.data.api.ApiService
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.*
-import org.json.JSONObject
 import java.util.Locale
 import java.util.UUID
 import javax.inject.Inject
-
-private const val SAMPLE_RATE = 16000
-private const val BARGE_IN_BUFFER_MS = 500
-private const val BARGE_IN_THRESHOLD = 3500
-private data class CommandPattern(
-    val keywords: List<String>,
-    val matchers: List<Regex> = emptyList(),
-    val action: suspend (CallService, String, String) -> Unit,
-)
 
 @AndroidEntryPoint
 class CallService : Service() {
@@ -51,72 +36,12 @@ class CallService : Service() {
     var isAiSpeaking = false
     var isPaused = false
 
-    // Barge-in detection (when AI is speaking, user interrupts)
-    private var audioRecord: AudioRecord? = null
-    private var bargeInJob: Job? = null
-
-    // In-memory circular buffer for barge-in PCM detection
-    private val bargeInCircularBuffer = ShortArray(SAMPLE_RATE * 3)
-    private var bargeInBufferWritePos = 0
-    private var bargeInBufferSampleCount = 0
-
-    private var currentEmotion: String = "neutral"
-    private var bargeInCallback: ((String) -> Unit)? = null
-
     // Last AI message text, for the Repeat button
     private var lastAiMessage: String = ""
-    private var lastAiEmotion: String = "neutral"
 
     private var speechRecognizer: SpeechRecognizer? = null
 
     private val api: ApiService = ApiClient.create()
-
-    // ── Configurable Command Patterns ──────────────
-    private val commandPatterns = listOf(
-        CommandPattern(
-            keywords = listOf("call me back", "later", "not now", "busy", "some time"),
-            matchers = listOf(Regex("""(\d+)\s*(?:min|m)""")),
-            action = { service, text, callId ->
-                val minutes = Regex("""(\d+)\s*(?:min|m)""").find(text)?.groupValues?.get(1)?.toIntOrNull() ?: 10
-                service.scheduleCallbackAndEnd(callId, minutes)
-            },
-        ),
-        CommandPattern(
-            keywords = listOf("wait", "hold on", "stop", "pause"),
-            matchers = listOf(Regex("^no$"), Regex("^wait")),
-            action = { service, _, _ ->
-                service.speakWithEmotion("Sure, take your time. Just press record when you're ready.", "calm", "wait_confirm")
-                service.isPaused = true
-            },
-        ),
-        CommandPattern(
-            keywords = listOf("what", "again", "repeat", "explain", "clarify"),
-            action = { service, _, _ ->
-                service.speakWithEmotion("Let me rephrase that.", "thoughtful", "rephrase_intro")
-                service.isPaused = false
-            },
-        ),
-        CommandPattern(
-            keywords = listOf("think", "let me", "moment", "hang on", "sec"),
-            action = { service, _, _ ->
-                service.speakWithEmotion("I'll wait.", "calm", "wait_confirm")
-                service.isPaused = true
-            },
-        ),
-    )
-
-    private suspend fun scheduleCallbackAndEnd(callId: String, minutes: Int) {
-        try {
-            Log.d(TAG, "[HTTP] POST /calls/$callId/callback delay=$minutes")
-            api.scheduleCallback(callId, mapOf("delay_minutes" to minutes))
-            Log.d(TAG, "[HTTP] callback scheduled")
-        } catch (e: Exception) {
-            Log.e(TAG, "[HTTP] callback scheduling failed", e)
-        }
-        speakWithEmotion("Okay, I'll call you back in $minutes minutes.", "calm", "callback_confirm")
-        delay(3000)
-        stopSelf()
-    }
 
     override fun onCreate() {
         super.onCreate()
@@ -133,17 +58,10 @@ class CallService : Service() {
                     override fun onStart(utteranceId: String?) {
                         isAiSpeaking = true
                         Log.d(TAG, "[TTS] start utteranceId=$utteranceId")
-                        if (utteranceId == null) return
-                        val parts = utteranceId.split(":")
-                        if (parts.size >= 2) {
-                            currentEmotion = parts[1]
-                            adjustTtsForEmotion(currentEmotion)
-                        }
                     }
 
                     override fun onDone(utteranceId: String?) {
                         isAiSpeaking = false
-                        if (utteranceId?.startsWith("breathe_") == true) return
                         Log.d(TAG, "[TTS] done utteranceId=$utteranceId")
                         dispatchToListeners("ai_finished_speaking", null)
                     }
@@ -160,22 +78,7 @@ class CallService : Service() {
         }
     }
 
-    private fun adjustTtsForEmotion(emotion: String) {
-        val tts = textToSpeech ?: return
-        when (emotion) {
-            "calm" -> { tts.setPitch(0.85f); tts.setSpeechRate(0.8f) }
-            "urgent" -> { tts.setPitch(1.25f); tts.setSpeechRate(1.3f) }
-            "excited" -> { tts.setPitch(1.3f); tts.setSpeechRate(1.2f) }
-            "thoughtful" -> { tts.setPitch(0.9f); tts.setSpeechRate(0.7f) }
-            else -> { tts.setPitch(1.0f); tts.setSpeechRate(1.0f) }
-        }
-    }
-
     private val listenerMap = mutableMapOf<String, (Bundle?) -> Unit>()
-
-    fun onBargeInDetected(callback: (String) -> Unit) {
-        bargeInCallback = callback
-    }
 
     private fun dispatchToListeners(type: String, data: Bundle?) {
         listenerMap[type]?.invoke(data)
@@ -194,16 +97,11 @@ class CallService : Service() {
             ACTION_STOP_RECORDING -> stopRecording()
             ACTION_SPEAK -> {
                 val text = intent.getStringExtra(EXTRA_TEXT) ?: return START_NOT_STICKY
-                val emotion = intent.getStringExtra(EXTRA_EMOTION) ?: "neutral"
-                speakWithEmotion(text, emotion, "direct")
-            }
-            ACTION_BARGE_IN -> {
-                val text = intent.getStringExtra(EXTRA_TEXT) ?: return START_NOT_STICKY
-                handleBargeInCommand(text)
+                speakText(text)
             }
             ACTION_REPEAT_LAST -> {
                 if (lastAiMessage.isNotBlank()) {
-                    speakText(lastAiMessage, lastAiEmotion)
+                    speakText(lastAiMessage)
                 }
             }
             ACTION_END_CALL -> {
@@ -223,256 +121,12 @@ class CallService : Service() {
         return START_STICKY
     }
 
-    fun speakText(text: String, emotion: String = "neutral") {
-        speakWithEmotion(text, emotion, UUID.randomUUID().toString())
-    }
-
-    fun speakWithEmotion(rawText: String, emotion: String, utteranceId: String) {
+    fun speakText(text: String) {
         val tts = textToSpeech ?: run { initTts(); return }
         if (isPaused) return
 
-        currentEmotion = emotion
-        adjustTtsForEmotion(emotion)
-
-        val cleanText = rawText
-            .replace(Regex("\\[(calm|urgent|excited|thoughtful|neutral)\\]", RegexOption.IGNORE_CASE), "")
-            .trim()
-
-        val sentences = cleanText.split(Regex("(?<=[.!?])\\s+")).filter { it.isNotBlank() }
-
-        for ((i, sentence) in sentences.withIndex()) {
-            if (isPaused) break
-
-            if (Math.random() < 0.15 && emotion != "urgent" && i < sentences.size - 1) {
-                val fillers = listOf("um", "uh", "hmm", "well", "so", "actually", "let me think")
-                val filler = fillers.random()
-                val fillerId = "${utteranceId}_filler_$i"
-                tts.speak(filler, TextToSpeech.QUEUE_ADD, null, "breathe_$fillerId")
-            }
-
-            val sentId = "${utteranceId}_$i:$emotion"
-            tts.speak(sentence, TextToSpeech.QUEUE_ADD, null, sentId)
-
-            if (Math.random() < 0.4 && i < sentences.size - 1) {
-                val breathMs = when (emotion) {
-                    "urgent" -> 300L
-                    "thoughtful" -> 700L
-                    else -> 450L
-                }
-                val breathId = "${utteranceId}_breath_$i"
-                tts.playSilentUtterance(breathMs, TextToSpeech.QUEUE_ADD, breathId)
-            }
-
-            val pauseMs = when {
-                i == sentences.size - 1 -> 600L
-                emotion == "urgent" -> 200L
-                emotion == "thoughtful" -> 700L
-                else -> 350L
-            }
-            if (pauseMs > 0 && i < sentences.size - 1) {
-                tts.playSilentUtterance(pauseMs, TextToSpeech.QUEUE_ADD, "breathe_pause_$i")
-            }
-        }
-    }
-
-    // ── Optimized Barge-in Detection (in-memory circular buffer) ──
-
-    private fun startBargeInDetection() {
-        if (bargeInJob?.isActive == true) { Log.d(TAG, "[VOICE] barge-in already running"); return }
-        Log.d(TAG, "[VOICE] starting barge-in detection")
-        bargeInJob = scope.launch {
-            try {
-                val bufferSize = AudioRecord.getMinBufferSize(SAMPLE_RATE,
-                    AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
-
-                if (bufferSize == AudioRecord.ERROR_BAD_VALUE) { Log.w(TAG, "[VOICE] bad buffer size"); return@launch }
-
-                audioRecord = AudioRecord(MediaRecorder.AudioSource.MIC,
-                    SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO,
-                    AudioFormat.ENCODING_PCM_16BIT, bufferSize * 4)
-
-                if (audioRecord?.state != AudioRecord.STATE_INITIALIZED) {
-                    Log.w(TAG, "[VOICE] audio record could not initialize")
-                    audioRecord = null
-                    return@launch
-                }
-
-                // Reset circular buffer
-                bargeInBufferWritePos = 0
-                bargeInBufferSampleCount = 0
-
-                audioRecord?.startRecording()
-
-                val buffer = ShortArray(bufferSize)
-                var speechStartMs = -1L
-                var consecutiveSilenceMs = 0L
-                var speechDetected = false
-
-                while (isActive && isAiSpeaking && !isPaused) {
-                    val read = audioRecord?.read(buffer, 0, buffer.size) ?: break
-                    if (read <= 0) continue
-
-                    writeToCircularBuffer(buffer, read)
-
-                    val rms = calculateRms(buffer, read)
-                    val isSilence = rms < BARGE_IN_THRESHOLD
-
-                    if (!isSilence) {
-                        if (speechStartMs == -1L) {
-                            speechStartMs = System.currentTimeMillis()
-                            Log.d(TAG, "[VOICE] speech detected rms=${String.format("%.1f", rms)}")
-                        }
-                        consecutiveSilenceMs = 0
-                        speechDetected = true
-                    } else {
-                        consecutiveSilenceMs += (read.toLong() * 1000 / SAMPLE_RATE)
-                    }
-
-                    if (speechDetected && speechStartMs > 0 &&
-                        System.currentTimeMillis() - speechStartMs > BARGE_IN_BUFFER_MS &&
-                        consecutiveSilenceMs > 400
-                    ) {
-                        Log.d(TAG, "[VOICE] barge-in triggered")
-                        isPaused = true
-
-                        audioRecord?.stop()
-                        audioRecord?.release()
-                        audioRecord = null
-
-                        textToSpeech?.stop()
-
-                        dispatchToListeners("barge_in_started", null)
-                        processBargeInAudioInMemory()
-
-                        bargeInJob?.cancel()
-                        return@launch
-                    }
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "[VOICE] barge-in error", e)
-            }
-        }
-    }
-
-    private fun writeToCircularBuffer(buffer: ShortArray, read: Int) {
-        val cap = bargeInCircularBuffer.size
-        for (i in 0 until read) {
-            bargeInCircularBuffer[bargeInBufferWritePos] = buffer[i]
-            bargeInBufferWritePos = (bargeInBufferWritePos + 1) % cap
-            if (bargeInBufferSampleCount < cap) bargeInBufferSampleCount++
-        }
-    }
-
-    private suspend fun processBargeInAudioInMemory() {
-        val currentCallId = callId ?: return
-        try {
-            Log.d(TAG, "[STT] barge-in started, transcribing")
-            textToSpeech?.stop()
-            val text = transcribeWithSpeechRecognizer()
-            Log.d(TAG, "[STT] barge-in result: $text")
-            if (text == null) { Log.w(TAG, "[STT] barge-in returned null, ignoring"); return }
-
-            handleBargeInCommand(text)
-            sendUserTextToBackend(currentCallId, text)
-
-            if (isPaused && !text.lowercase().contains("call me back")) {
-                isPaused = false
-                startVoiceSession(currentCallId)
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "[STT] barge-in error", e)
-        }
-    }
-
-    private suspend fun transcribeWithSpeechRecognizer(): String? = suspendCancellableCoroutine { cont ->
-        try {
-            val recognizer = SpeechRecognizer.createSpeechRecognizer(this)
-            if (recognizer == null) { Log.w(TAG, "[STT] SpeechRecognizer not available on this device"); cont.resume(null); return@suspendCancellableCoroutine }
-
-            val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-                putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-                putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.US)
-            }
-
-            Log.d(TAG, "[STT] starting SpeechRecognizer")
-            recognizer.setRecognitionListener(object : RecognitionListener {
-                override fun onResults(results: Bundle?) {
-                    val text = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()
-                    Log.d(TAG, "[STT] result: ${text?.take(100)}")
-                    if (text != null && text.isNotBlank()) cont.resume(text) else cont.resume(null)
-                    recognizer.destroy()
-                }
-                override fun onError(error: Int) {
-                    Log.e(TAG, "[STT] recognition error code=$error")
-                    cont.resume(null); recognizer.destroy()
-                }
-                override fun onReadyForSpeech(params: Bundle?) { Log.d(TAG, "[STT] ready for speech") }
-                override fun onBeginningOfSpeech() { Log.d(TAG, "[STT] beginning of speech") }
-                override fun onRmsChanged(rmsdB: Float) {}
-                override fun onBufferReceived(buffer: ByteArray?) {}
-                override fun onEndOfSpeech() { Log.d(TAG, "[STT] end of speech") }
-                override fun onPartialResults(partialResults: Bundle?) {}
-                override fun onEvent(eventType: Int, params: Bundle?) {}
-            })
-
-            recognizer.startListening(intent)
-            cont.invokeOnCancellation { recognizer.destroy() }
-        } catch (e: Exception) {
-            Log.e(TAG, "[STT] failed to start SpeechRecognizer", e)
-            cont.resume(null)
-        }
-    }
-
-    private fun sendUserTextToBackend(callId: String, text: String) {
-        scope.launch {
-            try {
-                Log.d(TAG, "[HTTP] POST /calls/$callId/user-text text=${text.take(100)}")
-                val resp = api.sendUserText(callId, mapOf("text" to text))
-                Log.d(TAG, "[HTTP] user-text response: bargeIn=${resp.bargeIn}")
-            } catch (e: Exception) {
-                Log.e(TAG, "[HTTP] POST /calls/$callId/user-text failed", e)
-            }
-        }
-    }
-
-    private fun processUserText(text: String, callId: String) {
-        sendUserTextToBackend(callId, text)
-        val lower = text.lowercase()
-        for (pattern in commandPatterns) {
-            val keywordMatch = pattern.keywords.any { lower.contains(it) }
-            val regexMatch = pattern.matchers.any { it.containsMatchIn(lower) }
-            if (keywordMatch || regexMatch) {
-                scope.launch { pattern.action(this, lower, callId) }
-                return
-            }
-        }
-        speakWithEmotion("You said: $text", "neutral", "echo")
-        dispatchToListeners("user_transcript", Bundle().apply { putString("text", text) })
-        CallEventBus.emit(CallEvent.UserMessage(text))
-    }
-
-    fun handleBargeInCommand(text: String) {
-        val lower = text.lowercase().trim()
-        val currentCallId = callId ?: return
-
-        for (pattern in commandPatterns) {
-            val keywordMatch = pattern.keywords.any { lower.contains(it) }
-            val regexMatch = pattern.matchers.any { it.containsMatchIn(lower) }
-            if (keywordMatch || regexMatch) {
-                scope.launch { pattern.action(this@CallService, lower, currentCallId) }
-                return
-            }
-        }
-
-        dispatchToListeners("user_said", Bundle().apply { putString("text", text) })
-    }
-
-    private fun stopBargeInDetection() {
-        bargeInJob?.cancel()
-        bargeInJob = null
-        try { audioRecord?.stop() } catch (_: Exception) {}
-        try { audioRecord?.release() } catch (_: Exception) {}
-        audioRecord = null
+        val utteranceId = UUID.randomUUID().toString()
+        tts.speak(text, TextToSpeech.QUEUE_ADD, null, utteranceId)
     }
 
     private fun startVoiceSession(callId: String) {
@@ -484,7 +138,7 @@ class CallService : Service() {
                     "Continuing our conversation."
                 } ?: "AI needs your input."
                 Log.d(TAG, "[WS] starting voice session callId=$callId")
-                speakWithEmotion(summary, "calm", "resume")
+                speakText(summary)
 
                 launch {
                     signalingClient.events.collect { event ->
@@ -492,34 +146,23 @@ class CallService : Service() {
                         when (event) {
                             is VoiceBridgeEvent.AiMessage -> {
                                 Log.d(TAG, "[WS] ai_message callId=${event.callId} text=${event.content.take(100)}")
-                                val enriched = event.enrichedJson
-                                val emotion = if (enriched.isNotBlank()) {
-                                    try {
-                                        JSONObject(enriched).optJSONObject("emotion")?.optString("emotion", "neutral") ?: "neutral"
-                                    } catch (e: Exception) {
-                                        Log.e(TAG, "[WS] failed to parse enriched JSON", e)
-                                        "neutral"
-                                    }
-                                } else "neutral"
-                                speakText(event.content, emotion)
+                                speakText(event.content)
                                 dispatchToListeners("ai_message", Bundle().apply {
                                     putString("text", event.content)
-                                    putString("emotion", emotion)
                                 })
                                 lastAiMessage = event.content
-                                lastAiEmotion = emotion
-                                CallEventBus.emit(CallEvent.AiMessage(event.content, emotion))
+                                CallEventBus.emit(CallEvent.AiMessage(event.content))
                             }
                             is VoiceBridgeEvent.CallEnded -> {
                                 Log.d(TAG, "[WS] call_ended callId=${event.callId}")
                                 CallEventBus.emit(CallEvent.CallEnded)
-                                speakWithEmotion("Call ended.", "neutral", "end")
+                                speakText("Call ended.")
                                 delay(1500); stopSelf()
                             }
                             is VoiceBridgeEvent.CallCancelled -> {
                                 Log.d(TAG, "[WS] call_cancelled callId=${event.callId}")
                                 CallEventBus.emit(CallEvent.CallEnded)
-                                speakWithEmotion("Call was cancelled.", "neutral", "cancel")
+                                speakText("Call was cancelled.")
                                 delay(1500); stopSelf()
                             }
                             is VoiceBridgeEvent.Disconnected -> {
@@ -544,8 +187,6 @@ class CallService : Service() {
     private fun startRecording() {
         if (isRecording || speechRecognizer != null) { Log.w(TAG, "[STT] already recording"); return }
         try {
-            stopBargeInDetection()
-
             val recognizer = SpeechRecognizer.createSpeechRecognizer(this)
             if (recognizer == null) { Log.w(TAG, "[STT] SpeechRecognizer not available"); return }
             speechRecognizer = recognizer
@@ -580,7 +221,7 @@ class CallService : Service() {
                     recognizer.destroy()
                     if (speechRecognizer == recognizer) speechRecognizer = null
                     Log.e(TAG, "[STT] recognition error code=$error")
-                    speakWithEmotion("Sorry, I didn't catch that.", "calm", "err")
+                    speakText("Sorry, I didn't catch that.")
                     updateNotification("Paused")
                 }
 
@@ -612,11 +253,25 @@ class CallService : Service() {
         }
     }
 
-    // ── Fixed TTS Shutdown (stop only, don't destroy) ──
+    private fun processUserText(text: String, callId: String) {
+        sendUserTextToBackend(callId, text)
+        dispatchToListeners("user_transcript", Bundle().apply { putString("text", text) })
+        CallEventBus.emit(CallEvent.UserMessage(text))
+    }
+
+    private fun sendUserTextToBackend(callId: String, text: String) {
+        scope.launch {
+            try {
+                Log.d(TAG, "[HTTP] POST /calls/$callId/user-text text=${text.take(100)}")
+                api.sendUserText(callId, mapOf("text" to text))
+            } catch (e: Exception) {
+                Log.e(TAG, "[HTTP] POST /calls/$callId/user-text failed", e)
+            }
+        }
+    }
 
     private fun endCall() {
         Log.d(TAG, "[VOICE] ending call callId=$callId")
-        stopBargeInDetection()
         signalingClient.disconnect()
         textToSpeech?.stop()
         releaseWakeLock()
@@ -643,36 +298,10 @@ class CallService : Service() {
             Intent(this, CallService::class.java).setAction(ACTION_END_CALL),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
 
-        val emotionColor = when (currentEmotion) {
-            "calm" -> Color.parseColor("#22C55E")
-            "urgent" -> Color.parseColor("#EF4444")
-            "excited" -> Color.parseColor("#F59E0B")
-            "thoughtful" -> Color.parseColor("#818CF8")
-            else -> Color.parseColor("#6366F1")
-        }
-
-        val emotionPrefix = when (currentEmotion) {
-            "urgent" -> "\u26A0\uFE0F "
-            "excited" -> "\uD83D\uDE04 "
-            "thoughtful" -> "\uD83E\uDD14 "
-            "calm" -> "\uD83D\uDE0A "
-            else -> ""
-        }
-
-        val statusEmoji = when {
-            text.contains("Recording") -> "\uD83D\uDD0C "
-            text.contains("Speaking") -> "\uD83D\uDDE3\uFE0F "
-            text.contains("Processing") -> "\uD83D\uDD04 "
-            text.contains("Paused") -> "\u23F8\uFE0F "
-            text.contains("Retrying") -> "\uD83D\uDD04 "
-            else -> ""
-        }
-
         return NotificationCompat.Builder(this, CHANNEL_ONGOING_CALL)
-            .setContentTitle("$statusEmoji$emotionPrefix AI Voice Call")
+            .setContentTitle("AI Voice Call")
             .setContentText(text)
             .setSmallIcon(R.drawable.ic_agent)
-            .setColor(emotionColor)
             .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setColorized(true)
@@ -689,26 +318,16 @@ class CallService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
     override fun onDestroy() { scope.cancel(); endCall(); super.onDestroy() }
 
-    private fun calculateRms(buffer: ShortArray, read: Int): Double {
-        var sum = 0.0
-        for (i in 0 until read) {
-            sum += buffer[i] * buffer[i]
-        }
-        return Math.sqrt(sum / read)
-    }
-
     companion object {
         const val TAG = "AgentCall"
         const val ACTION_START_CALL = "com.agentcall.action.START_CALL"
         const val ACTION_START_RECORDING = "com.agentcall.action.START_RECORDING"
         const val ACTION_STOP_RECORDING = "com.agentcall.action.STOP_RECORDING"
         const val ACTION_SPEAK = "com.agentcall.action.SPEAK"
-        const val ACTION_BARGE_IN = "com.agentcall.action.BARGE_IN"
         const val ACTION_REPEAT_LAST = "com.agentcall.action.REPEAT_LAST"
         const val ACTION_END_CALL = "com.agentcall.action.END_CALL"
         const val EXTRA_CALL_ID = "call_id"
         const val EXTRA_TEXT = "text"
-        const val EXTRA_EMOTION = "emotion"
         const val CHANNEL_ONGOING_CALL = "ongoing_call"
         const val CHANNEL_INCOMING_CALL = "incoming_call"
         const val EXTRA_CALLER_NAME = "caller_name"

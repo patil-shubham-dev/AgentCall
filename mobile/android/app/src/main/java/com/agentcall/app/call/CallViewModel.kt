@@ -18,7 +18,6 @@ data class ChatBubble(
     val id: String,
     val role: String,
     val text: String,
-    val emotion: String = "neutral",
     val timestamp: Long = System.currentTimeMillis(),
 )
 
@@ -33,17 +32,13 @@ data class ActiveCallUiState(
     val isRecording: Boolean = false,
     val isProcessing: Boolean = false,
     val isAiSpeaking: Boolean = false,
-    val isBargeIn: Boolean = false,
     val isPaused: Boolean = false,
-    val isAITyping: Boolean = false,
     val elapsedSeconds: Int = 0,
     val callContext: CallContextInfo = CallContextInfo(),
     val messages: List<ChatBubble> = emptyList(),
     val statusText: String = "Connecting...",
     val waveformLevels: List<Float> = List(40) { 0.08f },
     val peakWaveformLevel: Float = 0f,
-    val currentEmotion: String = "neutral",
-    val emotionHistory: List<String> = emptyList(),
 )
 
 @HiltViewModel
@@ -51,7 +46,6 @@ class CallViewModel @Inject constructor() : ViewModel() {
 
     private val api: ApiService = ApiClient.create()
     private var messageCounter = 0
-    private val emotionHistory = mutableListOf<String>()
 
     private val _uiState = MutableStateFlow(ActiveCallUiState())
     val uiState: StateFlow<ActiveCallUiState> = _uiState.asStateFlow()
@@ -78,7 +72,7 @@ class CallViewModel @Inject constructor() : ViewModel() {
         viewModelScope.launch {
             CallEventBus.events.collect { event ->
                 when (event) {
-                    is CallEvent.AiMessage -> addAiMessage(event.text, event.emotion)
+                    is CallEvent.AiMessage -> addAiMessage(event.text)
                     is CallEvent.UserMessage -> addUserTranscript(event.text)
                     is CallEvent.CallEnded -> disconnect()
                 }
@@ -86,34 +80,18 @@ class CallViewModel @Inject constructor() : ViewModel() {
         }
     }
 
-    fun addAiMessage(text: String, emotion: String = "neutral") {
-        emotionHistory.add(emotion)
-        val topEmotions = emotionHistory.takeLast(5)
-
+    fun addAiMessage(text: String) {
         val msg = ChatBubble(
             id = "ai_${messageCounter++}",
             role = "ai",
             text = text,
-            emotion = emotion,
             timestamp = System.currentTimeMillis(),
         )
         _uiState.value = _uiState.value.copy(
             messages = _uiState.value.messages + msg,
-            statusText = when (emotion) {
-                "urgent" -> "AI is urgent"
-                "excited" -> "AI is excited"
-                "thoughtful" -> "AI is thinking"
-                else -> "AI speaking"
-            },
+            statusText = "AI speaking",
             isAiSpeaking = true,
-            isAITyping = false,
-            currentEmotion = emotion,
-            emotionHistory = topEmotions.toList(),
         )
-    }
-
-    fun showAITyping() {
-        _uiState.value = _uiState.value.copy(isAITyping = true, isAiSpeaking = false)
     }
 
     fun addUserTranscript(text: String) {
@@ -126,13 +104,6 @@ class CallViewModel @Inject constructor() : ViewModel() {
             messages = _uiState.value.messages + msg,
             isAiSpeaking = false,
             statusText = "You said: ${text.take(50)}",
-        )
-    }
-
-    fun setBargeIn(bargeIn: Boolean) {
-        _uiState.value = _uiState.value.copy(
-            isBargeIn = bargeIn,
-            statusText = if (bargeIn) "You interrupted — processing..." else "",
         )
     }
 
@@ -158,7 +129,7 @@ class CallViewModel @Inject constructor() : ViewModel() {
     fun tick() {
         val current = _uiState.value
         val t = current.elapsedSeconds.toFloat()
-        val levels = generateWaveform(t, !current.isRecording && !current.isAiSpeaking, current.currentEmotion)
+        val levels = generateWaveform(t, !current.isRecording && !current.isAiSpeaking)
         _uiState.value = current.copy(
             elapsedSeconds = current.elapsedSeconds + 1,
             waveformLevels = levels,
@@ -174,20 +145,13 @@ class CallViewModel @Inject constructor() : ViewModel() {
         )
     }
 
-    private fun generateWaveform(t: Float, silent: Boolean, emotion: String): List<Float> {
+    private fun generateWaveform(t: Float, silent: Boolean): List<Float> {
         val base = if (silent) 0.04f else 0.08f
-        val freqMod = when (emotion) {
-            "urgent" -> 1.5f
-            "excited" -> 1.3f
-            "thoughtful" -> 0.7f
-            "calm" -> 0.5f
-            else -> 1.0f
-        }
         return List(40) { i ->
             if (silent) {
                 base + 0.02f * abs(sin(t * 0.3f + i * 0.5f))
             } else {
-                val freq = (2f + 3f * abs(sin(i * 0.1f))) * freqMod
+                val freq = 2f + 3f * abs(sin(i * 0.1f))
                 val envelope = 1f - (i - 20f) * (i - 20f) / 400f
                 val signal = abs(sin(t * freq * 0.5f + i * 0.3f) * 0.7f + sin(t * 1.3f + i * 0.7f) * 0.3f)
                 (base + signal * envelope * 0.5f).coerceIn(0.02f, 0.95f)

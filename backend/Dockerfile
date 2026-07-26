@@ -1,28 +1,49 @@
-FROM node:20-slim AS builder
+# syntax=docker/dockerfile:1
+# Multi-stage build for VoiceBridge backend
 
+# Stage 1: Install dependencies
+FROM node:20-alpine AS deps
 WORKDIR /app
-
+RUN apk add --no-cache libc6-compat
 COPY package.json package-lock.json ./
-RUN npm ci
+RUN npm ci --only=production && \
+    cp -R node_modules /prod_modules && \
+    npm ci
 
+# Stage 2: Build
+FROM node:20-alpine AS builder
+WORKDIR /app
+COPY --from=deps /app/node_modules ./node_modules
 COPY tsconfig.json ./
-COPY src/ src/
+COPY src/ ./src/
 RUN npm run build
 
-FROM node:20-slim AS production
-
+# Stage 3: Production image
+FROM node:20-alpine AS runner
 WORKDIR /app
 
-COPY package.json package-lock.json ./
-RUN npm ci --only=production
+# Non-root user
+RUN addgroup --system --gid 1001 appgroup && \
+    adduser --system --uid 1001 --ingroup appgroup appuser
 
-COPY --from=builder /app/dist/ dist/
+# Copy production dependencies
+COPY --from=deps /prod_modules ./node_modules
 
-USER node
+# Copy compiled output
+COPY --from=builder /app/dist ./dist
+COPY package.json ./
 
+# Read-only filesystem
+RUN chown -R appuser:appgroup /app && \
+    chmod -R 755 /app && \
+    chmod 755 /app/node_modules/.bin/*
+
+USER appuser
+
+ENV NODE_ENV=production
 EXPOSE 4000
 
-HEALTHCHECK --interval=10s --timeout=5s --start-period=5s --retries=3 \
-  CMD node -e "require('http').get('http://localhost:4000/api/v1/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"
+HEALTHCHECK --interval=10s --timeout=5s --start-period=10s --retries=3 \
+    CMD node -e "require('http').get('http://localhost:4000/api/v1/health', r => { process.exit(r.statusCode === 200 ? 0 : 1) }).on('error', () => process.exit(1))"
 
 CMD ["node", "dist/index.js"]

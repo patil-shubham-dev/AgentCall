@@ -1,5 +1,13 @@
 # Testing & QA Strategy
 
+> **HISTORICAL DESIGN DOCUMENT**
+>
+> This document describes the original design process.
+> The implementation may differ.
+> Refer to [ARCHITECTURE_BASELINE.md](../ARCHITECTURE_BASELINE.md) for the current architecture.
+>
+> **Canonical references:** [SYSTEM_ARCHITECTURE.md](../SYSTEM_ARCHITECTURE.md) | [API_SPEC.md](../API_SPEC.md) | [PRODUCT_VISION.md](../PRODUCT_VISION.md)
+
 ## AgentCall MCP
 
 **Version:** 1.0

@@ -1,0 +1,28 @@
+# Each line is a file pattern followed by one or more owners.
+# Order matters: the last matching pattern takes precedence.
+
+# Default owners for everything
+* @agentcall/maintainers
+
+# Backend service
+/backend/ @agentcall/backend
+
+# MCP server
+/mcp-server/ @agentcall/mcp-team
+
+# Mobile apps
+/mobile/android/ @agentcall/mobile-android
+/mobile/ios/ @agentcall/mobile-ios
+
+# Infrastructure and deployment
+/infra/ @agentcall/infra-team
+/.github/workflows/ @agentcall/infra-team
+
+# Documentation
+/docs/ @agentcall/docs-team
+*.md @agentcall/docs-team
+
+# Configuration files
+*.yml @agentcall/infra-team
+*.yaml @agentcall/infra-team
+Dockerfile @agentcall/infra-team

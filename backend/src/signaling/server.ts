@@ -3,6 +3,12 @@ import type { Server } from 'node:http';
 import { logger } from '../common/logger.js';
 import { config } from '../common/config.js';
 import * as voicebridge from '../voicebridge/service.js';
+import {
+  publishSignalingConnected,
+  publishSignalingDisconnected,
+  publishSignalingMessageReceived,
+  publishSignalingFailed,
+} from '../voicebridge/signaling/publisher.js';
 
 interface RateLimitState {
   tokens: number;
@@ -53,7 +59,7 @@ function sendError(ws: WebSocket, code: string, message: string): void {
 
 function startEvictionTimer(): NodeJS.Timeout {
   return setInterval(() => {
-    for (const [ws, _state] of clientRateLimits) {
+    for (const [ws] of clientRateLimits) {
       if (ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
         clientRateLimits.delete(ws);
       }
@@ -80,7 +86,15 @@ export function createSignalingServer(server: Server): WebSocketServer {
       return;
     }
 
+    // Authenticate via token query parameter matching SERVICE_TOKEN
     const url = new URL(req.url ?? '/', 'http://localhost');
+    const token = url.searchParams.get('token');
+    if (!token || token !== config.serviceToken) {
+      logger.warn({ ip, hasToken: !!token }, '[WS] authentication failed — invalid or missing token');
+      ws.close(4001, 'Authentication failed: invalid or missing token');
+      return;
+    }
+
     const userId = url.searchParams.get('user_id') ?? 'solo-user';
     logger.info({ userId, ip, path: url.pathname }, '[WS] connection accepted');
 
@@ -90,6 +104,7 @@ export function createSignalingServer(server: Server): WebSocketServer {
       payload: { user_id: userId, server: 'agentcall-voicebridge' },
       timestamp: new Date().toISOString(),
     }));
+    publishSignalingConnected(userId);
     logger.info({ userId, remoteAddress: ip }, '[WS] phone connected to signaling');
 
     ws.on('message', (data) => {
@@ -97,27 +112,32 @@ export function createSignalingServer(server: Server): WebSocketServer {
       const msgSize = raw.length;
       if (msgSize > MAX_MESSAGE_SIZE) {
         logger.warn({ userId, msgSize, maxSize: MAX_MESSAGE_SIZE }, '[WS] message too large');
+        publishSignalingFailed(userId, 'message too large');
         sendError(ws, 'MESSAGE_TOO_LARGE', `Max size: ${MAX_MESSAGE_SIZE} bytes`);
         return;
       }
       if (!checkMessageRateLimit(ws)) {
         logger.warn({ userId }, '[WS] message rate limited');
+        publishSignalingFailed(userId, 'message rate limited');
         sendError(ws, 'RATE_LIMITED', `Limit: ${RATE_LIMIT_MESSAGES}/${RATE_LIMIT_WINDOW_MS / 1000}s`);
         return;
       }
 
       let msgType = 'unknown';
-      try { msgType = JSON.parse(raw).type ?? 'unknown'; } catch {}
+      try { msgType = JSON.parse(raw).type ?? 'unknown'; } catch { /* non-JSON message, keep unknown */ }
+      publishSignalingMessageReceived(userId, msgType, msgSize);
       logger.info({ userId, msgType, msgSize }, '[WS] <- message from phone');
     });
 
     ws.on('close', (code, reason) => {
       clientRateLimits.delete(ws);
+      publishSignalingDisconnected(userId);
       logger.info({ userId, code, reason: reason.toString() }, '[WS] phone disconnected');
     });
 
     ws.on('error', (err) => {
       logger.error({ err, userId }, '[WS] phone WebSocket error');
+      publishSignalingFailed(userId, 'WebSocket error');
       clientRateLimits.delete(ws);
     });
   });

@@ -1,5 +1,15 @@
 # Mobile App Technical Specification
 
+> **HISTORICAL DESIGN DOCUMENT**
+>
+> This document describes the original design process.
+> The implementation may differ.
+> Refer to [ARCHITECTURE_BASELINE.md](../ARCHITECTURE_BASELINE.md) for the current architecture.
+>
+> **Canonical references:** [API_SPEC.md](../API_SPEC.md) | [SYSTEM_ARCHITECTURE.md](../SYSTEM_ARCHITECTURE.md) | [PRODUCT_VISION.md](../PRODUCT_VISION.md)
+>
+> Note: This document describes the mobile app architecture. The auth flow should reference [API_SPEC.md](../API_SPEC.md) for the current authentication model (JWT + Provider API Key). The old OAuth-only model described below is being migrated.
+
 ## AgentCall MCP
 
 **Version:** 1.0

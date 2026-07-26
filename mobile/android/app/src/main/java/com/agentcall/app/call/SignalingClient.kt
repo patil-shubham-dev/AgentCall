@@ -14,8 +14,7 @@ import javax.inject.Singleton
 private const val TAG = "AgentCall"
 
 sealed class VoiceBridgeEvent {
-    data class AiMessage(val callId: String, val messageId: String, val content: String, val enrichedJson: String = "") : VoiceBridgeEvent()
-    data class BargeInDetected(val callId: String, val action: String, val callbackMinutes: Int = 10) : VoiceBridgeEvent()
+    data class AiMessage(val callId: String, val messageId: String, val content: String) : VoiceBridgeEvent()
     data class CallbackScheduled(val callId: String, val delayMinutes: Int) : VoiceBridgeEvent()
     data class CallIncoming(val callId: String, val reason: String, val summary: String) : VoiceBridgeEvent()
     data class CallEnded(val callId: String) : VoiceBridgeEvent()
@@ -112,16 +111,8 @@ class SignalingClient @Inject constructor() {
                     val messageObj = payload.optJSONObject("message")
                     val content = messageObj?.getString("content") ?: return
                     val messageId = messageObj.getString("id")
-                    val enriched = payload.optJSONObject("enriched")?.toString() ?: ""
                     Log.d(TAG, "[WS] ai_message callId=$callId text=${content.take(100)}")
-                    _events.emit(VoiceBridgeEvent.AiMessage(callId, messageId, content, enriched))
-                }
-                "barge_in_detected" -> {
-                    val callId = payload?.getString("callId") ?: return
-                    val action = payload.optString("action", "none")
-                    val callbackMinutes = payload.optInt("callbackMinutes", 10)
-                    Log.d(TAG, "[WS] barge_in_detected callId=$callId action=$action")
-                    _events.emit(VoiceBridgeEvent.BargeInDetected(callId, action, callbackMinutes))
+                    _events.emit(VoiceBridgeEvent.AiMessage(callId, messageId, content))
                 }
                 "callback_scheduled" -> {
                     val callId = payload?.getString("callId") ?: return

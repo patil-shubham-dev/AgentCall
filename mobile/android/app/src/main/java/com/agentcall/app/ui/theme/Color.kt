@@ -55,15 +55,13 @@ val Green600 = Color(0xFF16A34A)
 val Red400 = Color(0xFFF87171)
 val Red500 = Color(0xFFEF4444)
 val Red600 = Color(0xFFDC2626)
+val Amber300 = Color(0xFFFCD34D)
 val Amber400 = Color(0xFFFBBF24)
 val Amber500 = Color(0xFFF59E0B)
 val Amber600 = Color(0xFFD97706)
 
 // ── Waveform / Audio ────────────────────────
 val WaveformActive = Color(0xFF6366F1)
-val WaveformIdle = Color(0xFF334155)
-val WaveformSpeaking = Color(0xFF22C55E)
-val WaveformMuted = Color(0xFF475569)
 
 // ── Light Theme Surface Colors ──────────────
 val LightBackground = Color(0xFFF8FAFC)

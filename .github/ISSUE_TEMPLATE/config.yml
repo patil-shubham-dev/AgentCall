@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: AgentCall Community
+    url: https://github.com/agentcall/agentcall/discussions
+    about: Ask and answer questions in GitHub Discussions
+  - name: Security Vulnerability
+    url: https://github.com/agentcall/agentcall/security/policy
+    about: Report security vulnerabilities via our security policy

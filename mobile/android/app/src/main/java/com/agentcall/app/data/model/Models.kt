@@ -80,15 +80,6 @@ data class PhoneRegisterResponse(
 data class UserTextResponse(
     @SerialName("call_id") val callId: String,
     val text: String,
-    @SerialName("barge_in") val bargeIn: BargeInResultData? = null,
-)
-
-@Serializable
-data class BargeInResultData(
-    val detected: Boolean,
-    val action: String,
-    @SerialName("callback_minutes") val callbackMinutes: Int? = null,
-    @SerialName("original_text") val originalText: String? = null,
 )
 
 

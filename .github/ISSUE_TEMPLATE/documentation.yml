@@ -1,0 +1,45 @@
+name: Documentation
+description: Report a documentation issue or suggest an improvement
+labels: [documentation]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Help us improve our documentation!
+
+  - type: input
+    id: doc-location
+    attributes:
+      label: Document Location
+      description: Which document needs attention?
+      placeholder: docs/DEPLOYMENT_GUIDE.md
+    validations:
+      required: true
+
+  - type: textarea
+    id: issue
+    attributes:
+      label: What's Wrong or Missing?
+      description: Describe the documentation issue
+    validations:
+      required: true
+
+  - type: textarea
+    id: suggestion
+    attributes:
+      label: Suggested Improvement
+      description: How should this be improved?
+    validations:
+      required: true
+
+  - type: dropdown
+    id: type
+    attributes:
+      label: Issue Type
+      options:
+        - Incorrect information
+        - Missing documentation
+        - Unclear explanation
+        - Broken link
+        - Typo or formatting
+        - Other

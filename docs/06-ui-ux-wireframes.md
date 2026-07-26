@@ -1,5 +1,15 @@
 # UI/UX Wireframes & Design Specifications
 
+> **HISTORICAL DESIGN DOCUMENT**
+>
+> This document describes the original design process.
+> The implementation may differ.
+> Refer to [ARCHITECTURE_BASELINE.md](../ARCHITECTURE_BASELINE.md) for the current architecture.
+>
+> **Canonical references:** [PRODUCT_VISION.md](../PRODUCT_VISION.md) | [API_SPEC.md](../API_SPEC.md)
+>
+> Note: The wireframes below reference an OAuth-based auth flow. The current API contract ([API_SPEC.md](../API_SPEC.md)) uses JWT + Provider API Key. Update when implementation aligns.
+
 ## AgentCall MCP
 
 **Version:** 1.0

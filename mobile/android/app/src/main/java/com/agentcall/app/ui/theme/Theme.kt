@@ -7,6 +7,7 @@ import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
 
@@ -90,9 +91,6 @@ data class ExtendedColors(
     val warning: Color = Amber500,
     val error: Color = Red500,
     val waveformActive: Color = WaveformActive,
-    val waveformIdle: Color = WaveformIdle,
-    val waveformSpeaking: Color = WaveformSpeaking,
-    val waveformMuted: Color = WaveformMuted,
     val indigo300: Color = Indigo300,
     val indigo400: Color = Indigo400,
     val slate300: Color = Slate300,
@@ -112,6 +110,8 @@ data class ExtendedColors(
 val LocalExtendedColors = staticCompositionLocalOf { ExtendedColors() }
 
 val MaterialTheme.extendedColors: ExtendedColors
+    @Composable
+    @ReadOnlyComposable
     get() = LocalExtendedColors.current
 
 // ── Theme Composition ───────────────────────

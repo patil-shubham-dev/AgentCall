@@ -1,11 +1,9 @@
 import { config } from './config.js';
 import { logger } from './logger.js';
 
-interface ApiResponse<T> {
-  data?: T;
-  error?: string;
-  message?: string;
-}
+type ApiResponse<T> =
+  | { data: T }
+  | { error: string; message?: string };
 
 async function apiRequest<T>(
   method: string,

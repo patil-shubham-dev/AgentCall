@@ -10,7 +10,7 @@ import kotlinx.coroutines.flow.asSharedFlow
  * to the activity — both sides just emit/collect from this bus.
  */
 sealed class CallEvent {
-    data class AiMessage(val text: String, val emotion: String) : CallEvent()
+    data class AiMessage(val text: String) : CallEvent()
     data class UserMessage(val text: String) : CallEvent()
     data object CallEnded : CallEvent()
 }

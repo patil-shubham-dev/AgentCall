@@ -1,9 +1,15 @@
-# Architecture Design Document (ADD)
+# Architecture Design Document (ADD) — [DEPRECATED]
+
+> **⚠️ DEPRECATED: This document describes the previous architecture and is retained for historical context only.**
+>
+> **Canonical source:** See [SYSTEM_ARCHITECTURE.md](../SYSTEM_ARCHITECTURE.md) for the current architecture specification.
+> **Product vision:** See [PRODUCT_VISION.md](../PRODUCT_VISION.md) for the platform philosophy.
+> **Reason for deprecation:** The architecture was redesigned from a microservices/WebRTC-based model to an event-driven runtime with provider isolation, presence, notifications, and callbacks as core engines. See [DOCUMENTATION_MIGRATION_REPORT.md](./reports/DOCUMENTATION_MIGRATION_REPORT.md) for details.
 
 ## AgentCall MCP
 
-**Version:** 1.0
-**Status:** Draft
+**Version:** 1.0 (Historical)
+**Status:** Deprecated
 **Last Updated:** 2026-07-07
 
 ---

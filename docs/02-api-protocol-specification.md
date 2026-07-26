@@ -1,9 +1,15 @@
-# API & Protocol Specification
+# API & Protocol Specification — [DEPRECATED]
+
+> **⚠️ DEPRECATED: This document describes the previous API contract and is retained for historical context only.**
+>
+> **Canonical source:** See [API_SPEC.md](../API_SPEC.md) for the current API contract.
+> **System architecture:** See [SYSTEM_ARCHITECTURE.md](../SYSTEM_ARCHITECTURE.md).
+> **Reason for deprecation:** The API was redesigned with 8 MCP tools (up from 5), JWT/OAuth authentication, and an expanded resource model including Providers, Presence, Notifications, and Devices. The WebRTC signaling protocol is now part of the Communication Gateway service. See [DOCUMENTATION_MIGRATION_REPORT.md](./reports/DOCUMENTATION_MIGRATION_REPORT.md) for details.
 
 ## AgentCall MCP
 
-**Version:** 1.0
-**Status:** Draft
+**Version:** 1.0 (Historical)
+**Status:** Deprecated
 
 ---
 

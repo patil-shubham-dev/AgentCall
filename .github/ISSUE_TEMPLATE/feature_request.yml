@@ -1,0 +1,61 @@
+name: Feature Request
+description: Suggest an idea for AgentCall
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for suggesting an idea! Please check existing issues before submitting.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem Statement
+      description: What problem does this feature solve?
+      placeholder: It's frustrating when...
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed Solution
+      description: Describe the solution you'd like
+    validations:
+      required: true
+
+  - type: textarea
+    id: alignment
+    attributes:
+      label: Alignment with Product Vision
+      description: How does this align with our product philosophy?
+      value: |
+        AgentCall owns communication. AI owns intelligence.
+        This feature must not duplicate AI capabilities.
+      validations:
+        required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered
+      description: What alternatives have you considered?
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected Area
+      description: Which part of AgentCall does this affect?
+      options:
+        - Backend
+        - MCP Server
+        - Android App
+        - Documentation
+        - Infrastructure
+        - Other
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional Context
+      description: Add any other context or screenshots

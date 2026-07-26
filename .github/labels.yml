@@ -1,0 +1,82 @@
+# Labels for AgentCall repository
+# Sync via: https://github.com/marketplace/actions/label-syncer
+
+- name: bug
+  description: Something isn't working as expected
+  color: d73a4a
+
+- name: enhancement
+  description: New feature or improvement
+  color: a2eeef
+
+- name: documentation
+  description: Improvements or additions to documentation
+  color: 0075ca
+
+- name: security
+  description: Security vulnerability or hardening
+  color: e99695
+
+- name: performance
+  description: Performance optimization or regression
+  color: 0e8a16
+
+- name: question
+  description: Further information is requested
+  color: d876e3
+
+- name: good first issue
+  description: Good for newcomers
+  color: 7057ff
+
+- name: help wanted
+  description: Extra attention is needed
+  color: 008672
+
+- name: breaking change
+  description: Changes that break backward compatibility
+  color: b60205
+
+- name: duplicate
+  description: This issue or PR already exists
+  color: cfd3d7
+
+- name: invalid
+  description: This doesn't seem right
+  color: e4e669
+
+- name: wontfix
+  description: This will not be worked on
+  color: ffffff
+
+- name: dependencies
+  description: Updates to dependencies
+  color: 0366d6
+
+- name: release
+  description: Release tracking
+  color: 5319e7
+
+- name: backend
+  description: Backend service
+  color: 1d76db
+
+- name: mobile
+  description: Mobile app (Android/iOS)
+  color: fbca04
+
+- name: mcp
+  description: MCP server
+  color: 0052cc
+
+- name: infra
+  description: Infrastructure and deployment
+  color: 5319e7
+
+- name: ci
+  description: CI/CD pipeline
+  color: 0e8a16
+
+- name: archived
+  description: Archived or superseded
+  color: e4e669

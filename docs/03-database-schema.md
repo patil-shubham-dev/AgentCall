@@ -1,5 +1,15 @@
 # Database Schema Design
 
+> **HISTORICAL DESIGN DOCUMENT**
+>
+> This document describes the original design process.
+> The implementation may differ.
+> Refer to [ARCHITECTURE_BASELINE.md](../ARCHITECTURE_BASELINE.md) for the current architecture.
+>
+> **Canonical references:** [SYSTEM_ARCHITECTURE.md](../SYSTEM_ARCHITECTURE.md) | [API_SPEC.md](../API_SPEC.md)
+>
+> This document defines the target PostgreSQL schema aligned with the SYSTEM_ARCHITECTURE.md runtime services. Not yet implemented.
+
 ## AgentCall MCP
 
 **Version:** 1.0

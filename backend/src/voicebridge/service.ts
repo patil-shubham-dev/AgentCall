@@ -1,20 +1,37 @@
 import crypto from 'node:crypto';
 import { WebSocket } from 'ws';
 import { logger } from '../common/logger.js';
+import { withSessionLock } from './session-lock.js';
 import type {
   VoiceCallSession,
   VoiceMessage,
   CreateCallInput,
-  CallStatus,
-  EnrichedMessage,
-  BargeInResult,
   CallbackRequest,
 } from './types.js';
-import { enrichText, detectBargeIn, emotionOf } from './types.js';
+import {
+  publishNotificationRequested,
+  publishNotificationDelivered,
+  publishNotificationFailed,
+} from './notifications/publisher.js';
+import {
+  publishPresenceConnected,
+  publishPresenceDisconnected,
+  publishPresenceUpdated,
+} from './presence/publisher.js';
+import {
+  publishCallCreated,
+  publishCallAnswered,
+  publishCallPaused,
+  publishCallEnded,
+  publishCallCancelled,
+} from './calls/publisher.js';
+import type { SessionRepository, CallbackRepository } from './repositories/index.js';
+import type { LifecycleCoordinator } from './lifecycle-coordinator.js';
 
-const sessions = new Map<string, VoiceCallSession>();
+const COMPLETED_RETENTION_MS = 60 * 60 * 1000;
+const CANCELLED_RETENTION_MS = 5 * 60 * 1000;
+
 const phoneConnections = new Map<string, WebSocket>();
-const scheduledCallbacks = new Map<string, { callId: string; resumeAt: number }>();
 
 function newId(): string {
   return crypto.randomUUID();
@@ -24,218 +41,223 @@ function now(): string {
   return new Date().toISOString();
 }
 
-export function createCall(input: CreateCallInput): VoiceCallSession {
-  const start = Date.now();
-  logger.info({ userId: input.userId, agentId: input.agentId, reason: input.reason }, '[createCall] entered');
+export class VoiceBridgeService {
+  private lifecycleCoordinator: LifecycleCoordinator | null = null;
 
-  const session: VoiceCallSession = {
-    id: newId(),
-    userId: input.userId,
-    agentId: input.agentId,
-    status: 'pending',
-    priority: input.priority ?? 'normal',
-    reason: input.reason,
-    context: {
-      taskId: input.taskId,
+  constructor(
+    private sessionRepo: SessionRepository,
+    private callbackRepo: CallbackRepository,
+  ) {}
+
+  setLifecycleCoordinator(coordinator: LifecycleCoordinator): void {
+    this.lifecycleCoordinator = coordinator;
+  }
+
+  async createCall(input: CreateCallInput): Promise<VoiceCallSession> {
+    const start = Date.now();
+    logger.info({ userId: input.userId, agentId: input.agentId, reason: input.reason }, '[createCall] entered');
+
+    const session: VoiceCallSession = {
+      id: newId(),
+      userId: input.userId,
+      agentId: input.agentId,
+      status: 'pending',
+      priority: input.priority ?? 'normal',
+      reason: input.reason,
+      context: {
+        taskId: input.taskId,
+        summary: input.summary,
+        options: input.options,
+      },
+      messages: [
+        {
+          id: newId(),
+          role: 'system',
+          type: 'text',
+          content: `Call initiated: ${input.reason} - ${input.summary}`,
+          createdAt: now(),
+        },
+      ],
+      createdAt: now(),
+    };
+
+    logger.info({ callId: session.id, elapsed: Date.now() - start }, '[createCall] session object built');
+
+    await this.sessionRepo.create(session);
+    logger.info({ callId: session.id, elapsed: Date.now() - start }, '[createCall] session stored');
+
+    publishCallCreated(session.userId, session.id);
+
+    logger.info({ callId: session.id, userId: session.userId, elapsed: Date.now() - start }, '[createCall] before notifyPhone');
+    notifyPhone(session.userId, {
+      type: 'call_incoming',
+      callId: session.id,
+      reason: input.reason,
       summary: input.summary,
       options: input.options,
-    },
-    messages: [
-      {
+      priority: input.priority,
+    });
+    logger.info({ callId: session.id, elapsed: Date.now() - start }, '[createCall] after notifyPhone');
+
+    logger.info({ callId: session.id, elapsed: Date.now() - start }, 'Call session created');
+    return session;
+  }
+
+  async getCall(callId: string): Promise<VoiceCallSession | undefined> {
+    return this.sessionRepo.findById(callId);
+  }
+
+  async getUserActiveCall(userId: string): Promise<VoiceCallSession | undefined> {
+    const userSessions = await this.sessionRepo.findByUserId(userId);
+    return userSessions.find((s) => s.status === 'pending' || s.status === 'active');
+  }
+
+  async addMessage(
+    callId: string,
+    role: 'ai' | 'user',
+    content: string,
+    type: 'text' | 'audio' = 'text',
+  ): Promise<VoiceMessage | undefined> {
+    return withSessionLock(callId, async () => {
+      const session = await this.sessionRepo.findById(callId);
+      if (!session) return undefined;
+
+      const msg: VoiceMessage = {
         id: newId(),
-        role: 'system',
-        type: 'text',
-        content: `Call initiated: ${input.reason} - ${input.summary}`,
+        role,
+        type,
+        content,
         createdAt: now(),
-      },
-    ],
-    createdAt: now(),
-  };
+      };
 
-  logger.info({ callId: session.id, elapsed: Date.now() - start }, '[createCall] session object built');
+      session.messages.push(msg);
 
-  sessions.set(session.id, session);
-  logger.info({ callId: session.id, elapsed: Date.now() - start }, '[createCall] session stored');
+      if (role === 'ai') {
+        if (session.status === 'pending') {
+          session.status = 'active';
+          session.connectedAt = now();
+          publishCallAnswered(session.userId, callId);
+        }
+        notifyPhone(session.userId, {
+          type: 'ai_message',
+          callId,
+          message: msg,
+        });
+      }
 
-  logger.info({ callId: session.id, userId: session.userId, elapsed: Date.now() - start }, '[createCall] before notifyPhone');
-  notifyPhone(session.userId, {
-    type: 'call_incoming',
-    callId: session.id,
-    reason: input.reason,
-    summary: input.summary,
-    options: input.options,
-    priority: input.priority,
-  });
-  logger.info({ callId: session.id, elapsed: Date.now() - start }, '[createCall] after notifyPhone');
-
-  logger.info({ callId: session.id, elapsed: Date.now() - start }, 'Call session created');
-  return session;
-}
-
-export function getCall(callId: string): VoiceCallSession | undefined {
-  return sessions.get(callId);
-}
-
-export function getUserActiveCall(userId: string): VoiceCallSession | undefined {
-  for (const session of sessions.values()) {
-    if (session.userId === userId && (session.status === 'pending' || session.status === 'active')) {
-      return session;
-    }
-  }
-  return undefined;
-}
-
-export function addMessage(
-  callId: string,
-  role: 'ai' | 'user',
-  content: string,
-  type: 'text' | 'audio' = 'text',
-  enriched?: EnrichedMessage,
-): VoiceMessage | undefined {
-  const session = sessions.get(callId);
-  if (!session) return undefined;
-
-  const msg: VoiceMessage = {
-    id: newId(),
-    role,
-    type,
-    content,
-    enriched,
-    createdAt: now(),
-  };
-
-  session.messages.push(msg);
-
-  if (role === 'ai') {
-    if (session.status === 'pending') {
-      session.status = 'active';
-      session.connectedAt = now();
-    }
-    notifyPhone(session.userId, {
-      type: 'ai_message',
-      callId,
-      message: msg,
-      enriched: enriched ?? enrichText(content),
+      await this.sessionRepo.save(session);
+      logger.info({ callId, role, type }, 'Message added to session');
+      return msg;
     });
   }
 
-  logger.info({ callId, role, type, enriched: !!enriched }, 'Message added to session');
-  return msg;
-}
-
-export function addAiMessage(callId: string, rawText: string): VoiceMessage | undefined {
-  const enriched = enrichText(rawText);
-  return addMessage(callId, 'ai', enriched.cleanText, 'text', enriched);
-}
-
-export function processTextMessage(
-  callId: string,
-  text: string,
-): { text: string; bargeIn: BargeInResult } {
-  const session = sessions.get(callId);
-  if (!session) throw new Error(`Call session not found: ${callId}`);
-
-  logger.info({ callId, text: text.slice(0, 100) }, '[STT] user text received');
-
-  const bargeIn = detectBargeIn(text);
-  addMessage(callId, 'user', text, 'text');
-
-  if (bargeIn.detected) {
-    logger.info({ callId, action: bargeIn.action }, '[STT] barge-in detected');
-    notifyPhone(session.userId, {
-      type: 'barge_in_detected',
-      callId,
-      action: bargeIn.action,
-      callbackMinutes: bargeIn.callbackMinutes,
-    });
+  async addAiMessage(callId: string, content: string): Promise<VoiceMessage | undefined> {
+    return this.addMessage(callId, 'ai', content, 'text');
   }
 
-  logger.info({ callId, bargeIn: bargeIn.action }, '[STT] text processed');
-  return { text, bargeIn };
-}
+  async processTextMessage(callId: string, text: string): Promise<{ text: string }> {
+    const session = await this.sessionRepo.findById(callId);
+    if (!session) throw new Error(`Call session not found: ${callId}`);
 
-export function scheduleCallback(params: CallbackRequest): boolean {
-  const session = sessions.get(params.callId);
-  if (!session) return false;
+    logger.info({ callId, text: text.slice(0, 100) }, '[STT] user text received');
 
-  const resumeAt = Date.now() + params.delayMinutes * 60 * 1000;
-  session.status = 'paused';
-  scheduledCallbacks.set(session.userId, { callId: params.callId, resumeAt });
+    await this.addMessage(callId, 'user', text, 'text');
 
-  notifyPhone(session.userId, {
-    type: 'callback_scheduled',
-    callId: params.callId,
-    delayMinutes: params.delayMinutes,
-    resumeAt: new Date(resumeAt).toISOString(),
-  });
+    logger.info({ callId }, '[STT] text processed');
+    return { text };
+  }
 
-  const handle = setTimeout(() => {
-    const existing = sessions.get(params.callId);
-    if (existing && existing.status === 'paused') {
-      existing.status = 'pending';
+  async scheduleCallback(params: CallbackRequest): Promise<boolean> {
+    return withSessionLock(params.callId, async () => {
+      const session = await this.sessionRepo.findById(params.callId);
+      if (!session) return false;
+
+      const resumeAt = Date.now() + params.delayMinutes * 60 * 1000;
+      session.status = 'paused';
+      session.pausedAt = now();
+      await this.sessionRepo.save(session);
+      await this.callbackRepo.save(session.userId, { callId: params.callId, resumeAt });
+
+      publishCallPaused(session.userId, params.callId, params.delayMinutes, new Date(resumeAt).toISOString());
+
       notifyPhone(session.userId, {
-        type: 'call_incoming',
+        type: 'callback_scheduled',
         callId: params.callId,
-        reason: existing.reason,
-        summary: existing.context.summary,
-        options: existing.context.options,
-        priority: existing.priority,
-        isCallback: true,
+        delayMinutes: params.delayMinutes,
+        resumeAt: new Date(resumeAt).toISOString(),
       });
-      scheduledCallbacks.delete(session.userId);
-    }
-  }, params.delayMinutes * 60 * 1000);
-  handle.unref();
 
-  logger.info({ callId: params.callId, delayMinutes: params.delayMinutes }, 'Callback scheduled');
-  return true;
-}
+      this.lifecycleCoordinator?.resumeCallback(session.userId, params.callId, params.delayMinutes, resumeAt);
 
-export function completeCall(
-  callId: string,
-  result?: { transcriptSummary?: string; decision?: string; selectedOption?: string; sentiment?: string; actionItems?: string[] },
-): VoiceCallSession | undefined {
-  const session = sessions.get(callId);
-  if (!session) return undefined;
-
-  session.status = 'completed';
-  session.completedAt = now();
-
-  if (result) {
-    session.result = result;
+      logger.info({ callId: params.callId, delayMinutes: params.delayMinutes }, 'Callback scheduled');
+      return true;
+    });
   }
 
-  if (!session.result) {
-    const userMessages = session.messages.filter((m) => m.role === 'user');
-    session.result = {
-      transcriptSummary: userMessages.map((m) => m.content).join('\n'),
-      userResponse: userMessages[userMessages.length - 1]?.content,
-    };
+  async completeCall(
+    callId: string,
+    result?: { transcriptSummary?: string; decision?: string; selectedOption?: string; sentiment?: string; actionItems?: string[] },
+  ): Promise<VoiceCallSession | undefined> {
+    return withSessionLock(callId, async () => {
+      const session = await this.sessionRepo.findById(callId);
+      if (!session) return undefined;
+
+      session.status = 'completed';
+      session.completedAt = now();
+      session.retentionExpiresAt = new Date(Date.now() + COMPLETED_RETENTION_MS).toISOString();
+
+      if (result) {
+        session.result = result;
+      }
+
+      if (!session.result) {
+        const userMessages = session.messages.filter((m) => m.role === 'user');
+        session.result = {
+          transcriptSummary: userMessages.map((m) => m.content).join('\n'),
+          userResponse: userMessages[userMessages.length - 1]?.content,
+        };
+      }
+
+      await this.sessionRepo.save(session);
+      await this.callbackRepo.delete(session.userId);
+      publishCallEnded(session.userId, callId);
+      notifyPhone(session.userId, { type: 'call_ended', callId });
+      logger.info({ callId }, 'Call session completed');
+      return session;
+    });
   }
 
-  scheduledCallbacks.delete(session.userId);
-  notifyPhone(session.userId, { type: 'call_ended', callId });
-  logger.info({ callId }, 'Call session completed');
-  return session;
-}
+  async cancelCall(callId: string): Promise<VoiceCallSession | undefined> {
+    return withSessionLock(callId, async () => {
+      const session = await this.sessionRepo.findById(callId);
+      if (!session) return undefined;
 
-export function cancelCall(callId: string): VoiceCallSession | undefined {
-  const session = sessions.get(callId);
-  if (!session) return undefined;
+      session.status = 'cancelled';
+      session.completedAt = now();
+      session.retentionExpiresAt = new Date(Date.now() + CANCELLED_RETENTION_MS).toISOString();
 
-  session.status = 'cancelled';
-  session.completedAt = now();
+      await this.sessionRepo.save(session);
+      await this.callbackRepo.delete(session.userId);
+      publishCallCancelled(session.userId, callId);
+      notifyPhone(session.userId, { type: 'call_cancelled', callId });
+      logger.info({ callId }, 'Call session cancelled');
+      return session;
+    });
+  }
 
-  scheduledCallbacks.delete(session.userId);
-  notifyPhone(session.userId, { type: 'call_cancelled', callId });
-  logger.info({ callId }, 'Call session cancelled');
-  return session;
-}
+  async getTranscript(callId: string): Promise<VoiceMessage[] | undefined> {
+    const session = await this.sessionRepo.findById(callId);
+    if (!session) return undefined;
+    return session.messages;
+  }
 
-export function getTranscript(callId: string): VoiceMessage[] | undefined {
-  const session = sessions.get(callId);
-  if (!session) return undefined;
-  return session.messages;
+  async getSessions(): Promise<VoiceCallSession[]> {
+    return this.sessionRepo.list();
+  }
+
+  async deleteSession(callId: string): Promise<VoiceCallSession | undefined> {
+    return this.sessionRepo.delete(callId);
+  }
 }
 
 export function registerPhone(userId: string, ws: WebSocket): void {
@@ -247,10 +269,17 @@ export function registerPhone(userId: string, ws: WebSocket): void {
   phoneConnections.set(userId, ws);
   logger.info({ userId, activeConnections: phoneConnections.size }, '[WS] phone registered');
 
+  if (existing && existing.readyState === WebSocket.OPEN) {
+    publishPresenceUpdated(userId);
+  } else {
+    publishPresenceConnected(userId);
+  }
+
   ws.on('close', () => {
     if (phoneConnections.get(userId) === ws) {
       phoneConnections.delete(userId);
       logger.info({ userId, activeConnections: phoneConnections.size }, '[WS] phone disconnected');
+      publishPresenceDisconnected(userId);
     }
   });
 
@@ -264,21 +293,29 @@ export function notifyPhone(userId: string, payload: Record<string, unknown>): b
   const msgType = (payload.type as string) ?? 'unknown';
   logger.info({ userId, msgType, phoneConnectionsSize: phoneConnections.size, hasConnection: phoneConnections.has(userId) }, '[notifyPhone] entered');
 
+  publishNotificationRequested(userId, msgType, payload);
+
   const ws = phoneConnections.get(userId);
   if (ws && ws.readyState === WebSocket.OPEN) {
     try {
       ws.send(JSON.stringify(payload));
       logger.info({ userId, msgType, elapsed: Date.now() - start }, '[WS] -> sent to phone');
+      publishNotificationDelivered(userId, msgType);
       return true;
     } catch (sendErr) {
+      const errMsg = sendErr instanceof Error ? sendErr.message : String(sendErr);
       logger.error({ err: sendErr, userId, msgType, elapsed: Date.now() - start }, '[WS] -> send failed');
+      publishNotificationFailed(userId, msgType, errMsg);
       return false;
     }
   }
   logger.warn({ userId, msgType, readyState: ws?.readyState, elapsed: Date.now() - start }, '[WS] phone not connected, message not delivered');
+  publishNotificationFailed(userId, msgType, 'phone not connected');
   return false;
 }
 
-export function getSessions(): VoiceCallSession[] {
-  return Array.from(sessions.values());
+export function isExpired(session: VoiceCallSession, now?: number): boolean {
+  if (!session.retentionExpiresAt) return false;
+  const nowMs = now ?? Date.now();
+  return new Date(session.retentionExpiresAt).getTime() <= nowMs;
 }

@@ -1,5 +1,6 @@
 package com.agentcall.app.data.api
 
+import com.agentcall.app.BuildConfig
 import com.jakewharton.retrofit2.converter.kotlinx.serialization.asConverterFactory
 import kotlinx.serialization.json.Json
 import okhttp3.MediaType.Companion.toMediaType
@@ -15,10 +16,9 @@ import java.util.concurrent.TimeUnit
  */
 object ApiClient {
     /** Configurable server host (IP or hostname, no port). Default: production URL */
-    var serverHost: String = DEFAULT_HOST
+    var serverHost: String = BuildConfig.DEFAULT_HOST
         private set
 
-    private const val DEFAULT_HOST = "dydcghsn0my6-production-qgbb8wql.australia-southeast1.suga.run"
     private const val API_PORT = 4000
 
     /** True when host is a domain name (not an IP address) → use HTTPS/WSS */
@@ -54,7 +54,7 @@ object ApiClient {
     }
 
     private val loggingInterceptor = HttpLoggingInterceptor().apply {
-        level = HttpLoggingInterceptor.Level.HEADERS
+        level = if (BuildConfig.DEBUG) HttpLoggingInterceptor.Level.HEADERS else HttpLoggingInterceptor.Level.NONE
     }
 
     private val httpClient: OkHttpClient = OkHttpClient.Builder()
@@ -67,7 +67,8 @@ object ApiClient {
     @Volatile
     private var _retrofit: Retrofit? = null
 
-    private val retrofit: Retrofit
+    @PublishedApi
+    internal val retrofit: Retrofit
         get() {
             val existing = _retrofit
             if (existing != null) return existing

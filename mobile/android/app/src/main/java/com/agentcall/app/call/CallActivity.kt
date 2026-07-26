@@ -4,18 +4,13 @@ import android.Manifest
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.os.Build
 import android.os.Bundle
-import android.transition.Fade
-import android.transition.Slide
-import android.view.Gravity
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
@@ -37,8 +32,6 @@ import androidx.compose.ui.graphics.*
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.app.ActivityCompat
@@ -48,21 +41,10 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.agentcall.app.ui.composables.AmbientBackground
 import com.agentcall.app.ui.theme.*
 import kotlinx.coroutines.delay
-import kotlin.math.abs
-import kotlin.math.sin
 
 class CallActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            overrideActivityTransition(
-                ComponentActivity.OVERRIDE_TRANSITION_OPEN,
-                Fade().apply { duration = 350 },
-                Slide(Gravity.END).apply { duration = 350 }
-            )
-        }
-
         val callId = intent.getStringExtra("call_id") ?: run { finish(); return }
 
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
@@ -83,30 +65,6 @@ class CallActivity : ComponentActivity() {
         }
     }
 }
-
-private val emotionColors = mapOf(
-    "calm" to Green400,
-    "urgent" to Red400,
-    "excited" to Amber400,
-    "thoughtful" to Indigo400,
-    "neutral" to Slate400,
-)
-
-private val emotionEmojis = mapOf(
-    "calm" to "\uD83D\uDE0A",
-    "urgent" to "\u26A0\uFE0F",
-    "excited" to "\uD83D\uDE04",
-    "thoughtful" to "\uD83E\uDD14",
-    "neutral" to "\uD83D\uDE10",
-)
-
-private val emotionGradients = mapOf(
-    "calm" to listOf(Color(0xFF22C55E), Color(0xFF16A34A)),
-    "urgent" to listOf(Color(0xFFEF4444), Color(0xFFDC2626)),
-    "excited" to listOf(Color(0xFFF59E0B), Color(0xFFD97706)),
-    "thoughtful" to listOf(Color(0xFF818CF8), Color(0xFF6366F1)),
-    "neutral" to listOf(Indigo500, Indigo600),
-)
 
 @Composable
 fun ActiveCallScreen(
@@ -142,19 +100,13 @@ fun ActiveCallScreen(
     val timerText = "%02d:%02d".format(minutes, seconds)
 
     val infiniteTransition = rememberInfiniteTransition(label = "pulse")
-    val breathingScale by infiniteTransition.animateFloat(1f, 1.04f,
-        infiniteRepeatable(tween(3000, easing = EaseInOutSine), RepeatMode.Reverse), label = "breathing")
-
-    // Emotion glow color
-    val emotionGlowColor = emotionColors[state.currentEmotion] ?: Indigo400
-    val emotionGradient = emotionGradients[state.currentEmotion] ?: listOf(Indigo500, Indigo600)
 
     Box(modifier = Modifier.fillMaxSize().background(Slate900)) {
-        // Ambient background with emotion-tinted accent
+        // Ambient background
         AmbientBackground(
-            accentColor = emotionGlowColor,
-            secondaryColor = emotionGradient.getOrElse(1) { GradientBrandEnd },
-            speedMultiplier = if (state.currentEmotion == "urgent") 1.8f else 1f,
+            accentColor = Indigo400,
+            secondaryColor = Indigo600,
+            speedMultiplier = 1f,
             density = if (state.isAiSpeaking || state.isRecording) 1.2f else 0.6f,
         )
 
@@ -172,45 +124,6 @@ fun ActiveCallScreen(
                 Text(state.statusText, style = MaterialTheme.typography.labelSmall,
                     color = if (state.isConnected) Green500 else Amber400,
                     modifier = Modifier.weight(1f))
-
-                // Emotion badge
-                AnimatedVisibility(
-                    visible = state.isAiSpeaking && state.currentEmotion != "neutral",
-                    enter = slideInHorizontally() + fadeIn(),
-                    exit = slideOutHorizontally() + fadeOut(),
-                ) {
-                    Surface(
-                        shape = RoundedCornerShape(8.dp),
-                        color = emotionGlowColor.copy(alpha = 0.15f),
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Text(
-                                emotionEmojis[state.currentEmotion] ?: "",
-                                fontSize = 12.sp,
-                            )
-                            Spacer(modifier = Modifier.width(3.dp))
-                            Text(
-                                state.currentEmotion.replaceFirstChar { it.uppercase() },
-                                style = MaterialTheme.typography.labelSmall,
-                                color = emotionGlowColor,
-                                fontWeight = FontWeight.Bold,
-                            )
-                        }
-                    }
-                }
-                Spacer(modifier = Modifier.width(8.dp))
-
-                if (state.isBargeIn) {
-                    Surface(shape = RoundedCornerShape(8.dp), color = Amber400.copy(alpha = 0.2f)) {
-                        Text(" Interrupted ", style = MaterialTheme.typography.labelSmall,
-                            color = Amber400, fontWeight = FontWeight.Bold,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp))
-                    }
-                    Spacer(modifier = Modifier.width(8.dp))
-                }
 
                 Text(timerText, fontSize = 18.sp, fontFamily = FontFamily.Monospace,
                     fontWeight = FontWeight.Light, color = Slate50, letterSpacing = 1.sp)
@@ -251,12 +164,6 @@ fun ActiveCallScreen(
                     MessageBubble(msg = msg, isAi = msg.role == "ai")
                 }
 
-                if (state.isAITyping) {
-                    item(key = "typing") {
-                        AITypingIndicator()
-                    }
-                }
-
                 if (state.isPaused) {
                     item(key = "paused") {
                         Surface(
@@ -279,7 +186,6 @@ fun ActiveCallScreen(
             WaveformBar(
                 levels = state.waveformLevels,
                 isActive = state.isRecording || state.isAiSpeaking,
-                emotion = state.currentEmotion,
                 isRecording = state.isRecording,
             )
 
@@ -335,11 +241,7 @@ fun ActiveCallScreen(
                     modifier = Modifier.size(64.dp).scale(pressScale), shape = CircleShape,
                     colors = ButtonDefaults.buttonColors(containerColor = Red500),
                     contentPadding = PaddingValues(0.dp),
-                    interactionSource = remember { MutableInteractionSource() }.also { src ->
-                        LaunchedEffect(src) {
-                            src.collectIsPressedAsState().let { isPressed = it.value }
-                        }
-                    },
+                    interactionSource = remember { MutableInteractionSource() },
                 ) {
                     Icon(Icons.Default.PhoneForwarded, "End", modifier = Modifier.size(26.dp), tint = Slate50)
                 }
@@ -366,34 +268,23 @@ private fun MessageBubble(msg: ChatBubble, isAi: Boolean) {
             animationSpec = spring(dampingRatio = 0.65f, stiffness = 250f)
         ) + fadeIn(animationSpec = tween(250)),
     ) {
-        val emotionColor = emotionColors[msg.emotion] ?: Slate400
-        val emoji = emotionEmojis[msg.emotion] ?: ""
-
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = if (isAi) Arrangement.Start else Arrangement.End,
         ) {
             if (isAi) {
-                // AI avatar with emotion glow
+                // AI avatar
                 val avatarGradient = Brush.linearGradient(listOf(GradientBrandStart, GradientBrandEnd))
                 Surface(
                     modifier = Modifier.size(32.dp),
                     shape = CircleShape,
                     color = Color.Transparent,
                 ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Canvas(modifier = Modifier.fillMaxSize()) {
-                            drawCircle(
-                                color = emotionColor.copy(alpha = 0.2f),
-                                radius = size.minDimension / 2,
-                            )
-                        }
-                        Box(
-                            modifier = Modifier.size(28.dp).clip(CircleShape).background(avatarGradient),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Icon(Icons.Default.SmartToy, null, modifier = Modifier.size(16.dp), tint = Slate50)
-                        }
+                    Box(
+                        modifier = Modifier.size(28.dp).clip(CircleShape).background(avatarGradient),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(Icons.Default.SmartToy, null, modifier = Modifier.size(16.dp), tint = Slate50)
                     }
                 }
                 Spacer(modifier = Modifier.width(8.dp))
@@ -410,16 +301,8 @@ private fun MessageBubble(msg: ChatBubble, isAi: Boolean) {
             ) {
                 Column(modifier = Modifier.padding(12.dp).widthIn(max = 280.dp)) {
                     if (isAi) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text("AI", style = MaterialTheme.typography.labelSmall,
-                                color = emotionColor, fontWeight = FontWeight.Bold)
-                            if (emoji.isNotBlank()) {
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text(emoji, fontSize = 12.sp)
-                            }
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Box(modifier = Modifier.size(5.dp).clip(CircleShape).background(emotionColor))
-                        }
+                        Text("AI", style = MaterialTheme.typography.labelSmall,
+                            color = Indigo400, fontWeight = FontWeight.Bold)
                         Spacer(modifier = Modifier.height(4.dp))
                     }
                     Text(msg.text, style = MaterialTheme.typography.bodyMedium, color = if (isAi) Slate100 else Slate50)
@@ -441,57 +324,13 @@ private fun MessageBubble(msg: ChatBubble, isAi: Boolean) {
 }
 
 @Composable
-private fun AITypingIndicator() {
-    val infiniteTransition = rememberInfiniteTransition(label = "typingDots")
-    val dot1 by infiniteTransition.animateFloat(0f, 1f,
-        infiniteRepeatable(tween(600, easing = EaseInOutSine), RepeatMode.Reverse), label = "dot1")
-    val dot2 by infiniteTransition.animateFloat(0f, 1f,
-        infiniteRepeatable(tween(600, easing = EaseInOutSine, delayMillis = 200), RepeatMode.Reverse), label = "dot2")
-    val dot3 by infiniteTransition.animateFloat(0f, 1f,
-        infiniteRepeatable(tween(600, easing = EaseInOutSine, delayMillis = 400), RepeatMode.Reverse), label = "dot3")
-
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.Start,
-    ) {
-        Box(modifier = Modifier.size(32.dp).clip(CircleShape)
-            .background(Brush.linearGradient(listOf(GradientBrandStart, GradientBrandEnd))),
-            contentAlignment = Alignment.Center) {
-            Icon(Icons.Default.SmartToy, null, modifier = Modifier.size(18.dp), tint = Slate50)
-        }
-        Spacer(modifier = Modifier.width(8.dp))
-        Surface(
-            shape = RoundedCornerShape(topStart = 4.dp, topEnd = 16.dp, bottomStart = 16.dp, bottomEnd = 16.dp),
-            color = Slate800,
-        ) {
-            Row(
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
-                horizontalArrangement = Arrangement.spacedBy(5.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Box(modifier = Modifier.size(7.dp).clip(CircleShape)
-                    .background(Indigo400.copy(alpha = 0.3f + dot1 * 0.7f)))
-                Box(modifier = Modifier.size(7.dp).clip(CircleShape)
-                    .background(Indigo400.copy(alpha = 0.3f + dot2 * 0.7f)))
-                Box(modifier = Modifier.size(7.dp).clip(CircleShape)
-                    .background(Indigo400.copy(alpha = 0.3f + dot3 * 0.7f)))
-            }
-        }
-    }
-}
-
-@Composable
-private fun WaveformBar(levels: List<Float>, isActive: Boolean, emotion: String, isRecording: Boolean) {
+private fun WaveformBar(levels: List<Float>, isActive: Boolean, isRecording: Boolean) {
     val infiniteTransition = rememberInfiniteTransition(label = "waveformGlow")
     val glowAlpha by infiniteTransition.animateFloat(0.4f, 0.8f,
         infiniteRepeatable(tween(1000, easing = EaseInOutSine), RepeatMode.Reverse), label = "glow")
 
     val waveformColor = when {
         isRecording -> WaveformActive
-        emotion == "urgent" -> Red400
-        emotion == "excited" -> Amber400
-        emotion == "calm" -> Green400
-        emotion == "thoughtful" -> Indigo400
         else -> WaveformActive
     }
 
