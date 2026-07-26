@@ -12,7 +12,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
-    "zod": "^3.23.0",
+    "zod": "^4.4.3",
     "dotenv": "^16.4.0",
     "pino": "^9.1.0",
     "pino-pretty": "^11.1.0"
