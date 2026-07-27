@@ -1,13 +1,11 @@
 services:
   - type: web
     name: agentcall-backend
-    env: node
+    env: docker
+    dockerfilePath: ./backend/Dockerfile
     plan: free
     region: singapore
-    buildCommand: npm install && npm run build
-    startCommand: npm start
     healthCheckPath: /api/v1/health
-    preDeployCommand: node scripts/migrate.mjs
     envVars:
       - key: NODE_ENV
         value: production

@@ -16,6 +16,7 @@ WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY tsconfig.json ./
 COPY src/ ./src/
+COPY scripts/ ./scripts/
 RUN npm run build
 
 # Stage 3: Production image
@@ -31,6 +32,7 @@ COPY --from=deps /prod_modules ./node_modules
 
 # Copy compiled output
 COPY --from=builder /app/dist ./dist
+COPY --from=builder /app/scripts ./scripts
 COPY package.json ./
 
 # Read-only filesystem
