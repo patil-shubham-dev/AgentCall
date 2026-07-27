@@ -3,6 +3,7 @@ package com.agentcall.app.call
 import android.app.*
 import android.content.Context
 import android.content.Intent
+import android.os.Bundle
 import android.os.IBinder
 import android.os.PowerManager
 import android.speech.RecognitionListener
@@ -129,6 +130,10 @@ class CallService : Service() {
         tts.speak(text, TextToSpeech.QUEUE_ADD, null, utteranceId)
     }
 
+    private suspend fun speakTextOnMain(text: String) = withContext(Dispatchers.Main) {
+        speakText(text)
+    }
+
     private fun startVoiceSession(callId: String) {
         scope.launch {
             try {
@@ -138,7 +143,7 @@ class CallService : Service() {
                     "Continuing our conversation."
                 } ?: "AI needs your input."
                 Log.d(TAG, "[WS] starting voice session callId=$callId")
-                speakText(summary)
+                speakTextOnMain(summary)
 
                 launch {
                     signalingClient.events.collect { event ->
@@ -146,7 +151,7 @@ class CallService : Service() {
                         when (event) {
                             is VoiceBridgeEvent.AiMessage -> {
                                 Log.d(TAG, "[WS] ai_message callId=${event.callId} text=${event.content.take(100)}")
-                                speakText(event.content)
+                                speakTextOnMain(event.content)
                                 dispatchToListeners("ai_message", Bundle().apply {
                                     putString("text", event.content)
                                 })
@@ -156,13 +161,13 @@ class CallService : Service() {
                             is VoiceBridgeEvent.CallEnded -> {
                                 Log.d(TAG, "[WS] call_ended callId=${event.callId}")
                                 CallEventBus.emit(CallEvent.CallEnded)
-                                speakText("Call ended.")
+                                speakTextOnMain("Call ended.")
                                 delay(1500); stopSelf()
                             }
                             is VoiceBridgeEvent.CallCancelled -> {
                                 Log.d(TAG, "[WS] call_cancelled callId=${event.callId}")
                                 CallEventBus.emit(CallEvent.CallEnded)
-                                speakText("Call was cancelled.")
+                                speakTextOnMain("Call was cancelled.")
                                 delay(1500); stopSelf()
                             }
                             is VoiceBridgeEvent.Disconnected -> {
@@ -200,8 +205,8 @@ class CallService : Service() {
             }
 
             recognizer.setRecognitionListener(object : RecognitionListener {
-                override fun onResults(results: Bundle?) {
-                    val texts = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                override fun onResults(results: Bundle) {
+                    val texts = results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                     val text = texts?.firstOrNull()
                     isRecording = false
                     recognizer.destroy()
@@ -225,13 +230,13 @@ class CallService : Service() {
                     updateNotification("Paused")
                 }
 
-                override fun onReadyForSpeech(params: Bundle?) {}
+                override fun onReadyForSpeech(params: Bundle) {}
                 override fun onBeginningOfSpeech() {}
                 override fun onRmsChanged(rmsdB: Float) {}
                 override fun onBufferReceived(buffer: ByteArray?) {}
                 override fun onEndOfSpeech() {}
-                override fun onPartialResults(partialResults: Bundle?) {}
-                override fun onEvent(eventType: Int, params: Bundle?) {}
+                override fun onPartialResults(partialResults: Bundle) {}
+                override fun onEvent(eventType: Int, params: Bundle) {}
             })
 
             recognizer.startListening(intent)

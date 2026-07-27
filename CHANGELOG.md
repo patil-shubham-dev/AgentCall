@@ -9,12 +9,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## [Unreleased]
 
 ### Planned
-- Cross-pod session lock (Redis-backed distributed lock)
 - WebSocket drain mechanism for zero-downtime rolling updates
 - Migration tooling for schema management
 - Multi-user auth (RBAC, JWT)
-- iOS SwiftUI app re-activation
-- Migration from InMemory repos to database-only persistence
+
+### Removed
+- `daemon/` (v2 alpha) — deprecated and removed. Never reached executable state. All stores were in-memory-only.
+- `mobile/ios-archived/` — removed from working tree (git history preserved). Used placeholder URLs, WebRTC architecture diverged from Android.
+- Cross-pod session lock (Redis-backed distributed lock) — Redis was never wired into the codebase. Removed from plans.
+- iOS SwiftUI app re-activation — iOS codebase archived and removed. No plans for re-activation.
 
 ---
 
@@ -23,7 +26,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Added
 - Single-port architecture: HTTP server serves REST API, WebSocket signaling, and health probes on one port
 - Production logging with structured prefixes: `[HTTP]`, `[WS]`, `[REGISTER]`, `[STT]`, `[TTS]`, `[VOICE]`
-- Event bus hardening: retry with exponential backoff, backpressure queue, circuit breaker, dead-letter queue (DLQ)
+- Event bus hardening: retry with exponential backoff (note: circuit breaker and DLQ were claimed in this entry but not implemented — the event bus has retry via `common/retry.ts` but no circuit breaker or dead-letter queue. Corrected in ADR-0017 consolidation.)
 - Database persistence mode with PostgreSQL 16: repositories for calls, sessions, events, presence; connection pool health monitoring
 - Session lifecycle coordination: recovery manager, periodic sweeper, consistent state transitions
 - On-device Android SpeechRecognizer (server-side STT removed)
@@ -32,7 +35,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Connection quality monitoring for WebSocket
 - Docker multi-stage build with non-root user, HEALTHCHECK, read-only filesystem
 - Kubernetes manifests (9 files): namespace, configmap, secrets template, deployment, HPA, service, ingress, PDB, network policy
-- Load testing suite (42,000 ops/sec sustained)
+- Load testing suite (`src/__tests__/load-test.ts`)
 - 48 unit and integration tests across 5 test files
 - Production validation: 10 reports across architecture, reliability, security, performance, deployment, operations, maintainability, scalability, risk, test coverage
 - Documentation: Full documentation migration and synchronisation (18 docs reviewed, 15 modified)

@@ -19,7 +19,7 @@ android {
         versionName = "1.0.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
-        buildConfigField("String", "DEFAULT_HOST", "\"dydcghsn0my6-production-qgbb8wql.australia-southeast1.suga.run\"")
+        buildConfigField("String", "DEFAULT_HOST", "\"10.0.2.2\"")
     }
 
     buildTypes {

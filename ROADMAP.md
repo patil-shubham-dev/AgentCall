@@ -1,6 +1,6 @@
 # AgentCall — Roadmap
 
-> **Canonical references:** [PRODUCT_VISION.md](./PRODUCT_VISION.md) | [SYSTEM_ARCHITECTURE.md](./SYSTEM_ARCHITECTURE.md) | [API_SPEC.md](./API_SPEC.md)
+> **Canonical references:** [PRODUCT_VISION.md](./PRODUCT_VISION.md) | [ARCHITECTURE.md](./ARCHITECTURE.md) | [API_SPEC.md](./API_SPEC.md)
 > **Detailed engineering roadmap:** [IMPLEMENTATION_ROADMAP.md](./docs/IMPLEMENTATION_ROADMAP.md)
 
 ---
@@ -29,10 +29,10 @@
 ## What's Next 📝
 
 ### Phase 1: Core Runtime (Current Priority)
-Build the foundational services: Authentication (JWT), Provider Registry, Presence Engine, Notification Engine, Callback Engine. Complete all 8 MCP tools.
+Build the foundational services: Authentication (JWT), Provider Registry, Presence Engine, Notification Engine, Callback Engine. Complete all 5 MCP tools.
 
 ### Phase 2: Infrastructure
-PostgreSQL, Redis, Device Router, History Service, production deployment.
+PostgreSQL persistence (implemented), Device Router, History Service, production deployment.
 
 ### Phase 3: Communication Gateway
 Unified transport layer, SSE stream, push notifications.

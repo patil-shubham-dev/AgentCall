@@ -38,12 +38,12 @@ object ApiClient {
 
     /** Update the server host and rebuild the Retrofit instance. */
     fun setServerHost(host: String) {
-        serverHost = host.trim().ifBlank { DEFAULT_HOST }
+        serverHost = host.trim().ifBlank { BuildConfig.DEFAULT_HOST }
         _retrofit = null
     }
 
     fun resetToDefault() {
-        serverHost = DEFAULT_HOST
+        serverHost = BuildConfig.DEFAULT_HOST
         _retrofit = null
     }
 

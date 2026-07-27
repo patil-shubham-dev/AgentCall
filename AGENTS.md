@@ -2,7 +2,7 @@
 
 ## Stack
 - **Backend:** Node.js / TypeScript, Express/Fastify
-- **Database:** PostgreSQL 16, Redis 7
+- **Database:** PostgreSQL 16 (or in-memory for dev)
 - **WebRTC Signaling:** WebSocket (Node.js)
 - **STUN/TURN:** coturn (self-hosted)
 - **MCP Server:** Node.js / TypeScript (MCP SDK)
