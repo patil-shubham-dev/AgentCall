@@ -7,6 +7,7 @@ import com.agentcall.app.call.VoiceBridgeEvent
 import com.agentcall.app.data.api.ApiClient
 import com.agentcall.app.data.api.ApiService
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -15,6 +16,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import javax.inject.Inject
 
 data class HomeUiState(
@@ -183,31 +185,28 @@ class HomeViewModel @Inject constructor(
                 delay(5000)
                 val current = _uiState.value
                 if (!current.isConnected) continue
-                try {
-                    api.getActiveCall("solo-user")
-                    goodPings++
-                    missedPings = 0
-                    val quality = when {
-                        goodPings > 3 -> ConnectionQuality.EXCELLENT
-                        goodPings > 1 -> ConnectionQuality.GOOD
-                        else -> ConnectionQuality.FAIR
+                val result = withContext(Dispatchers.IO) {
+                    try {
+                        api.getActiveCall("solo-user")
+                        Pair(goodPings + 1, 0)
+                    } catch (_: Exception) {
+                        Pair(0, missedPings + 1)
                     }
-                    if (current.connectionQuality != quality) {
-                        _uiState.value = current.copy(connectionQuality = quality)
-                    }
-                } catch (_: Exception) {
-                    missedPings++
-                    goodPings = 0
-                    val quality = when {
-                        missedPings > 2 -> ConnectionQuality.POOR
-                        else -> ConnectionQuality.FAIR
-                    }
-                    if (current.connectionQuality != quality) {
-                        _uiState.value = current.copy(
-                            connectionQuality = quality,
-                            statusText = if (missedPings > 3) "Connection lost" else current.statusText,
-                        )
-                    }
+                }
+                goodPings = result.first
+                missedPings = result.second
+                val quality = when {
+                    goodPings > 3 -> ConnectionQuality.EXCELLENT
+                    goodPings > 1 -> ConnectionQuality.GOOD
+                    goodPings > 0 -> ConnectionQuality.FAIR
+                    missedPings > 2 -> ConnectionQuality.POOR
+                    else -> ConnectionQuality.FAIR
+                }
+                if (current.connectionQuality != quality || (missedPings > 3 && current.statusText != "Connection lost")) {
+                    _uiState.value = _uiState.value.copy(
+                        connectionQuality = quality,
+                        statusText = if (missedPings > 3) "Connection lost" else current.statusText,
+                    )
                 }
             }
         }
@@ -216,7 +215,9 @@ class HomeViewModel @Inject constructor(
     private fun checkActiveCall() {
         viewModelScope.launch {
             try {
-                val response = api.getActiveCall("solo-user")
+                val response = withContext(Dispatchers.IO) {
+                    api.getActiveCall("solo-user")
+                }
                 if (response.activeCall != null) {
                     _uiState.value = _uiState.value.copy(
                         activeCallId = response.activeCall.callId,

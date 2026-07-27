@@ -31,12 +31,12 @@
 ## ✨ Features
 
 - **AI-Agnostic** — Works with Claude, ChatGPT, Gemini, Cursor, local LLMs, and any MCP-compatible agent
-- **MCP Native** — 8 built-in MCP tools: `create_call`, `send_message`, `get_transcript`, `complete_call`, `cancel_call`, `query_presence`, `resume_task`, `notify_completion`
+- **MCP Native** — 5 built-in MCP tools: `create_call`, `send_message`, `get_transcript`, `complete_call`, `cancel_call`
 - **Real-Time Voice** — WebSocket-based voice bridge between AI and humans
 - **Android App** — Native Kotlin/Jetpack Compose app with incoming call notifications
 - **Single-Port Architecture** — HTTP, WebSocket, and health probes on one port
 - **Flexible Persistence** — Memory-only, PostgreSQL, or dual-write modes
-- **Event-Driven Core** — In-process EventBus with retry, circuit breaker, dead-letter queue
+- **Event-Driven Core** — In-process EventBus with subscriber hooks, scoped subscriptions, priority ordering
 - **Privacy First** — No recording, no transcript retention by default
 - **Free First** — No paid APIs, no cloud dependencies, fully self-hosted
 
@@ -55,39 +55,37 @@ flowchart TB
         Local["Local LLMs"]
     end
 
-    subgraph Protocol["Integration Layer"]
-        MCP["MCP Protocol"]
-        REST["REST API"]
+    subgraph MCP["MCP Server (mcp-server/)"]
+        Stdio["stdio transport"]
+        SSE["SSE / StreamableHTTP"]
+        Tools["5 MCP tools"]
     end
 
-    subgraph AgentCall["AgentCall Runtime"]
-        Auth["Authentication"]
-        Registry["Provider Registry"]
-        Sessions["Session Manager"]
-        Calls["Call Manager"]
-        Presence["Presence Engine"]
-        Notifications["Notification Engine"]
-        Callbacks["Callback Engine"]
-        Router["Device Router"]
-        History["History Service"]
-        Gateway["Communication Gateway"]
-        EventBus["Event Bus"]
+    subgraph Backend["Backend API (backend/)"]
+        REST["REST API (routes.ts)"]
+        WS["WebSocket Signaling (server.ts)"]
+        VB["VoiceBridge Service (service.ts)"]
+        EB["Event Bus"]
     end
 
-    subgraph Devices["Communication Channels"]
+    subgraph Storage["Persistence"]
+        Mem["In-Memory"]
+        PG["PostgreSQL"]
+        DW["Dual-Write"]
+    end
+
+    subgraph Devices["Device"]
         Android["Android App"]
-        FutureiOS["Future iOS"]
-        Desktop["Desktop"]
-        Web["Web"]
     end
 
-    AI --> Protocol
-    Protocol --> AgentCall
-    AgentCall --> Devices
-    Devices --> Human["👤 Human User"]
+    AI -->|MCP| MCP
+    MCP -->|HTTP| Backend
+    Backend -->|WebSocket| Android
+    Backend --> Storage
+    Android -->|"WebSocket (phone)"| WS
 ```
 
-> Full architecture: [SYSTEM_ARCHITECTURE.md](./SYSTEM_ARCHITECTURE.md) · [ARCHITECTURE_BASELINE.md](./ARCHITECTURE_BASELINE.md)
+> Full architecture: [ARCHITECTURE.md](./ARCHITECTURE.md) · [ARCHITECTURE_BASELINE.md](./ARCHITECTURE_BASELINE.md)
 
 ---
 

@@ -34,11 +34,13 @@ import com.agentcall.app.data.api.ApiClient
 import com.agentcall.app.ui.composables.AmbientBackground
 import com.agentcall.app.ui.theme.*
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import javax.inject.Inject
 
 enum class ConnectionTestStatus {
@@ -73,27 +75,28 @@ class SettingsViewModel @Inject constructor() : ViewModel() {
     fun testConnection() {
         _testStatus.value = ConnectionTestStatus.TESTING
         viewModelScope.launch {
-            val start = System.currentTimeMillis()
-            try {
-                val host = _serverHost.value.trim()
-                val isDomain = !Regex("^[\\d.]+$").matches(host)
-                val scheme = if (isDomain) "https" else "http"
-                val port = if (isDomain) "" else ":4000"
-                val url = java.net.URL("$scheme://$host$port/api/v1/health")
-                val conn = url.openConnection() as java.net.HttpURLConnection
-                conn.connectTimeout = 3000
-                conn.readTimeout = 3000
-                conn.requestMethod = "GET"
-                val responseCode = conn.responseCode
-                val elapsed = System.currentTimeMillis() - start
-                conn.disconnect()
-
-                _testLatency.value = elapsed
-                _testStatus.value = if (responseCode == 200) ConnectionTestStatus.SUCCESS else ConnectionTestStatus.FAILED
-            } catch (_: Exception) {
-                _testLatency.value = System.currentTimeMillis() - start
-                _testStatus.value = ConnectionTestStatus.FAILED
+            val result = withContext(Dispatchers.IO) {
+                val start = System.currentTimeMillis()
+                try {
+                    val host = _serverHost.value.trim()
+                    val isDomain = !Regex("^[\\d.]+$").matches(host)
+                    val scheme = if (isDomain) "https" else "http"
+                    val port = if (isDomain) "" else ":4000"
+                    val url = java.net.URL("$scheme://$host$port/api/v1/health")
+                    val conn = url.openConnection() as java.net.HttpURLConnection
+                    conn.connectTimeout = 3000
+                    conn.readTimeout = 3000
+                    conn.requestMethod = "GET"
+                    val responseCode = conn.responseCode
+                    val elapsed = System.currentTimeMillis() - start
+                    conn.disconnect()
+                    Pair(elapsed, if (responseCode == 200) ConnectionTestStatus.SUCCESS else ConnectionTestStatus.FAILED)
+                } catch (_: Exception) {
+                    Pair(System.currentTimeMillis() - start, ConnectionTestStatus.FAILED)
+                }
             }
+            _testLatency.value = result.first
+            _testStatus.value = result.second
         }
     }
 

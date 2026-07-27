@@ -32,6 +32,9 @@ class SignalingClient @Inject constructor() {
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var currentUserId: String = "solo-user"
 
+    private var reconnectAttempt = 0
+    private var maxReconnectAttempts = 20
+
     private val _events = MutableSharedFlow<VoiceBridgeEvent>(extraBufferCapacity = 64)
     val events: SharedFlow<VoiceBridgeEvent> = _events
 
@@ -45,6 +48,7 @@ class SignalingClient @Inject constructor() {
     fun connect(userId: String = "solo-user") {
         Log.d(TAG, "[WS] connect userId=$userId")
         currentUserId = userId
+        reconnectAttempt = 0
         connectionJob?.cancel()
         connectionJob = scope.launch {
             _connectionState.value = ConnectionState.CONNECTING
@@ -57,9 +61,10 @@ class SignalingClient @Inject constructor() {
         Log.d(TAG, "[WS] connecting to $url")
         val request = Request.Builder().url(url).build()
 
-        webSocket = client.newWebSocket(request, object : WebSocketListener() {
+        val listener = object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 Log.d(TAG, "[WS] opened userId=$currentUserId")
+                reconnectAttempt = 0
                 _connectionState.value = ConnectionState.CONNECTED
                 scope.launch { _events.emit(VoiceBridgeEvent.Connected(currentUserId)) }
             }
@@ -72,8 +77,17 @@ class SignalingClient @Inject constructor() {
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                 Log.e(TAG, "[WS] connection failure", t)
                 scope.launch {
+                    if (reconnectAttempt >= maxReconnectAttempts) {
+                        Log.w(TAG, "[WS] max reconnect attempts ($maxReconnectAttempts) reached, giving up")
+                        _connectionState.value = ConnectionState.DISCONNECTED
+                        _events.emit(VoiceBridgeEvent.Disconnected)
+                        return@launch
+                    }
+                    reconnectAttempt++
                     _connectionState.value = ConnectionState.RECONNECTING
-                    delay(3000)
+                    val delayMs = calculateBackoff(reconnectAttempt)
+                    Log.d(TAG, "[WS] reconnect attempt $reconnectAttempt/$maxReconnectAttempts in ${delayMs}ms")
+                    delay(delayMs)
                     connectInternal()
                 }
             }
@@ -83,7 +97,19 @@ class SignalingClient @Inject constructor() {
                 _connectionState.value = ConnectionState.DISCONNECTED
                 scope.launch { _events.emit(VoiceBridgeEvent.Disconnected) }
             }
-        })
+        }
+
+        webSocket?.close(1000, "Reconnecting")
+        webSocket = client.newWebSocket(request, listener)
+    }
+
+    private fun calculateBackoff(attempt: Int): Long {
+        val baseMs = 1000L
+        val maxMs = 30000L
+        val shift = (attempt - 1).coerceIn(0, 5)
+        val exponential = baseMs * (1L shl shift)
+        val jitter = (0..500).random()
+        return (exponential + jitter).coerceAtMost(maxMs)
     }
 
     private suspend fun handleMessage(text: String) {

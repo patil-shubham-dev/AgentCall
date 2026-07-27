@@ -44,7 +44,7 @@
 | **Linter** | ESLint | 8.57.0 | Code linting |
 | **Formatter** | Prettier | (via .prettierrc) | Code formatting |
 | **Testing** | Vitest | (configured) | Unit test framework |
-| **Storage** | **None** (in-memory Maps) | — | All state ephemeral |
+| **Storage** | In-memory Maps / PostgreSQL 16 | — | 4 persistence modes: memory, dual-write, database-read, database |
 
 ## MCP Server
 
@@ -74,24 +74,23 @@ The following are planned to align with the canonical architecture (see [SYSTEM_
 
 | Technology | Status | Role in Canonical Architecture |
 |-----------|--------|-------------------------------|
-| PostgreSQL 16 | 📝 Planned | Primary storage for all runtime services |
-| Redis 7 | 📝 Planned | Presence state, Event Bus PubSub, rate limiting |
-| JWT / OAuth 2.0 | 📝 Planned | Authentication Service |
-| Provider abstraction layer | 📝 Planned | Provider Registry |
-| Presence Engine | 📝 Planned | Presence state management |
-| Notification Engine | 📝 Planned | Push + in-app notifications |
-| Callback Engine | 📝 Planned | Retry, schedule, timeout |
-| Coturn | 📝 Planned | STUN/TURN for WebRTC media relay |
-| Caddy | 📝 Planned | Reverse proxy + auto TLS |
-| Firebase FCM | 📝 Planned | Push notifications (Android) |
-| APNs | 📝 Planned | Push notifications (iOS) |
-| Prometheus + Grafana | 📝 Planned | Monitoring |
+| PostgreSQL 16 | ✅ Implemented | Primary storage (in `database` / `dual-write` modes) |
+| Coturn | ✅ Implemented | STUN/TURN for WebRTC media relay (infra/coturn/) |
+| Caddy | ✅ Implemented | Reverse proxy + auto TLS (infra/Caddyfile) |
+| JWT / OAuth 2.0 | 📝 Not planned | Current auth uses single SERVICE_TOKEN |
+| Provider abstraction layer | 📝 Not planned | AI integration via MCP SDK |
+| Firebase FCM | 📝 Not planned | Push not implemented; WebSocket is the notification channel |
+| APNs | 📝 Not planned | iOS app archived, FCM/APNs not implemented |
+| Prometheus + Grafana | 📝 Not planned | No monitoring dashboards implemented |
+| Redis 7 | ❌ Removed | Was part of abandoned v2 architecture |
+| Notification Engine | ❌ Removed | Was part of abandoned v2 architecture |
+| Callback Engine | ✅ Implemented | LifecycleCoordinator + sweeper in service.ts |
 
 ## Version Matrix
 
 ```
 Android App:    v1.0.0  (versionCode 1)
-Backend:        v2.0.0  (@agentcall/backend)
+Backend:        v1.0.0  (@agentcall/voicebridge)
 MCP Server:     v0.1.0  (@agentcall/mcp-server)
 ```
 

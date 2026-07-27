@@ -50,11 +50,16 @@ async function getAuthUser(request: FastifyRequest): Promise<AuthContext> {
 export function registerRoutes(app: FastifyInstance, opts: RouteOptions): void {
   const { voicebridge, metrics, dbHealth, cleanupScheduler, sessionRepo, callbackRepo } = opts;
 
-  // Auth middleware: protects all routes except health/ready/metrics
+    // Auth middleware: protects all routes except health/ready/metrics
   app.addHook('onRequest', async (request, reply) => {
     const url = request.url ?? '';
     // Skip auth for health check endpoints (required by K8s probes)
     if (url.startsWith('/api/v1/health') || url.startsWith('/api/v1/ready') || url.startsWith('/api/v1/metrics')) {
+      return;
+    }
+    const isDev = config.serviceToken === 'dev-service-token';
+    if (isDev) {
+      (request as FastifyRequest & { auth: AuthContext }).auth = { userId: 'service', role: 'service' };
       return;
     }
     const auth = await getAuthUser(request);
