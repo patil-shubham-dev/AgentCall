@@ -1,6 +1,9 @@
 package com.agentcall.app.call
 
 import android.content.Intent
+import android.media.MediaPlayer
+import android.media.RingtoneManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.view.Gravity
@@ -33,18 +36,46 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.agentcall.app.data.api.ApiClient
 import com.agentcall.app.data.api.ApiService
+import com.agentcall.app.settings.CallerTuneManager
 import com.agentcall.app.ui.composables.AmbientBackground
 import com.agentcall.app.ui.theme.*
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.launch
 import java.util.concurrent.atomic.AtomicBoolean
+import javax.inject.Inject
 
 @AndroidEntryPoint
 class IncomingCallActivity : ComponentActivity() {
 
+    @Inject lateinit var callerTuneManager: CallerTuneManager
+    private var mediaPlayer: MediaPlayer? = null
+
     // Prevent stacking — if an instance is already processing, ignore
     companion object {
         private val isProcessing = AtomicBoolean(false)
+    }
+
+    private fun startRinger() {
+        try {
+            val uri: Uri = callerTuneManager.uri
+            mediaPlayer?.release()
+            mediaPlayer = MediaPlayer().apply {
+                setDataSource(this@IncomingCallActivity, uri)
+                isLooping = true
+                prepare()
+                start()
+            }
+        } catch (_: Exception) {
+            RingtoneManager.getRingtone(this, RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE))?.play()
+        }
+    }
+
+    private fun stopRinger() {
+        mediaPlayer?.apply {
+            if (isPlaying) stop()
+            release()
+        }
+        mediaPlayer = null
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -60,6 +91,8 @@ class IncomingCallActivity : ComponentActivity() {
         val contextSummary = intent.getStringExtra("context_summary") ?: ""
         val priority = intent.getStringExtra("priority") ?: "normal"
 
+        startRinger()
+
         setContent {
             AgentCallTheme(darkTheme = true) {
                 IncomingCallScreen(
@@ -67,6 +100,7 @@ class IncomingCallActivity : ComponentActivity() {
                     contextSummary = contextSummary,
                     priority = priority,
                     onAnswer = {
+                        stopRinger()
                         CallService.cancelIncomingNotification(this@IncomingCallActivity)
                         val intent = Intent(this, CallActivity::class.java).apply {
                             putExtra("call_id", callId)
@@ -83,11 +117,13 @@ class IncomingCallActivity : ComponentActivity() {
                         finish()
                     },
                     onDecline = {
+                        stopRinger()
                         CallService.cancelIncomingNotification(this@IncomingCallActivity)
                         isProcessing.set(false)
                         finish()
                     },
                     onLater = { minutes ->
+                        stopRinger()
                         CallService.cancelIncomingNotification(this@IncomingCallActivity)
                         val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO)
                         scope.launch {
@@ -104,7 +140,18 @@ class IncomingCallActivity : ComponentActivity() {
         }
     }
 
+    override fun onPause() {
+        super.onPause()
+        mediaPlayer?.apply { if (isPlaying) pause() }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        mediaPlayer?.apply { if (!isPlaying) start() }
+    }
+
     override fun onDestroy() {
+        stopRinger()
         super.onDestroy()
         isProcessing.set(false)
     }

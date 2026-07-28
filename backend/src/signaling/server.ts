@@ -2,6 +2,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import type { Server } from 'node:http';
 import { logger } from '../common/logger.js';
 import { config } from '../common/config.js';
+import { validatePhoneToken } from '../voicebridge/phone-tokens.js';
 import * as voicebridge from '../voicebridge/service.js';
 import {
   publishSignalingConnected,
@@ -86,14 +87,17 @@ export function createSignalingServer(server: Server): WebSocketServer {
       return;
     }
 
-    // Authenticate via token query parameter matching SERVICE_TOKEN
+    // Authenticate via token query parameter
     const url = new URL(req.url ?? '/', 'http://localhost');
     const token = url.searchParams.get('token');
     const isDev = config.serviceToken === 'dev-service-token';
-    if (!isDev && (!token || token !== config.serviceToken)) {
-      logger.warn({ ip, hasToken: !!token }, '[WS] authentication failed — invalid or missing token');
-      ws.close(4001, 'Authentication failed: invalid or missing token');
-      return;
+    if (!isDev) {
+      const phoneUserId = token ? validatePhoneToken(token) : null;
+      if (!token || (token !== config.serviceToken && !phoneUserId)) {
+        logger.warn({ ip, hasToken: !!token }, '[WS] authentication failed — invalid or missing token');
+        ws.close(4001, 'Authentication failed: invalid or missing token');
+        return;
+      }
     }
 
     const userId = url.searchParams.get('user_id') ?? 'solo-user';

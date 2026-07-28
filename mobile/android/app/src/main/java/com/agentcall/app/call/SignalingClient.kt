@@ -61,6 +61,7 @@ class SignalingClient @Inject constructor(
     }
 
     private suspend fun connectInternal() {
+        com.agentcall.app.data.api.ApiClient.ensurePhoneToken(currentUserId)
         val url = com.agentcall.app.data.api.ApiClient.getWsUrl(currentUserId)
         Log.d(TAG, "[WS] connecting to $url")
         val request = Request.Builder().url(url).build()
