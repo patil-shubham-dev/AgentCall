@@ -9,7 +9,6 @@ import dagger.hilt.android.HiltAndroidApp
 
 @HiltAndroidApp
 class AgentCallApp : Application() {
-
     override fun onCreate() {
         super.onCreate()
         createNotificationChannels()
@@ -20,36 +19,31 @@ class AgentCallApp : Application() {
 
         val ongoingCall = NotificationChannel(
             CallService.CHANNEL_ONGOING_CALL,
-            "Ongoing Call",
-            NotificationManager.IMPORTANCE_LOW
+            "Ongoing Calls",
+            NotificationManager.IMPORTANCE_LOW,
         ).apply {
-            description = "Ongoing call notification"
+            description = "Notification for active voice calls"
             setShowBadge(false)
-            enableVibration(false)
         }
         manager.createNotificationChannel(ongoingCall)
 
         val incomingCall = NotificationChannel(
             CallService.CHANNEL_INCOMING_CALL,
             "Incoming Calls",
-            NotificationManager.IMPORTANCE_HIGH
+            NotificationManager.IMPORTANCE_HIGH,
         ).apply {
-            description = "Incoming AI call alerts"
+            description = "Notifications for incoming AI calls"
             setShowBadge(true)
-            enableVibration(true)
-            enableLights(true)
-            lockscreenVisibility = NotificationManager.IMPORTANCE_HIGH
         }
         manager.createNotificationChannel(incomingCall)
 
         val signaling = NotificationChannel(
             SignalingForegroundService.CHANNEL_SIGNALING,
             "Connection Status",
-            NotificationManager.IMPORTANCE_LOW
+            NotificationManager.IMPORTANCE_LOW,
         ).apply {
-            description = "Persistent notification showing signaling connection status"
+            description = "Persistent notification for WebSocket connection"
             setShowBadge(false)
-            enableVibration(false)
         }
         manager.createNotificationChannel(signaling)
     }

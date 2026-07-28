@@ -46,11 +46,13 @@ class CallViewModel @Inject constructor() : ViewModel() {
 
     private val api: ApiService = ApiClient.create()
     private var messageCounter = 0
+    private var callStartTime = 0L
 
     private val _uiState = MutableStateFlow(ActiveCallUiState())
     val uiState: StateFlow<ActiveCallUiState> = _uiState.asStateFlow()
 
     fun connect(callId: String) {
+        callStartTime = System.currentTimeMillis()
         viewModelScope.launch {
             try {
                 val call = api.getCall(callId)
@@ -128,10 +130,11 @@ class CallViewModel @Inject constructor() : ViewModel() {
 
     fun tick() {
         val current = _uiState.value
-        val t = current.elapsedSeconds.toFloat()
+        val elapsed = if (callStartTime > 0) ((System.currentTimeMillis() - callStartTime) / 1000).toInt() else current.elapsedSeconds
+        val t = elapsed.toFloat()
         val levels = generateWaveform(t, !current.isRecording && !current.isAiSpeaking)
         _uiState.value = current.copy(
-            elapsedSeconds = current.elapsedSeconds + 1,
+            elapsedSeconds = elapsed,
             waveformLevels = levels,
             peakWaveformLevel = levels.maxOrNull() ?: 0.08f,
         )
