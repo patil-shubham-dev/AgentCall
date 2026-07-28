@@ -4,7 +4,7 @@ import { logger } from './common/logger.js';
 import type { MetricsCollector } from './common/metrics-collector.js';
 import type { DatabaseHealthMonitor } from './common/db-health-monitor.js';
 import type { CleanupScheduler } from './common/cleanup-scheduler.js';
-import { createPhoneToken } from './voicebridge/phone-tokens.js';
+import { createPhoneToken, validatePhoneToken } from './voicebridge/phone-tokens.js';
 import { getConnectedPhoneCount } from './voicebridge/service.js';
 import type { VoiceBridgeService } from './voicebridge/service.js';
 import type { CreateCallInput } from './voicebridge/types.js';
@@ -35,18 +35,24 @@ const moderateRateLimit = { max: 60, timeWindow: '1 minute' };
 interface AuthContext {
   userId: string;
   role: 'user' | 'agent' | 'service';
+  authenticated: boolean;
 }
 
 async function getAuthUser(request: FastifyRequest): Promise<AuthContext> {
   const header = request.headers.authorization;
   if (!header?.startsWith('Bearer ')) {
-    return { userId: 'solo-user', role: 'user' };
+    return { userId: 'solo-user', role: 'user', authenticated: false };
   }
   const token = header.slice(7);
   if (token === config.serviceToken) {
-    return { userId: 'service', role: 'service' };
+    return { userId: 'service', role: 'service', authenticated: true };
   }
-  return { userId: 'solo-user', role: 'user' };
+  // Also accept phone tokens
+  const phoneUserId = await validatePhoneToken(token).catch(() => null);
+  if (phoneUserId) {
+    return { userId: phoneUserId, role: 'user', authenticated: true };
+  }
+  return { userId: 'solo-user', role: 'user', authenticated: false };
 }
 
 export function registerRoutes(app: FastifyInstance, opts: RouteOptions): void {
@@ -61,12 +67,11 @@ export function registerRoutes(app: FastifyInstance, opts: RouteOptions): void {
     }
     const isDev = config.serviceToken === 'dev-service-token';
     if (isDev) {
-      (request as FastifyRequest & { auth: AuthContext }).auth = { userId: 'service', role: 'service' };
+      (request as FastifyRequest & { auth: AuthContext }).auth = { userId: 'service', role: 'service', authenticated: true };
       return;
     }
     const auth = await getAuthUser(request);
-    // Reject unauthenticated requests
-    if (auth.role === 'user' && auth.userId === 'solo-user') {
+    if (!auth.authenticated) {
       return reply.status(401).send({
         error: 'UNAUTHORIZED',
         message: 'Valid Bearer token required',
