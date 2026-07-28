@@ -33,9 +33,9 @@ class CallService : Service() {
     var callId: String? = null
     var textToSpeech: TextToSpeech? = null
     private var ttsInitialized = false
-    var isRecording = false
-    var isAiSpeaking = false
-    var isPaused = false
+    @Volatile var isRecording = false
+    @Volatile var isAiSpeaking = false
+    @Volatile var isPaused = false
 
     // Last AI message text, for the Repeat button
     private var lastAiMessage: String = ""
@@ -286,7 +286,7 @@ class CallService : Service() {
     private fun acquireWakeLock() {
         val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
         wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "VoiceBridge:CallLock")
-            .apply { acquire(60_000) }
+            .apply { acquire() }
     }
 
     private fun releaseWakeLock() {
