@@ -34,6 +34,7 @@ COPY --from=deps /prod_modules ./node_modules
 # Copy compiled output
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/scripts ./scripts
+COPY --from=builder /app/src/voicebridge/repositories/schema.sql ./src/voicebridge/repositories/schema.sql
 COPY package.json ./
 
 # Read-only filesystem
