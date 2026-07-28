@@ -1,5 +1,6 @@
 package com.agentcall.app.di
 
+import android.app.Application
 import com.agentcall.app.call.SignalingClient
 import dagger.Module
 import dagger.Provides
@@ -13,7 +14,7 @@ object AppModule {
 
     @Provides
     @Singleton
-    fun provideSignalingClient(): SignalingClient {
-        return SignalingClient()
+    fun provideSignalingClient(app: Application): SignalingClient {
+        return SignalingClient(app)
     }
 }

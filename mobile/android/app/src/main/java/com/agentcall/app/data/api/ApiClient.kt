@@ -33,7 +33,7 @@ object ApiClient {
     fun getWsUrl(userId: String): String {
         val scheme = if (isDomainHost()) "wss" else "ws"
         val port = if (isDomainHost()) "" else ":$API_PORT"
-        return "$scheme://$serverHost$port/phone?user_id=$userId"
+        return "$scheme://$serverHost$port/phone?token=${BuildConfig.SERVICE_TOKEN}&user_id=$userId"
     }
 
     /** Update the server host and rebuild the Retrofit instance. */

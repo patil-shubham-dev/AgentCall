@@ -1,5 +1,6 @@
 package com.agentcall.app.call
 
+import android.app.Application
 import android.util.Log
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -25,7 +26,9 @@ sealed class VoiceBridgeEvent {
 }
 
 @Singleton
-class SignalingClient @Inject constructor() {
+class SignalingClient @Inject constructor(
+    private val app: Application,
+) {
     private val client = OkHttpClient()
     private var webSocket: WebSocket? = null
     private var connectionJob: Job? = null
@@ -50,6 +53,7 @@ class SignalingClient @Inject constructor() {
         currentUserId = userId
         reconnectAttempt = 0
         connectionJob?.cancel()
+        SignalingForegroundService.start(app)
         connectionJob = scope.launch {
             _connectionState.value = ConnectionState.CONNECTING
             connectInternal()
@@ -176,5 +180,6 @@ class SignalingClient @Inject constructor() {
         webSocket?.close(1000, "User disconnected")
         webSocket = null
         _connectionState.value = ConnectionState.DISCONNECTED
+        SignalingForegroundService.stop(app)
     }
 }
