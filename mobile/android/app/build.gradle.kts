@@ -20,7 +20,6 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
         buildConfigField("String", "DEFAULT_HOST", "\"agentcall-66ke.onrender.com\"")
-        buildConfigField("String", "SERVICE_TOKEN", "\"kEmu0ahRK8jCNtOAriHUnlpPxBIJ9evXsc61doyLMQw5Vgb2\"")
     }
 
     buildTypes {

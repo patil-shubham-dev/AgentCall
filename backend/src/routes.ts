@@ -4,6 +4,8 @@ import { logger } from './common/logger.js';
 import type { MetricsCollector } from './common/metrics-collector.js';
 import type { DatabaseHealthMonitor } from './common/db-health-monitor.js';
 import type { CleanupScheduler } from './common/cleanup-scheduler.js';
+import { createPhoneToken } from './voicebridge/phone-tokens.js';
+import { getConnectedPhoneCount } from './voicebridge/service.js';
 import type { VoiceBridgeService } from './voicebridge/service.js';
 import type { CreateCallInput } from './voicebridge/types.js';
 import type { SessionRepository, CallbackRepository } from './voicebridge/repositories/index.js';
@@ -98,6 +100,9 @@ export function registerRoutes(app: FastifyInstance, opts: RouteOptions): void {
     const callbacks = callbackRepo ? await callbackRepo.list().catch(() => []) : [];
     metrics?.setGauge('callbacks.count', callbacks.length);
 
+    const connectedPhones = getConnectedPhoneCount();
+    metrics?.setGauge('signaling.connected_phones', connectedPhones);
+
     const status = dbHealth ? (dbHealth.getHealth().connected ? 'ok' : 'degraded') : 'ok';
 
     return {
@@ -109,6 +114,7 @@ export function registerRoutes(app: FastifyInstance, opts: RouteOptions): void {
       scheduler: { timerCount: schedulerTimers },
       callbacks: { count: callbacks.length },
       sessions: { active, paused, completed },
+      signaling: { connectedPhones },
     };
   });
 
@@ -331,6 +337,13 @@ export function registerRoutes(app: FastifyInstance, opts: RouteOptions): void {
       call_id: callId,
       resume_in_minutes: minutes,
     };
+  });
+
+  app.post('/api/v1/phone/token', async (request, reply) => {
+    const { user_id } = request.body as { user_id?: string };
+    const userId = user_id ?? 'solo-user';
+    const token = createPhoneToken(userId);
+    return { status: 'ok', token, user_id: userId };
   });
 
   app.post('/api/v1/phone/register', async (request, reply) => {

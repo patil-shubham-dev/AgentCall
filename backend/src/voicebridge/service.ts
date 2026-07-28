@@ -33,6 +33,17 @@ const CANCELLED_RETENTION_MS = 5 * 60 * 1000;
 
 const phoneConnections = new Map<string, WebSocket>();
 
+export function getConnectedPhones(): { userId: string; connected: boolean }[] {
+  return Array.from(phoneConnections.entries()).map(([userId, ws]) => ({
+    userId,
+    connected: ws.readyState === WebSocket.OPEN,
+  }));
+}
+
+export function getConnectedPhoneCount(): number {
+  return phoneConnections.size;
+}
+
 function newId(): string {
   return crypto.randomUUID();
 }

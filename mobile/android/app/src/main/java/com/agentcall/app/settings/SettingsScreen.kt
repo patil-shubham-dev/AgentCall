@@ -20,13 +20,19 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
+import android.net.Uri
+import android.provider.OpenableColumns
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.agentcall.app.settings.CallerTuneManager
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
@@ -52,6 +58,7 @@ enum class ConnectionTestStatus {
 @HiltViewModel
 class SettingsViewModel @Inject constructor(
     private val signalingClient: SignalingClient,
+    val callerTuneManager: CallerTuneManager,
 ) : ViewModel() {
     private val _serverHost = MutableStateFlow(ApiClient.serverHost)
     val serverHost: StateFlow<String> = _serverHost.asStateFlow()
@@ -370,6 +377,44 @@ fun SettingsScreen(
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             lineHeight = 16.sp,
+                        )
+                    }
+                }
+            }
+
+            // ── Caller Tune ───────────────────────────
+            val context = LocalContext.current
+            val callerTuneManager = viewModel.callerTuneManager
+            val callerTunePicker = rememberLauncherForActivityResult(
+                contract = ActivityResultContracts.OpenDocument(),
+            ) { uri: Uri? ->
+                if (uri != null) {
+                    val cursor = context.contentResolver.query(uri, null, null, null, null)
+                    val name = cursor?.use { c ->
+                        val nameIndex = c.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                        if (nameIndex >= 0 && c.moveToFirst()) c.getString(nameIndex) else "Custom tune"
+                    } ?: "Custom tune"
+                    callerTuneManager.setUri(uri, name)
+                }
+            }
+
+            SettingsSection(title = "CALLER TUNE") {
+                GlassCard {
+                    Column(modifier = Modifier.padding(4.dp)) {
+                        InfoRow(
+                            icon = Icons.Default.MusicNote,
+                            title = "Ringtone",
+                            subtitle = callerTuneManager.label,
+                            onClick = {
+                                callerTunePicker.launch(arrayOf("audio/*"))
+                            },
+                        )
+                        SettingsDivider()
+                        InfoRow(
+                            icon = Icons.Default.RestartAlt,
+                            title = "Reset to default",
+                            subtitle = null,
+                            onClick = { callerTuneManager.resetToDefault() },
                         )
                     }
                 }

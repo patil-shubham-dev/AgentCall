@@ -2,26 +2,40 @@ package com.agentcall.app.data.api
 
 import com.agentcall.app.BuildConfig
 import com.jakewharton.retrofit2.converter.kotlinx.serialization.asConverterFactory
+import kotlinx.serialization.SerialName
+import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.Retrofit
+import retrofit2.http.Body
+import retrofit2.http.POST
 import java.util.concurrent.TimeUnit
 
-/**
- * API client for the VoiceBridge backend.
- * Server host is configurable — defaults to production URL.
- * Use a LAN IP (e.g. 192.168.1.100) for local development.
- */
+@Serializable
+data class PhoneTokenResponse(
+    @SerialName("status") val status: String,
+    @SerialName("token") val token: String,
+    @SerialName("user_id") val userId: String,
+)
+
+data class PhoneTokenRequest(val user_id: String = "solo-user")
+
+interface PhoneApi {
+    @POST("phone/token")
+    suspend fun requestToken(@Body body: PhoneTokenRequest): PhoneTokenResponse
+}
+
 object ApiClient {
-    /** Configurable server host (IP or hostname, no port). Default: production URL */
     var serverHost: String = BuildConfig.DEFAULT_HOST
         private set
 
+    @Volatile
+    var phoneToken: String? = null
+
     private const val API_PORT = 4000
 
-    /** True when host is a domain name (not an IP address) → use HTTPS/WSS */
     private fun isDomainHost(): Boolean = !serverHost.matches(Regex("^[\\d.]+$"))
 
     fun getHttpBaseUrl(): String {
@@ -33,10 +47,10 @@ object ApiClient {
     fun getWsUrl(userId: String): String {
         val scheme = if (isDomainHost()) "wss" else "ws"
         val port = if (isDomainHost()) "" else ":$API_PORT"
-        return "$scheme://$serverHost$port/phone?token=${BuildConfig.SERVICE_TOKEN}&user_id=$userId"
+        val token = phoneToken ?: return "$scheme://$serverHost$port/phone?user_id=$userId"
+        return "$scheme://$serverHost$port/phone?token=$token&user_id=$userId"
     }
 
-    /** Update the server host and rebuild the Retrofit instance. */
     fun setServerHost(host: String) {
         serverHost = host.trim().ifBlank { BuildConfig.DEFAULT_HOST }
         _retrofit = null
@@ -45,6 +59,13 @@ object ApiClient {
     fun resetToDefault() {
         serverHost = BuildConfig.DEFAULT_HOST
         _retrofit = null
+    }
+
+    suspend fun ensurePhoneToken(userId: String = "solo-user") {
+        if (phoneToken != null) return
+        val api = create<PhoneApi>()
+        val response = api.requestToken(PhoneTokenRequest(userId))
+        phoneToken = response.token
     }
 
     private val json = Json {
