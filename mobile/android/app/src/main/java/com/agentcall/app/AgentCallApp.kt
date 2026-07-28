@@ -3,8 +3,8 @@ package com.agentcall.app
 import android.app.Application
 import android.app.NotificationChannel
 import android.app.NotificationManager
-import android.os.Build
 import com.agentcall.app.call.CallService
+import com.agentcall.app.call.SignalingForegroundService
 import dagger.hilt.android.HiltAndroidApp
 
 @HiltAndroidApp
@@ -41,5 +41,16 @@ class AgentCallApp : Application() {
             lockscreenVisibility = NotificationManager.IMPORTANCE_HIGH
         }
         manager.createNotificationChannel(incomingCall)
+
+        val signaling = NotificationChannel(
+            SignalingForegroundService.CHANNEL_SIGNALING,
+            "Connection Status",
+            NotificationManager.IMPORTANCE_LOW
+        ).apply {
+            description = "Persistent notification showing signaling connection status"
+            setShowBadge(false)
+            enableVibration(false)
+        }
+        manager.createNotificationChannel(signaling)
     }
 }

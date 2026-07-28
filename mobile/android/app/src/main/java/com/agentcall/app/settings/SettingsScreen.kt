@@ -506,7 +506,7 @@ private fun InfoRow(
                 }
             }
             if (onClick != null) {
-                Icon(Icons.Default.ChevronRight, if (title != null) "View $title" else "Navigate", tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f), modifier = Modifier.size(18.dp))
+                Icon(Icons.Default.ChevronRight, "View $title", tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f), modifier = Modifier.size(18.dp))
             }
         }
     }
