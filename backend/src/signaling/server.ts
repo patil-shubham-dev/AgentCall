@@ -74,11 +74,18 @@ function startEvictionTimer(): NodeJS.Timeout {
   }, 30_000).unref();
 }
 
+const HEARTBEAT_INTERVAL_MS = 25_000;
+
 export function createSignalingServer(server: Server): WebSocketServer {
   const wss = new WebSocketServer({ server, path: '/phone' });
   const evictionTimer = startEvictionTimer();
 
   wss.on('connection', async (ws, req) => {
+    (ws as unknown as { isAlive: boolean }).isAlive = true;
+
+    ws.on('pong', () => {
+      (ws as unknown as { isAlive: boolean }).isAlive = true;
+    });
     const ip = (req.headers['x-forwarded-for'] as string | undefined) ?? req.socket.remoteAddress ?? 'unknown';
     logger.info({ ip }, '[WS] new connection attempt');
     if (!checkConnectionRateLimit(ip)) {
@@ -151,10 +158,24 @@ export function createSignalingServer(server: Server): WebSocketServer {
     logger.error({ err }, '[WS] signaling server error');
   });
 
+  const heartbeatTimer = setInterval(() => {
+    wss.clients.forEach((ws) => {
+      const conn = ws as unknown as { isAlive: boolean };
+      if (conn.isAlive === false) {
+        logger.warn('[WS] heartbeat timeout — terminating connection');
+        clientRateLimits.delete(ws);
+        return ws.terminate();
+      }
+      conn.isAlive = false;
+      ws.ping();
+    });
+  }, HEARTBEAT_INTERVAL_MS);
+
   wss.on('close', () => {
     clearInterval(evictionTimer);
+    clearInterval(heartbeatTimer);
   });
 
-  logger.info({ path: '/phone' }, 'Signaling server started (phone connections only)');
+  logger.info({ path: '/phone', heartbeatIntervalMs: HEARTBEAT_INTERVAL_MS }, 'Signaling server started (phone connections only)');
   return wss;
 }

@@ -1,6 +1,10 @@
 package com.agentcall.app.call
 
 import android.app.Application
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.util.Log
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -9,6 +13,7 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import okhttp3.*
 import org.json.JSONObject
+import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -29,14 +34,16 @@ sealed class VoiceBridgeEvent {
 class SignalingClient @Inject constructor(
     private val app: Application,
 ) {
-    private val client = OkHttpClient()
+    private val client = OkHttpClient.Builder()
+        .pingInterval(20, TimeUnit.SECONDS)
+        .build()
     private var webSocket: WebSocket? = null
     private var connectionJob: Job? = null
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var currentUserId: String = "solo-user"
 
     private var reconnectAttempt = 0
-    private var maxReconnectAttempts = 20
+    private var networkCallback: ConnectivityNetworkCallback? = null
 
     private val _events = MutableSharedFlow<VoiceBridgeEvent>(extraBufferCapacity = 64)
     val events: SharedFlow<VoiceBridgeEvent> = _events
@@ -53,10 +60,50 @@ class SignalingClient @Inject constructor(
         currentUserId = userId
         reconnectAttempt = 0
         connectionJob?.cancel()
+        registerNetworkCallback()
         SignalingForegroundService.start(app)
         connectionJob = scope.launch {
             _connectionState.value = ConnectionState.CONNECTING
             connectInternal()
+        }
+    }
+
+    private fun registerNetworkCallback() {
+        if (networkCallback != null) return
+        val cm = app.getSystemService(Application.CONNECTIVITY_SERVICE) as ConnectivityManager
+        val callback = ConnectivityNetworkCallback(this)
+        networkCallback = callback
+        val request = NetworkRequest.Builder()
+            .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            .build()
+        cm.registerNetworkCallback(request, callback)
+    }
+
+    private fun unregisterNetworkCallback() {
+        val cb = networkCallback ?: return
+        networkCallback = null
+        val cm = app.getSystemService(Application.CONNECTIVITY_SERVICE) as ConnectivityManager
+        cm.unregisterNetworkCallback(cb)
+    }
+
+    private class ConnectivityNetworkCallback(
+        private val client: SignalingClient,
+    ) : NetworkCallback() {
+        override fun onAvailable(network: Network) {
+            Log.d(TAG, "[NET] network available $network")
+            client.onNetworkAvailable()
+        }
+    }
+
+    private fun onNetworkAvailable() {
+        if (_connectionState.value != ConnectionState.CONNECTED) {
+            Log.d(TAG, "[WS] network available — triggering reconnect")
+            connectionJob?.cancel()
+            reconnectAttempt = 0
+            connectionJob = scope.launch {
+                _connectionState.value = ConnectionState.CONNECTING
+                connectInternal()
+            }
         }
     }
 
@@ -82,16 +129,10 @@ class SignalingClient @Inject constructor(
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                 Log.e(TAG, "[WS] connection failure", t)
                 scope.launch {
-                    if (reconnectAttempt >= maxReconnectAttempts) {
-                        Log.w(TAG, "[WS] max reconnect attempts ($maxReconnectAttempts) reached, giving up")
-                        _connectionState.value = ConnectionState.DISCONNECTED
-                        _events.emit(VoiceBridgeEvent.Disconnected)
-                        return@launch
-                    }
                     reconnectAttempt++
                     _connectionState.value = ConnectionState.RECONNECTING
                     val delayMs = calculateBackoff(reconnectAttempt)
-                    Log.d(TAG, "[WS] reconnect attempt $reconnectAttempt/$maxReconnectAttempts in ${delayMs}ms")
+                    Log.d(TAG, "[WS] reconnect attempt $reconnectAttempt in ${delayMs}ms")
                     delay(delayMs)
                     connectInternal()
                 }
@@ -99,8 +140,13 @@ class SignalingClient @Inject constructor(
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
                 Log.d(TAG, "[WS] closed code=$code reason=$reason")
-                _connectionState.value = ConnectionState.DISCONNECTED
-                scope.launch { _events.emit(VoiceBridgeEvent.Disconnected) }
+                scope.launch {
+                    _connectionState.value = ConnectionState.RECONNECTING
+                    reconnectAttempt++
+                    val delayMs = calculateBackoff(reconnectAttempt)
+                    delay(delayMs)
+                    connectInternal()
+                }
             }
         }
 
@@ -177,6 +223,7 @@ class SignalingClient @Inject constructor(
 
     fun disconnect() {
         Log.d(TAG, "[WS] disconnect")
+        unregisterNetworkCallback()
         connectionJob?.cancel()
         webSocket?.close(1000, "User disconnected")
         webSocket = null
