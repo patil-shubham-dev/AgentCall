@@ -38,7 +38,7 @@ export async function initializePhoneTokens(pool?: Pool): Promise<void> {
   }
 }
 
-const cleanupTimer = setInterval(() => {
+setInterval(() => {
   const now = Date.now();
   if (dbEnabled && dbPool) {
     dbPool.query(`DELETE FROM ${TABLE} WHERE created_at < $1`, [now - TOKEN_TTL_MS]).catch(() => {});
