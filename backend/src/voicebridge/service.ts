@@ -309,7 +309,7 @@ export function notifyPhone(userId: string, payload: Record<string, unknown>): b
   const ws = phoneConnections.get(userId);
   if (ws && ws.readyState === WebSocket.OPEN) {
     try {
-      ws.send(JSON.stringify(payload));
+      ws.send(JSON.stringify({ type: msgType, payload, timestamp: new Date().toISOString() }));
       logger.info({ userId, msgType, elapsed: Date.now() - start }, '[WS] -> sent to phone');
       publishNotificationDelivered(userId, msgType);
       return true;
