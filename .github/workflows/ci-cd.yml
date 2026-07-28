@@ -133,6 +133,22 @@ jobs:
         run: |
           mkdir -p $HOME/.kube
           echo "${{ secrets.KUBECONFIG_STAGING }}" | base64 -d > $HOME/.kube/config
+      - name: Validate kubeconfig
+        run: |
+          if [ ! -s "$HOME/.kube/config" ]; then
+            echo "::error::KUBECONFIG_STAGING secret is empty or not set. Configure it in GitHub repository secrets."
+            exit 1
+          fi
+          if ! kubectl version --client > /dev/null 2>&1; then
+            echo "::error::kubectl is not installed or not available in PATH."
+            exit 1
+          fi
+      - name: Check cluster connectivity
+        run: |
+          if ! kubectl cluster-info --request-timeout=10s > /dev/null 2>&1; then
+            echo "::error::Cannot connect to staging cluster. Check that the cluster is running and KUBECONFIG_STAGING is valid."
+            exit 1
+          fi
       - name: Deploy to staging
         run: |
           kubectl set image deployment/voicebridge-backend -n voicebridge \
@@ -158,6 +174,22 @@ jobs:
         run: |
           mkdir -p $HOME/.kube
           echo "${{ secrets.KUBECONFIG_PRODUCTION }}" | base64 -d > $HOME/.kube/config
+      - name: Validate kubeconfig
+        run: |
+          if [ ! -s "$HOME/.kube/config" ]; then
+            echo "::error::KUBECONFIG_PRODUCTION secret is empty or not set. Configure it in GitHub repository secrets."
+            exit 1
+          fi
+          if ! kubectl version --client > /dev/null 2>&1; then
+            echo "::error::kubectl is not installed or not available in PATH."
+            exit 1
+          fi
+      - name: Check cluster connectivity
+        run: |
+          if ! kubectl cluster-info --request-timeout=10s > /dev/null 2>&1; then
+            echo "::error::Cannot connect to production cluster. Check that the cluster is running and KUBECONFIG_PRODUCTION is valid."
+            exit 1
+          fi
       - name: Deploy to production
         run: |
           kubectl set image deployment/voicebridge-backend -n voicebridge \
