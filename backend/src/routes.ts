@@ -55,8 +55,8 @@ export function registerRoutes(app: FastifyInstance, opts: RouteOptions): void {
     // Auth middleware: protects all routes except health/ready/metrics
   app.addHook('onRequest', async (request, reply) => {
     const url = request.url ?? '';
-    // Skip auth for health check endpoints (required by K8s probes)
-    if (url.startsWith('/api/v1/health') || url.startsWith('/api/v1/ready') || url.startsWith('/api/v1/metrics')) {
+    // Skip auth for health check endpoints (required by K8s probes) and phone token registration
+    if (url.startsWith('/api/v1/health') || url.startsWith('/api/v1/ready') || url.startsWith('/api/v1/metrics') || url === '/api/v1/phone/token') {
       return;
     }
     const isDev = config.serviceToken === 'dev-service-token';
@@ -339,7 +339,7 @@ export function registerRoutes(app: FastifyInstance, opts: RouteOptions): void {
     };
   });
 
-  app.post('/api/v1/phone/token', async (request, reply) => {
+  app.post('/api/v1/phone/token', async (request) => {
     const { user_id } = request.body as { user_id?: string };
     const userId = user_id ?? 'solo-user';
     const token = await createPhoneToken(userId);
