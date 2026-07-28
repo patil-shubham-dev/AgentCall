@@ -11,6 +11,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.AltRoute
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -431,7 +432,7 @@ fun SettingsScreen(
                         )
                         SettingsDivider()
                         InfoRow(
-                            icon = Icons.Default.AltRoute,
+                            icon = Icons.AutoMirrored.Filled.AltRoute,
                             title = "WebSocket",
                             subtitle = com.agentcall.app.data.api.ApiClient.getWsUrl("solo-user"),
                         )
@@ -469,7 +470,7 @@ fun SettingsScreen(
                 }
             }
 
-            Spacer(modifier = Modifier.height(32.dp))
+            Spacer(modifier = Modifier.height(96.dp))
         }
     }
 }

@@ -342,7 +342,7 @@ export function registerRoutes(app: FastifyInstance, opts: RouteOptions): void {
   app.post('/api/v1/phone/token', async (request, reply) => {
     const { user_id } = request.body as { user_id?: string };
     const userId = user_id ?? 'solo-user';
-    const token = createPhoneToken(userId);
+    const token = await createPhoneToken(userId);
     return { status: 'ok', token, user_id: userId };
   });
 

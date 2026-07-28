@@ -20,6 +20,8 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.PhoneForwarded
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -164,6 +166,57 @@ fun ActiveCallScreen(
                     MessageBubble(msg = msg, isAi = msg.role == "ai")
                 }
 
+                if (state.isAiSpeaking && state.messages.isNotEmpty()) {
+                    item(key = "typing") {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            val avatarGradient = Brush.linearGradient(listOf(GradientBrandStart, GradientBrandEnd))
+                            Surface(
+                                modifier = Modifier.size(28.dp),
+                                shape = CircleShape,
+                                color = Color.Transparent,
+                            ) {
+                                Box(
+                                    modifier = Modifier.size(28.dp).clip(CircleShape).background(avatarGradient),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    Icon(Icons.Default.SmartToy, "AI", modifier = Modifier.size(14.dp), tint = Slate50)
+                                }
+                            }
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Surface(
+                                shape = RoundedCornerShape(4.dp, 16.dp, 16.dp, 16.dp),
+                                color = Slate800,
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    repeat(3) { i ->
+                                        val dotDelay by rememberInfiniteTransition(label = "dot$i").animateFloat(
+                                            0f, 1f,
+                                            infiniteRepeatable(
+                                                tween(1200, delayMillis = i * 200, easing = EaseInOutSine),
+                                                RepeatMode.Reverse,
+                                            ),
+                                            label = "dotAnim$i"
+                                        )
+                                        Box(
+                                            modifier = Modifier
+                                                .size(8.dp)
+                                                .clip(CircleShape)
+                                                .background(Indigo400.copy(alpha = 0.3f + dotDelay * 0.7f)),
+                                        )
+                                        if (i < 2) Spacer(modifier = Modifier.width(6.dp))
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
                 if (state.isPaused) {
                     item(key = "paused") {
                         Surface(
@@ -211,11 +264,16 @@ fun ActiveCallScreen(
                         viewModel.setRecording(!state.isRecording)
                     })
 
+                var isSpeakerOn by remember { mutableStateOf(false) }
                 CallControl(
-                    icon = Icons.Default.VolumeUp, label = "Speaker",
-                    tint = Slate50, bgColor = GlassWhite, onClick = {
+                    icon = if (isSpeakerOn) Icons.AutoMirrored.Filled.VolumeUp else Icons.Default.VolumeDown,
+                    label = if (isSpeakerOn) "Speaker On" else "Speaker",
+                    tint = if (isSpeakerOn) Indigo400 else Slate50,
+                    bgColor = if (isSpeakerOn) GlassIndigo else GlassWhite,
+                    onClick = {
                         val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as android.media.AudioManager
                         audioManager.isSpeakerphoneOn = !audioManager.isSpeakerphoneOn
+                        isSpeakerOn = !isSpeakerOn
                     })
 
                 CallControl(
@@ -243,7 +301,7 @@ fun ActiveCallScreen(
                     contentPadding = PaddingValues(0.dp),
                     interactionSource = remember { MutableInteractionSource() },
                 ) {
-                    Icon(Icons.Default.PhoneForwarded, "End", modifier = Modifier.size(26.dp), tint = Slate50)
+                    Icon(Icons.AutoMirrored.Filled.PhoneForwarded, "End", modifier = Modifier.size(26.dp), tint = Slate50)
                 }
                 Text("End", style = MaterialTheme.typography.labelSmall, color = Red400, fontWeight = FontWeight.Medium)
             }

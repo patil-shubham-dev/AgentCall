@@ -28,3 +28,11 @@ CREATE TABLE IF NOT EXISTS callbacks (
   resume_at BIGINT NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+CREATE TABLE IF NOT EXISTS phone_tokens (
+  token     TEXT PRIMARY KEY,
+  user_id   TEXT NOT NULL,
+  created_at BIGINT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_phone_tokens_user_id ON phone_tokens(user_id);

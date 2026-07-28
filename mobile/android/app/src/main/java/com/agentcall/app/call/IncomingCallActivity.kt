@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.PhoneForwarded
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -40,7 +41,9 @@ import com.agentcall.app.settings.CallerTuneManager
 import com.agentcall.app.ui.composables.AmbientBackground
 import com.agentcall.app.ui.theme.*
 import dagger.hilt.android.AndroidEntryPoint
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.util.concurrent.atomic.AtomicBoolean
 import javax.inject.Inject
 
@@ -58,13 +61,20 @@ class IncomingCallActivity : ComponentActivity() {
     private fun startRinger() {
         try {
             val uri: Uri = callerTuneManager.uri
-            mediaPlayer?.release()
-            mediaPlayer = MediaPlayer().apply {
+            val mp = MediaPlayer().apply {
                 setDataSource(this@IncomingCallActivity, uri)
                 isLooping = true
-                prepare()
-                start()
             }
+            kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
+                try {
+                    withContext(Dispatchers.IO) { mp.prepare() }
+                    mp.start()
+                } catch (_: Exception) {
+                    mp.release()
+                    RingtoneManager.getRingtone(this@IncomingCallActivity, RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE))?.play()
+                }
+            }
+            mediaPlayer = mp
         } catch (_: Exception) {
             RingtoneManager.getRingtone(this, RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE))?.play()
         }
@@ -169,6 +179,17 @@ fun IncomingCallScreen(
 ) {
     var showLaterPicker by remember { mutableStateOf(false) }
     var selectedMinutes by remember { mutableIntStateOf(10) }
+
+    val timeoutSeconds = 60
+    var secondsLeft by remember { mutableIntStateOf(timeoutSeconds) }
+
+    LaunchedEffect(Unit) {
+        while (secondsLeft > 0) {
+            delay(1000)
+            secondsLeft--
+        }
+        if (!showLaterPicker) onDecline()
+    }
 
     val laterOptions = listOf(5 to "5 min", 10 to "10 min", 15 to "15 min", 30 to "30 min", 60 to "1 hour")
 
@@ -363,7 +384,7 @@ fun IncomingCallScreen(
             } else {
                 Row(horizontalArrangement = Arrangement.spacedBy(32.dp), verticalAlignment = Alignment.CenterVertically) {
                     ActionButton(
-                        icon = Icons.Default.PhoneForwarded,
+                        icon = Icons.AutoMirrored.Filled.PhoneForwarded,
                         label = "Decline",
                         iconTint = Red400,
                         labelColor = Red400,
@@ -400,6 +421,9 @@ fun IncomingCallScreen(
             if (!showLaterPicker) {
                 Text("Answer, decline, or schedule for later",
                     style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
+                Spacer(modifier = Modifier.height(4.dp))
+                Text("Auto-decline in ${secondsLeft}s",
+                    style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f), textAlign = TextAlign.Center)
             }
             Spacer(modifier = Modifier.weight(0.05f))
         }

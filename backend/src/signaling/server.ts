@@ -78,7 +78,7 @@ export function createSignalingServer(server: Server): WebSocketServer {
   const wss = new WebSocketServer({ server, path: '/phone' });
   const evictionTimer = startEvictionTimer();
 
-  wss.on('connection', (ws, req) => {
+  wss.on('connection', async (ws, req) => {
     const ip = (req.headers['x-forwarded-for'] as string | undefined) ?? req.socket.remoteAddress ?? 'unknown';
     logger.info({ ip }, '[WS] new connection attempt');
     if (!checkConnectionRateLimit(ip)) {
@@ -92,7 +92,7 @@ export function createSignalingServer(server: Server): WebSocketServer {
     const token = url.searchParams.get('token');
     const isDev = config.serviceToken === 'dev-service-token';
     if (!isDev) {
-      const phoneUserId = token ? validatePhoneToken(token) : null;
+      const phoneUserId = token ? await validatePhoneToken(token) : null;
       if (!token || (token !== config.serviceToken && !phoneUserId)) {
         logger.warn({ ip, hasToken: !!token }, '[WS] authentication failed — invalid or missing token');
         ws.close(4001, 'Authentication failed: invalid or missing token');

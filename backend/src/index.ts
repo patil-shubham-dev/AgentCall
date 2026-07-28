@@ -13,6 +13,7 @@ import type { RouteOptions } from './routes.js';
 import { createSignalingServer } from './signaling/server.js';
 import { DefaultEventBus, createEventLoggerHook } from './event-bus/index.js';
 import type { EventBus } from './event-bus/index.js';
+import { initializePhoneTokens } from './voicebridge/phone-tokens.js';
 import { register as registerNotifications } from './voicebridge/notifications/index.js';
 import { register as registerPresence } from './voicebridge/presence/index.js';
 import { register as registerCalls } from './voicebridge/calls/index.js';
@@ -112,6 +113,9 @@ async function main() {
       idleTimeoutMillis: config.database.poolIdleTimeoutMs,
       connectionTimeoutMillis: config.database.poolAcquireTimeoutMs,
     });
+    pool.on('connect', (client) => {
+      client.query("SET statement_timeout = '5s'").catch(() => {});
+    });
     const dbSessionRepo = new DatabaseSessionRepository(pool);
     const dbCallbackRepo = new DatabaseCallbackRepository(pool);
 
@@ -130,6 +134,9 @@ async function main() {
         max: config.database.poolMax,
         idleTimeoutMillis: config.database.poolIdleTimeoutMs,
         connectionTimeoutMillis: config.database.poolAcquireTimeoutMs,
+      });
+      pool.on('connect', (client) => {
+        client.query("SET statement_timeout = '5s'").catch(() => {});
       });
       const dbSessionRepo = new DatabaseSessionRepository(pool);
       const dbCallbackRepo = new DatabaseCallbackRepository(pool);
@@ -159,6 +166,9 @@ async function main() {
   } else {
     logger.info({ persistenceMode }, '[startup] memory-only persistence');
   }
+
+  // Initialize phone tokens (database-backed if a pool exists, in-memory otherwise)
+  await initializePhoneTokens(pool);
 
   // Wrap repositories with instrumentation (timing + retry + slow-query logging)
   sessionRepository = new InstrumentedSessionRepository(sessionRepository, metrics);

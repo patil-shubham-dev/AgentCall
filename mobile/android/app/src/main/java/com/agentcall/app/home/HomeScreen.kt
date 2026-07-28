@@ -12,6 +12,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.PhoneCallback
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -437,7 +438,7 @@ private fun ReadyContent(
                     )
                 }
                 Icon(
-                    Icons.Default.PhoneCallback, "Waiting for incoming call",
+                    Icons.AutoMirrored.Filled.PhoneCallback, "Waiting for incoming call",
                     modifier = Modifier.size(36.dp),
                     tint = Indigo400.copy(alpha = 0.7f + waitingPulse * 0.3f),
                 )
@@ -514,7 +515,7 @@ private fun ReadyContent(
             ) {
                 Spacer(modifier = Modifier.weight(0.2f))
                 Icon(
-                    Icons.Default.PhoneCallback, "No recent calls",
+                    Icons.AutoMirrored.Filled.PhoneCallback, "No recent calls",
                     modifier = Modifier.size(40.dp),
                     tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
                 )
