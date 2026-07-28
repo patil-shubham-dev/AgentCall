@@ -6,6 +6,7 @@ import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import android.util.Log
+import com.agentcall.app.data.api.ApiClient
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -22,7 +23,7 @@ private const val TAG = "AgentCall"
 sealed class VoiceBridgeEvent {
     data class AiMessage(val callId: String, val messageId: String, val content: String) : VoiceBridgeEvent()
     data class CallbackScheduled(val callId: String, val delayMinutes: Int) : VoiceBridgeEvent()
-    data class CallIncoming(val callId: String, val reason: String, val summary: String) : VoiceBridgeEvent()
+    data class CallIncoming(val callId: String, val reason: String, val summary: String, val callerName: String) : VoiceBridgeEvent()
     data class CallEnded(val callId: String) : VoiceBridgeEvent()
     data class CallCancelled(val callId: String) : VoiceBridgeEvent()
     data class Connected(val userId: String) : VoiceBridgeEvent()
@@ -42,6 +43,7 @@ class SignalingClient @Inject constructor(
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var currentUserId: String = "solo-user"
 
+    @Volatile
     private var reconnectAttempt = 0
     private var networkCallback: ConnectivityNetworkCallback? = null
 
@@ -108,8 +110,8 @@ class SignalingClient @Inject constructor(
     }
 
     private suspend fun connectInternal() {
-        com.agentcall.app.data.api.ApiClient.ensurePhoneToken(currentUserId)
-        val url = com.agentcall.app.data.api.ApiClient.getWsUrl(currentUserId)
+        ApiClient.ensurePhoneToken(currentUserId)
+        val url = ApiClient.getWsUrl(currentUserId)
         Log.d(TAG, "[WS] connecting to $url")
         val request = Request.Builder().url(url).build()
 
@@ -180,8 +182,9 @@ class SignalingClient @Inject constructor(
                     val callId = payload?.getString("callId") ?: return
                     val reason = payload.optString("reason", "input_required")
                     val summary = payload.optString("summary", "")
-                    Log.d(TAG, "[WS] call_incoming callId=$callId reason=$reason")
-                    _events.emit(VoiceBridgeEvent.CallIncoming(callId, reason, summary))
+                    val callerName = payload.optString("callerName", "AI Agent")
+                    Log.d(TAG, "[WS] call_incoming callId=$callId reason=$reason callerName=$callerName")
+                    _events.emit(VoiceBridgeEvent.CallIncoming(callId, reason, summary, callerName))
                 }
                 "ai_message" -> {
                     val callId = payload?.getString("callId") ?: return

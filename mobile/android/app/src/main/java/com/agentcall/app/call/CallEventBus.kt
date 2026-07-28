@@ -4,15 +4,13 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 
-/**
- * Shared event bus that connects CallService (foreground service)
- * to CallViewModel (UI state). This avoids needing to bind the service
- * to the activity — both sides just emit/collect from this bus.
- */
 sealed class CallEvent {
     data class AiMessage(val text: String) : CallEvent()
     data class UserMessage(val text: String) : CallEvent()
+    data class UserTextSent(val text: String) : CallEvent()
     data object CallEnded : CallEvent()
+    data object AiSpeakingStarted : CallEvent()
+    data object AiSpeakingFinished : CallEvent()
 }
 
 object CallEventBus {

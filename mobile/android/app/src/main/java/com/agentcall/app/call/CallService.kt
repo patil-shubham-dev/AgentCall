@@ -16,6 +16,8 @@ import androidx.core.app.NotificationCompat
 import com.agentcall.app.R
 import com.agentcall.app.data.api.ApiClient
 import com.agentcall.app.data.api.ApiService
+import com.agentcall.app.data.database.dao.TranscriptMessageDao
+import com.agentcall.app.data.repository.CallRepository
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.*
 import java.util.Locale
@@ -26,6 +28,8 @@ import javax.inject.Inject
 class CallService : Service() {
 
     @Inject lateinit var signalingClient: SignalingClient
+    @Inject lateinit var transcriptDao: TranscriptMessageDao
+    @Inject lateinit var repository: CallRepository
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var wakeLock: PowerManager.WakeLock? = null
@@ -37,7 +41,7 @@ class CallService : Service() {
     @Volatile var isAiSpeaking = false
     @Volatile var isPaused = false
 
-    // Last AI message text, for the Repeat button
+    private var transcriptSequence = 0
     private var lastAiMessage: String = ""
 
     private var speechRecognizer: SpeechRecognizer? = null
@@ -58,23 +62,18 @@ class CallService : Service() {
                 textToSpeech?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
                     override fun onStart(utteranceId: String?) {
                         isAiSpeaking = true
-                        Log.d(TAG, "[TTS] start utteranceId=$utteranceId")
+                        CallEventBus.emit(CallEvent.AiSpeakingStarted)
                     }
 
                     override fun onDone(utteranceId: String?) {
                         isAiSpeaking = false
-                        Log.d(TAG, "[TTS] done utteranceId=$utteranceId")
-                        dispatchToListeners("ai_finished_speaking", null)
+                        CallEventBus.emit(CallEvent.AiSpeakingFinished)
                     }
 
                     override fun onError(utteranceId: String?) {
                         isAiSpeaking = false
-                        Log.e(TAG, "[TTS] error utteranceId=$utteranceId")
                     }
                 })
-                Log.d(TAG, "[TTS] engine initialized")
-            } else {
-                Log.e(TAG, "[TTS] engine initialization failed status=$status")
             }
         }
     }
@@ -89,9 +88,13 @@ class CallService : Service() {
         when (intent?.action) {
             ACTION_START_CALL -> {
                 val id = intent.getStringExtra(EXTRA_CALL_ID) ?: return START_NOT_STICKY
+                val callerName = intent.getStringExtra(EXTRA_CALLER_NAME) ?: "AI Agent"
                 callId = id
+                transcriptSequence = 0
                 startForeground(NOTIFICATION_ID_ONGOING, createOngoingCallNotification("AI Call"))
                 acquireWakeLock()
+                val agentId = callerName.lowercase().replace("\\s+".toRegex(), "-")
+                scope.launch { repository.markCallAnswered(id, agentId, callerName) }
                 startVoiceSession(id)
             }
             ACTION_START_RECORDING -> startRecording()
@@ -105,9 +108,31 @@ class CallService : Service() {
                     speakText(lastAiMessage)
                 }
             }
+            ACTION_SEND_TEXT -> {
+                val text = intent.getStringExtra(EXTRA_TEXT) ?: return START_NOT_STICKY
+                val cid = intent.getStringExtra(EXTRA_CALL_ID) ?: callId ?: return START_NOT_STICKY
+                scope.launch {
+                    try {
+                        api.sendUserText(cid, mapOf("text" to text))
+                        repository.saveUserTextMessage(cid, text)
+                    } catch (_: Exception) {}
+                }
+            }
             ACTION_END_CALL -> {
+                val cid = callId
+                if (cid != null) {
+                    scope.launch { repository.saveCallEnded(cid, "ended") }
+                }
                 endCall()
                 stopSelf()
+            }
+            "com.agentcall.action.CANCEL_CALL" -> {
+                val id = intent.getStringExtra(EXTRA_CALL_ID) ?: return START_NOT_STICKY
+                scope.launch {
+                    try {
+                        api.completeCall(id, mapOf("status" to "cancelled"))
+                    } catch (_: Exception) {}
+                }
             }
             "com.agentcall.action.SCHEDULE_CALLBACK" -> {
                 val id = intent.getStringExtra(EXTRA_CALL_ID) ?: return START_NOT_STICKY
@@ -137,46 +162,36 @@ class CallService : Service() {
     private fun startVoiceSession(callId: String) {
         scope.launch {
             try {
-                Log.d(TAG, "[HTTP] GET /calls/$callId")
                 val call = api.getCall(callId)
                 val summary = call.result?.userResponse ?: call.result?.transcriptSummary ?: call.messageCount?.let {
                     "Continuing our conversation."
                 } ?: "AI needs your input."
-                Log.d(TAG, "[WS] starting voice session callId=$callId")
                 speakTextOnMain(summary)
 
                 launch {
                     signalingClient.events.collect { event ->
-                        Log.d(TAG, "[WS] event: ${event::class.simpleName}")
                         when (event) {
                             is VoiceBridgeEvent.AiMessage -> {
-                                Log.d(TAG, "[WS] ai_message callId=${event.callId} text=${event.content.take(100)}")
                                 speakTextOnMain(event.content)
-                                dispatchToListeners("ai_message", Bundle().apply {
-                                    putString("text", event.content)
-                                })
                                 lastAiMessage = event.content
                                 CallEventBus.emit(CallEvent.AiMessage(event.content))
+                                repository.saveAiMessage(callId, event.content)
                             }
                             is VoiceBridgeEvent.CallEnded -> {
-                                Log.d(TAG, "[WS] call_ended callId=${event.callId}")
                                 CallEventBus.emit(CallEvent.CallEnded)
                                 speakTextOnMain("Call ended.")
+                                repository.saveCallEnded(callId, "ended")
                                 delay(1500); stopSelf()
                             }
                             is VoiceBridgeEvent.CallCancelled -> {
-                                Log.d(TAG, "[WS] call_cancelled callId=${event.callId}")
                                 CallEventBus.emit(CallEvent.CallEnded)
                                 speakTextOnMain("Call was cancelled.")
+                                repository.saveCallEnded(callId, "cancelled")
                                 delay(1500); stopSelf()
                             }
                             is VoiceBridgeEvent.Disconnected -> {
-                                Log.w(TAG, "[WS] disconnected from server")
                                 CallEventBus.emit(CallEvent.CallEnded)
                                 stopSelf()
-                            }
-                            is VoiceBridgeEvent.Error -> {
-                                Log.e(TAG, "[WS] error code=${event.code} message=${event.message}")
                             }
                             else -> {}
                         }
@@ -190,13 +205,12 @@ class CallService : Service() {
     }
 
     private fun startRecording() {
-        if (isRecording || speechRecognizer != null) { Log.w(TAG, "[STT] already recording"); return }
+        if (isRecording || speechRecognizer != null) return
         try {
             val recognizer = SpeechRecognizer.createSpeechRecognizer(this)
-            if (recognizer == null) { Log.w(TAG, "[STT] SpeechRecognizer not available"); return }
+            if (recognizer == null) return
             speechRecognizer = recognizer
             isRecording = true
-            Log.d(TAG, "[STT] recording started")
             updateNotification("Recording...")
 
             val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
@@ -211,12 +225,13 @@ class CallService : Service() {
                     isRecording = false
                     recognizer.destroy()
                     if (speechRecognizer == recognizer) speechRecognizer = null
-                    Log.d(TAG, "[STT] recording result: ${text?.take(100)}")
                     val currentCallId = callId
                     if (text != null && text.isNotBlank() && currentCallId != null) {
-                        scope.launch { processUserText(text, currentCallId) }
+                        scope.launch {
+                            processUserText(text, currentCallId)
+                            repository.saveUserTextMessage(currentCallId, text)
+                        }
                     } else {
-                        Log.w(TAG, "[STT] no text recognized")
                         updateNotification("Paused")
                     }
                 }
@@ -225,7 +240,6 @@ class CallService : Service() {
                     isRecording = false
                     recognizer.destroy()
                     if (speechRecognizer == recognizer) speechRecognizer = null
-                    Log.e(TAG, "[STT] recognition error code=$error")
                     speakText("Sorry, I didn't catch that.")
                     updateNotification("Paused")
                 }
@@ -247,9 +261,8 @@ class CallService : Service() {
     }
 
     private fun stopRecording() {
-        if (!isRecording) { Log.w(TAG, "[STT] stopRecording called but not recording"); return }
+        if (!isRecording) return
         isRecording = false
-        Log.d(TAG, "[STT] recording stopped, waiting for transcription")
         updateNotification("Processing...")
         try {
             speechRecognizer?.stopListening()
@@ -260,14 +273,12 @@ class CallService : Service() {
 
     private fun processUserText(text: String, callId: String) {
         sendUserTextToBackend(callId, text)
-        dispatchToListeners("user_transcript", Bundle().apply { putString("text", text) })
         CallEventBus.emit(CallEvent.UserMessage(text))
     }
 
     private fun sendUserTextToBackend(callId: String, text: String) {
         scope.launch {
             try {
-                Log.d(TAG, "[HTTP] POST /calls/$callId/user-text text=${text.take(100)}")
                 api.sendUserText(callId, mapOf("text" to text))
             } catch (e: Exception) {
                 Log.e(TAG, "[HTTP] POST /calls/$callId/user-text failed", e)
@@ -276,7 +287,6 @@ class CallService : Service() {
     }
 
     private fun endCall() {
-        Log.d(TAG, "[VOICE] ending call callId=$callId")
         signalingClient.disconnect()
         textToSpeech?.stop()
         releaseWakeLock()
@@ -330,6 +340,7 @@ class CallService : Service() {
         const val ACTION_STOP_RECORDING = "com.agentcall.action.STOP_RECORDING"
         const val ACTION_SPEAK = "com.agentcall.action.SPEAK"
         const val ACTION_REPEAT_LAST = "com.agentcall.action.REPEAT_LAST"
+        const val ACTION_SEND_TEXT = "com.agentcall.action.SEND_TEXT"
         const val ACTION_END_CALL = "com.agentcall.action.END_CALL"
         const val EXTRA_CALL_ID = "call_id"
         const val EXTRA_TEXT = "text"
@@ -353,7 +364,7 @@ class CallService : Service() {
 
             val notification = NotificationCompat.Builder(context, CHANNEL_INCOMING_CALL)
                 .setContentTitle("Incoming AI Call")
-                .setContentText(summary.ifBlank { "AI Agent is calling..." })
+                .setContentText(summary.ifBlank { "$callerName is calling..." })
                 .setSmallIcon(R.drawable.ic_agent)
                 .setColor(android.graphics.Color.parseColor("#6366F1"))
                 .setPriority(NotificationCompat.PRIORITY_HIGH)

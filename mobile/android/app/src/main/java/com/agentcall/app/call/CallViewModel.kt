@@ -4,6 +4,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.agentcall.app.data.api.ApiClient
 import com.agentcall.app.data.api.ApiService
+import com.agentcall.app.data.database.dao.TranscriptMessageDao
+import com.agentcall.app.data.repository.CallRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -39,12 +41,14 @@ data class ActiveCallUiState(
     val statusText: String = "Connecting...",
     val waveformLevels: List<Float> = List(40) { 0.08f },
     val peakWaveformLevel: Float = 0f,
+    val callId: String = "",
 )
 
 @HiltViewModel
-class CallViewModel @Inject constructor() : ViewModel() {
+class CallViewModel @Inject constructor(
+    private val repository: CallRepository,
+) : ViewModel() {
 
-    private val api: ApiService = ApiClient.create()
     private var messageCounter = 0
     private var callStartTime = 0L
 
@@ -53,10 +57,13 @@ class CallViewModel @Inject constructor() : ViewModel() {
 
     fun connect(callId: String) {
         callStartTime = System.currentTimeMillis()
+        _uiState.value = _uiState.value.copy(callId = callId)
+
         viewModelScope.launch {
             try {
+                val api: ApiService = ApiClient.create()
                 val call = api.getCall(callId)
-                val summary = call.result?.transcriptSummary ?: call.result?.userResponse ?: "AI needs your input."
+                val summary = call.result?.userResponse ?: call.result?.transcriptSummary ?: "AI needs your input."
                 _uiState.value = _uiState.value.copy(
                     isConnected = true,
                     statusText = "Connected",
@@ -70,13 +77,15 @@ class CallViewModel @Inject constructor() : ViewModel() {
             }
         }
 
-        // Listen for live call events from CallService (via the event bus)
         viewModelScope.launch {
             CallEventBus.events.collect { event ->
                 when (event) {
                     is CallEvent.AiMessage -> addAiMessage(event.text)
                     is CallEvent.UserMessage -> addUserTranscript(event.text)
+                    is CallEvent.UserTextSent -> addUserTranscript(event.text)
                     is CallEvent.CallEnded -> disconnect()
+                    is CallEvent.AiSpeakingStarted -> setAiSpeaking(true)
+                    is CallEvent.AiSpeakingFinished -> setAiSpeaking(false)
                 }
             }
         }
@@ -94,6 +103,10 @@ class CallViewModel @Inject constructor() : ViewModel() {
             statusText = "AI speaking",
             isAiSpeaking = true,
         )
+        val cid = _uiState.value.callId
+        if (cid.isNotBlank()) {
+            viewModelScope.launch { repository.saveAiMessage(cid, text) }
+        }
     }
 
     fun addUserTranscript(text: String) {
@@ -107,6 +120,35 @@ class CallViewModel @Inject constructor() : ViewModel() {
             isAiSpeaking = false,
             statusText = "You said: ${text.take(50)}",
         )
+        val cid = _uiState.value.callId
+        if (cid.isNotBlank()) {
+            viewModelScope.launch { repository.saveUserTextMessage(cid, text) }
+        }
+    }
+
+    fun sendTextMessage(text: String) {
+        if (text.isBlank()) return
+        val cid = _uiState.value.callId
+        if (cid.isBlank()) return
+
+        val msg = ChatBubble(
+            id = "user_${messageCounter++}",
+            role = "user",
+            text = text,
+        )
+        _uiState.value = _uiState.value.copy(
+            messages = _uiState.value.messages + msg,
+            statusText = "You typed: ${text.take(50)}",
+        )
+
+        viewModelScope.launch {
+            repository.saveUserTextMessage(cid, text)
+            try {
+                val api: ApiService = ApiClient.create()
+                api.sendUserText(cid, mapOf("text" to text))
+            } catch (_: Exception) {}
+            CallEventBus.emit(CallEvent.UserTextSent(text))
+        }
     }
 
     fun setPaused(paused: Boolean) {
@@ -145,6 +187,8 @@ class CallViewModel @Inject constructor() : ViewModel() {
             isConnected = false,
             statusText = "Disconnected",
             isAiSpeaking = false,
+            isRecording = false,
+            isProcessing = false,
         )
     }
 

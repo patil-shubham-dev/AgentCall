@@ -1,7 +1,15 @@
 package com.agentcall.app.di
 
 import android.app.Application
+import androidx.room.Room
 import com.agentcall.app.call.SignalingClient
+import com.agentcall.app.data.api.ApiClient
+import com.agentcall.app.data.api.ApiService
+import com.agentcall.app.data.database.AgentCallDatabase
+import com.agentcall.app.data.database.dao.AiProfileDao
+import com.agentcall.app.data.database.dao.CallRecordDao
+import com.agentcall.app.data.database.dao.TranscriptMessageDao
+import com.agentcall.app.data.repository.CallRepository
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -17,4 +25,39 @@ object AppModule {
     fun provideSignalingClient(app: Application): SignalingClient {
         return SignalingClient(app)
     }
+
+    @Provides
+    @Singleton
+    fun provideDatabase(app: Application): AgentCallDatabase {
+        return Room.databaseBuilder(
+            app,
+            AgentCallDatabase::class.java,
+            "agentcall.db"
+        ).fallbackToDestructiveMigration().build()
+    }
+
+    @Provides
+    @Singleton
+    fun provideAiProfileDao(db: AgentCallDatabase): AiProfileDao = db.aiProfileDao()
+
+    @Provides
+    @Singleton
+    fun provideCallRecordDao(db: AgentCallDatabase): CallRecordDao = db.callRecordDao()
+
+    @Provides
+    @Singleton
+    fun provideTranscriptMessageDao(db: AgentCallDatabase): TranscriptMessageDao = db.transcriptMessageDao()
+
+    @Provides
+    @Singleton
+    fun provideApiService(): ApiService = ApiClient.create()
+
+    @Provides
+    @Singleton
+    fun provideCallRepository(
+        profileDao: AiProfileDao,
+        callDao: CallRecordDao,
+        transcriptDao: TranscriptMessageDao,
+        api: ApiService,
+    ): CallRepository = CallRepository(profileDao, callDao, transcriptDao, api)
 }

@@ -19,6 +19,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.PhoneForwarded
 import androidx.compose.material.icons.automirrored.filled.VolumeDown
@@ -33,8 +35,10 @@ import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.*
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.app.ActivityCompat
@@ -81,6 +85,8 @@ fun ActiveCallScreen(
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val listState = rememberLazyListState()
     var showContext by remember { mutableStateOf(true) }
+    var textInput by remember { mutableStateOf("") }
+    val focusManager = LocalFocusManager.current
 
     LaunchedEffect(Unit) {
         viewModel.connect(callId)
@@ -107,7 +113,6 @@ fun ActiveCallScreen(
     val infiniteTransition = rememberInfiniteTransition(label = "pulse")
 
     Box(modifier = Modifier.fillMaxSize().background(Slate900)) {
-        // Ambient background
         AmbientBackground(
             accentColor = Indigo400,
             secondaryColor = Indigo600,
@@ -116,7 +121,6 @@ fun ActiveCallScreen(
         )
 
         Column(modifier = Modifier.fillMaxSize()) {
-            // ── Status Bar ─────────────────────────────
             Row(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -129,12 +133,10 @@ fun ActiveCallScreen(
                 Text(state.statusText, style = MaterialTheme.typography.labelSmall,
                     color = if (state.isConnected) Green500 else Amber400,
                     modifier = Modifier.weight(1f))
-
                 Text(timerText, fontSize = 18.sp, fontFamily = FontFamily.Monospace,
                     fontWeight = FontWeight.Light, color = Slate50, letterSpacing = 1.sp)
             }
 
-            // ── Context Banner ─────────────────────────
             AnimatedVisibility(visible = showContext && state.callContext.summary.isNotBlank(),
                 enter = slideInVertically(animationSpec = spring(dampingRatio = 0.8f)) + fadeIn(),
                 exit = slideOutVertically() + fadeOut()) {
@@ -158,7 +160,7 @@ fun ActiveCallScreen(
                 }
             }
 
-            // ── Chat Messages ──────────────────────────
+            // Transcript Messages
             LazyColumn(
                 state = listState,
                 modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 16.dp),
@@ -171,52 +173,7 @@ fun ActiveCallScreen(
 
                 if (state.isAiSpeaking && state.messages.isNotEmpty()) {
                     item(key = "typing") {
-                        Row(
-                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            val avatarGradient = Brush.linearGradient(listOf(GradientBrandStart, GradientBrandEnd))
-                            Surface(
-                                modifier = Modifier.size(28.dp),
-                                shape = CircleShape,
-                                color = Color.Transparent,
-                            ) {
-                                Box(
-                                    modifier = Modifier.size(28.dp).clip(CircleShape).background(avatarGradient),
-                                    contentAlignment = Alignment.Center,
-                                ) {
-                                    Icon(Icons.Default.SmartToy, "AI", modifier = Modifier.size(14.dp), tint = Slate50)
-                                }
-                            }
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Surface(
-                                shape = RoundedCornerShape(4.dp, 16.dp, 16.dp, 16.dp),
-                                color = Slate800,
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                ) {
-                                    repeat(3) { i ->
-                                        val dotDelay by rememberInfiniteTransition(label = "dot$i").animateFloat(
-                                            0f, 1f,
-                                            infiniteRepeatable(
-                                                tween(1200, delayMillis = i * 200, easing = EaseInOutSine),
-                                                RepeatMode.Reverse,
-                                            ),
-                                            label = "dotAnim$i"
-                                        )
-                                        Box(
-                                            modifier = Modifier
-                                                .size(8.dp)
-                                                .clip(CircleShape)
-                                                .background(Indigo400.copy(alpha = 0.3f + dotDelay * 0.7f)),
-                                        )
-                                        if (i < 2) Spacer(modifier = Modifier.width(6.dp))
-                                    }
-                                }
-                            }
-                        }
+                        TypingIndicator()
                     }
                 }
 
@@ -238,78 +195,139 @@ fun ActiveCallScreen(
                 }
             }
 
-            // ── Waveform Visualization ─────────────────
+            // Waveform
             WaveformBar(
                 levels = state.waveformLevels,
                 isActive = state.isRecording || state.isAiSpeaking,
                 isRecording = state.isRecording,
             )
 
-            Spacer(modifier = Modifier.height(8.dp))
-
-            // ── Control Buttons ────────────────────────
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 32.dp),
-                horizontalArrangement = Arrangement.SpaceEvenly,
-                verticalAlignment = Alignment.CenterVertically,
+            // Text Input + Controls
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                color = Slate900.copy(alpha = 0.95f),
+                tonalElevation = 0.dp,
             ) {
-                CallControl(
-                    icon = if (state.isRecording) Icons.Default.StopCircle else Icons.Default.Mic,
-                    label = if (state.isRecording) "Stop" else "Record",
-                    tint = if (state.isRecording) Red400 else Slate50,
-                    bgColor = if (state.isRecording) GlassRed else GlassWhite,
-                    bgGradient = if (state.isRecording) listOf(Red400.copy(alpha = 0.2f), Red500.copy(alpha = 0.1f)) else null,
-                    onClick = {
-                        context.startService(Intent(context, CallService::class.java).apply {
-                            action = if (state.isRecording) CallService.ACTION_STOP_RECORDING
-                            else CallService.ACTION_START_RECORDING
-                        })
-                        viewModel.setRecording(!state.isRecording)
-                    })
+                Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+                    // Text input row
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        OutlinedTextField(
+                            value = textInput,
+                            onValueChange = { textInput = it },
+                            modifier = Modifier.weight(1f),
+                            placeholder = { Text("Type your answer...", color = Slate400) },
+                            singleLine = false,
+                            maxLines = 2,
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = Indigo400,
+                                unfocusedBorderColor = Slate700,
+                                cursorColor = Indigo400,
+                                focusedTextColor = Slate50,
+                                unfocusedTextColor = Slate50,
+                                focusedContainerColor = Slate800,
+                                unfocusedContainerColor = Slate800,
+                            ),
+                            shape = RoundedCornerShape(12.dp),
+                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                            keyboardActions = KeyboardActions(
+                                onSend = {
+                                    if (textInput.isNotBlank()) {
+                                        viewModel.sendTextMessage(textInput.trim())
+                                        textInput = ""
+                                        focusManager.clearFocus()
+                                    }
+                                }
+                            ),
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        FilledIconButton(
+                            onClick = {
+                                if (textInput.isNotBlank()) {
+                                    viewModel.sendTextMessage(textInput.trim())
+                                    textInput = ""
+                                    focusManager.clearFocus()
+                                }
+                            },
+                            modifier = Modifier.size(48.dp),
+                            shape = CircleShape,
+                            colors = IconButtonDefaults.filledIconButtonColors(
+                                containerColor = Indigo600,
+                                contentColor = Slate50,
+                            ),
+                            enabled = textInput.isNotBlank(),
+                        ) {
+                            Icon(Icons.Default.Send, "Send")
+                        }
+                    }
 
-                var isSpeakerOn by remember { mutableStateOf(false) }
-                CallControl(
-                    icon = if (isSpeakerOn) Icons.AutoMirrored.Filled.VolumeUp else Icons.AutoMirrored.Filled.VolumeDown,
-                    label = if (isSpeakerOn) "Speaker On" else "Speaker",
-                    tint = if (isSpeakerOn) Indigo400 else Slate50,
-                    bgColor = if (isSpeakerOn) GlassIndigo else GlassWhite,
-                    onClick = {
-                        val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as android.media.AudioManager
-                        audioManager.isSpeakerphoneOn = !audioManager.isSpeakerphoneOn
-                        isSpeakerOn = !isSpeakerOn
-                    })
+                    Spacer(modifier = Modifier.height(8.dp))
 
-                CallControl(
-                    icon = Icons.Default.Replay, label = "Repeat",
-                    tint = Slate50, bgColor = GlassWhite, onClick = {
-                        context.startService(Intent(context, CallService::class.java).apply {
-                            action = CallService.ACTION_REPEAT_LAST
-                        })
-                    })
-            }
+                    // Control buttons row
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceEvenly,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        CallControl(
+                            icon = if (state.isRecording) Icons.Default.StopCircle else Icons.Default.Mic,
+                            label = if (state.isRecording) "Stop" else "Record",
+                            tint = if (state.isRecording) Red400 else Slate50,
+                            bgColor = if (state.isRecording) GlassRed else GlassWhite,
+                            onClick = {
+                                context.startService(Intent(context, CallService::class.java).apply {
+                                    action = if (state.isRecording) CallService.ACTION_STOP_RECORDING
+                                    else CallService.ACTION_START_RECORDING
+                                })
+                                viewModel.setRecording(!state.isRecording)
+                            })
 
-            Spacer(modifier = Modifier.height(20.dp))
+                        var isSpeakerOn by remember { mutableStateOf(false) }
+                        CallControl(
+                            icon = if (isSpeakerOn) Icons.AutoMirrored.Filled.VolumeUp else Icons.AutoMirrored.Filled.VolumeDown,
+                            label = if (isSpeakerOn) "Speaker" else "Speaker",
+                            tint = if (isSpeakerOn) Indigo400 else Slate50,
+                            bgColor = if (isSpeakerOn) GlassIndigo else GlassWhite,
+                            onClick = {
+                                val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as android.media.AudioManager
+                                audioManager.isSpeakerphoneOn = !audioManager.isSpeakerphoneOn
+                                isSpeakerOn = !isSpeakerOn
+                            })
 
-            // ── End Call Button ────────────────────────
-            Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
-                var isPressed by remember { mutableStateOf(false) }
-                val pressScale by animateFloatAsState(
-                    targetValue = if (isPressed) 0.92f else 1f,
-                    animationSpec = spring(dampingRatio = 0.5f, stiffness = 800f), label = "endCallPress"
-                )
-                Button(
-                    onClick = onEndCall,
-                    modifier = Modifier.size(64.dp).scale(pressScale), shape = CircleShape,
-                    colors = ButtonDefaults.buttonColors(containerColor = Red500),
-                    contentPadding = PaddingValues(0.dp),
-                    interactionSource = remember { MutableInteractionSource() },
-                ) {
-                    Icon(Icons.AutoMirrored.Filled.PhoneForwarded, "End", modifier = Modifier.size(26.dp), tint = Slate50)
+                        CallControl(
+                            icon = Icons.Default.Replay, label = "Repeat",
+                            tint = Slate50, bgColor = GlassWhite, onClick = {
+                                context.startService(Intent(context, CallService::class.java).apply {
+                                    action = CallService.ACTION_REPEAT_LAST
+                                })
+                            })
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    // End Call Button
+                    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
+                        var isPressed by remember { mutableStateOf(false) }
+                        val pressScale by animateFloatAsState(
+                            targetValue = if (isPressed) 0.92f else 1f,
+                            animationSpec = spring(dampingRatio = 0.5f, stiffness = 800f), label = "endCallPress"
+                        )
+                        Button(
+                            onClick = onEndCall,
+                            modifier = Modifier.size(56.dp).scale(pressScale), shape = CircleShape,
+                            colors = ButtonDefaults.buttonColors(containerColor = Red500),
+                            contentPadding = PaddingValues(0.dp),
+                            interactionSource = remember { MutableInteractionSource() },
+                        ) {
+                            Icon(Icons.AutoMirrored.Filled.PhoneForwarded, "End", modifier = Modifier.size(24.dp), tint = Slate50)
+                        }
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text("End", style = MaterialTheme.typography.labelSmall, color = Red400, fontWeight = FontWeight.Medium)
+                    }
                 }
-                Text("End", style = MaterialTheme.typography.labelSmall, color = Red400, fontWeight = FontWeight.Medium)
             }
-
-            Spacer(modifier = Modifier.height(16.dp))
         }
     }
 }
@@ -334,7 +352,6 @@ private fun MessageBubble(msg: ChatBubble, isAi: Boolean) {
             horizontalArrangement = if (isAi) Arrangement.Start else Arrangement.End,
         ) {
             if (isAi) {
-                // AI avatar
                 val avatarGradient = Brush.linearGradient(listOf(GradientBrandStart, GradientBrandEnd))
                 Surface(
                     modifier = Modifier.size(32.dp),
@@ -372,7 +389,6 @@ private fun MessageBubble(msg: ChatBubble, isAi: Boolean) {
 
             if (!isAi) {
                 Spacer(modifier = Modifier.width(8.dp))
-                // User avatar
                 Box(
                     modifier = Modifier.size(32.dp).clip(CircleShape).background(Slate700),
                     contentAlignment = Alignment.Center,
@@ -385,17 +401,44 @@ private fun MessageBubble(msg: ChatBubble, isAi: Boolean) {
 }
 
 @Composable
+private fun TypingIndicator() {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        val avatarGradient = Brush.linearGradient(listOf(GradientBrandStart, GradientBrandEnd))
+        Surface(modifier = Modifier.size(28.dp), shape = CircleShape, color = Color.Transparent) {
+            Box(modifier = Modifier.size(28.dp).clip(CircleShape).background(avatarGradient),
+                contentAlignment = Alignment.Center) {
+                Icon(Icons.Default.SmartToy, "AI", modifier = Modifier.size(14.dp), tint = Slate50)
+            }
+        }
+        Spacer(modifier = Modifier.width(8.dp))
+        Surface(shape = RoundedCornerShape(4.dp, 16.dp, 16.dp, 16.dp), color = Slate800) {
+            Row(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically) {
+                repeat(3) { i ->
+                    val dotDelay by rememberInfiniteTransition(label = "dot$i").animateFloat(0f, 1f,
+                        infiniteRepeatable(tween(1200, delayMillis = i * 200, easing = EaseInOutSine), RepeatMode.Reverse),
+                        label = "dotAnim$i")
+                    Box(modifier = Modifier.size(8.dp).clip(CircleShape)
+                        .background(Indigo400.copy(alpha = 0.3f + dotDelay * 0.7f)))
+                    if (i < 2) Spacer(modifier = Modifier.width(6.dp))
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun WaveformBar(levels: List<Float>, isActive: Boolean, isRecording: Boolean) {
     val infiniteTransition = rememberInfiniteTransition(label = "waveformGlow")
     val glowAlpha by infiniteTransition.animateFloat(0.4f, 0.8f,
         infiniteRepeatable(tween(1000, easing = EaseInOutSine), RepeatMode.Reverse), label = "glow")
 
-    val waveformColor = when {
-        isRecording -> WaveformActive
-        else -> WaveformActive
-    }
+    val waveformColor = WaveformActive
 
-    Canvas(modifier = Modifier.fillMaxWidth().height(50.dp).padding(horizontal = 20.dp)) {
+    Canvas(modifier = Modifier.fillMaxWidth().height(40.dp).padding(horizontal = 20.dp)) {
         val barWidth = size.width / (levels.size * 2 - 1)
         val centerY = size.height / 2
         levels.forEachIndexed { i, level ->
@@ -416,7 +459,7 @@ private fun WaveformBar(levels: List<Float>, isActive: Boolean, isRecording: Boo
 @Composable
 private fun CallControl(
     icon: ImageVector, label: String, tint: Color, bgColor: Color,
-    bgGradient: List<Color>? = null, onClick: () -> Unit,
+    onClick: () -> Unit,
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val isPressed by interactionSource.collectIsPressedAsState()
@@ -425,24 +468,13 @@ private fun CallControl(
         animationSpec = spring(dampingRatio = 0.5f, stiffness = 800f), label = "callControlPress"
     )
 
-    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Surface(
-            onClick = onClick,
-            shape = CircleShape,
-            color = bgColor,
-            tonalElevation = 0.dp,
-            interactionSource = interactionSource,
+            onClick = onClick, shape = CircleShape, color = bgColor,
+            tonalElevation = 0.dp, interactionSource = interactionSource,
         ) {
-            Box(
-                modifier = Modifier.size(52.dp).scale(pressScale),
-                contentAlignment = Alignment.Center,
-            ) {
-                if (bgGradient != null) {
-                    Canvas(modifier = Modifier.fillMaxSize()) {
-                        drawCircle(Brush.linearGradient(bgGradient))
-                    }
-                }
-                Icon(icon, label, modifier = Modifier.size(24.dp), tint = tint)
+            Box(modifier = Modifier.size(48.dp).scale(pressScale), contentAlignment = Alignment.Center) {
+                Icon(icon, label, modifier = Modifier.size(22.dp), tint = tint)
             }
         }
         Text(label, style = MaterialTheme.typography.labelSmall, color = Slate400)

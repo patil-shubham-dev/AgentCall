@@ -40,4 +40,7 @@ interface ApiService {
         @Path("callId") callId: String,
         @Body body: Map<String, String>,
     ): UserTextResponse
+
+    @GET("calls/{callId}/transcript")
+    suspend fun getTranscript(@Path("callId") callId: String): TranscriptResponse
 }
