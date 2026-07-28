@@ -50,7 +50,7 @@ jobs:
         run: npm ci
       - name: Run tests
         working-directory: backend
-        run: npx vitest run --coverage
+        run: npx vitest run
         env:
           POSTGRES_PASSWORD: test
           REDIS_PASSWORD: test
