@@ -25,6 +25,7 @@ import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
+import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.navArgument
 import com.agentcall.app.call.CallActivity
 import com.agentcall.app.home.HomeScreen
@@ -85,9 +86,14 @@ fun MainApp(onCallClicked: (String) -> Unit = {}) {
     val navController = rememberNavController()
     var selectedIndex by remember { mutableIntStateOf(0) }
 
-    val currentRoute = navController.currentDestination?.route
+    val navBackStackEntry by navController.currentBackStackEntryAsState()
+    val currentRoute = navBackStackEntry?.destination?.route
 
     val showBottomBar = currentRoute in listOf("home", "settings")
+
+    LaunchedEffect(currentRoute) {
+        selectedIndex = navItems.indexOfFirst { it.route == currentRoute }.coerceAtLeast(0)
+    }
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
