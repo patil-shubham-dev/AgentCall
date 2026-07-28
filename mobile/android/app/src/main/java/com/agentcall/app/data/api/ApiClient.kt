@@ -20,7 +20,8 @@ data class PhoneTokenResponse(
     @SerialName("user_id") val userId: String,
 )
 
-data class PhoneTokenRequest(val user_id: String = "solo-user")
+@Serializable
+data class PhoneTokenRequest(@SerialName("user_id") val userId: String = "solo-user")
 
 interface PhoneApi {
     @POST("phone/token")
