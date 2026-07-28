@@ -21,6 +21,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.PhoneForwarded
+import androidx.compose.material.icons.automirrored.filled.VolumeDown
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -266,7 +267,7 @@ fun ActiveCallScreen(
 
                 var isSpeakerOn by remember { mutableStateOf(false) }
                 CallControl(
-                    icon = if (isSpeakerOn) Icons.AutoMirrored.Filled.VolumeUp else Icons.Default.VolumeDown,
+                    icon = if (isSpeakerOn) Icons.AutoMirrored.Filled.VolumeUp else Icons.AutoMirrored.Filled.VolumeDown,
                     label = if (isSpeakerOn) "Speaker On" else "Speaker",
                     tint = if (isSpeakerOn) Indigo400 else Slate50,
                     bgColor = if (isSpeakerOn) GlassIndigo else GlassWhite,
