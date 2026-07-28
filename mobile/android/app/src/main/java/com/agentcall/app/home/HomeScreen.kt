@@ -251,7 +251,7 @@ fun HomeScreen(
                                         color = Green400,
                                     )
                                 }
-                                Icon(Icons.Default.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Icon(Icons.Default.ChevronRight, "Open active call", tint = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
                         }
                         Spacer(modifier = Modifier.height(16.dp))
@@ -334,7 +334,7 @@ private fun DisconnectedContent(waitingScale: Float, waitingPulse: Float) {
             contentAlignment = Alignment.Center,
         ) {
             Icon(
-                Icons.Default.WifiOff, null,
+                Icons.Default.WifiOff, "Disconnected from server",
                 modifier = Modifier.size(36.dp),
                 tint = Red400.copy(alpha = 0.7f + waitingPulse * 0.3f),
             )
@@ -377,7 +377,7 @@ private fun ReconnectingContent(waitingScale: Float, waitingPulse: Float) {
             contentAlignment = Alignment.Center,
         ) {
             Icon(
-                Icons.Default.Sync, null,
+                Icons.Default.Sync, "Reconnecting to server",
                 modifier = Modifier.size(36.dp),
                 tint = Amber400.copy(alpha = 0.7f + waitingPulse * 0.3f),
             )
@@ -437,7 +437,7 @@ private fun ReadyContent(
                     )
                 }
                 Icon(
-                    Icons.Default.PhoneCallback, null,
+                    Icons.Default.PhoneCallback, "Waiting for incoming call",
                     modifier = Modifier.size(36.dp),
                     tint = Indigo400.copy(alpha = 0.7f + waitingPulse * 0.3f),
                 )
@@ -486,7 +486,7 @@ private fun ReadyContent(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Icon(Icons.Default.History, null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                Icon(Icons.Default.History, "Recent calls history", modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
                 Spacer(modifier = Modifier.width(6.dp))
                 Text(
                     "Recent Calls",
@@ -514,7 +514,7 @@ private fun ReadyContent(
             ) {
                 Spacer(modifier = Modifier.weight(0.2f))
                 Icon(
-                    Icons.Default.PhoneCallback, null,
+                    Icons.Default.PhoneCallback, "No recent calls",
                     modifier = Modifier.size(40.dp),
                     tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
                 )
@@ -583,7 +583,7 @@ private fun RecentCallCard(call: RecentCallEntry, onCallClicked: (String) -> Uni
                         .background(statusColor.copy(alpha = 0.12f)),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Icon(statusIcon, null, modifier = Modifier.size(18.dp), tint = statusColor)
+                    Icon(statusIcon, "Call status: ${call.status}", modifier = Modifier.size(18.dp), tint = statusColor)
                 }
                 Spacer(modifier = Modifier.width(10.dp))
                 Column(modifier = Modifier.weight(1f)) {
@@ -599,7 +599,7 @@ private fun RecentCallCard(call: RecentCallEntry, onCallClicked: (String) -> Uni
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-                Icon(Icons.Default.ChevronRight, null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f))
+                Icon(Icons.Default.ChevronRight, "View call details", modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f))
             }
         }
     }

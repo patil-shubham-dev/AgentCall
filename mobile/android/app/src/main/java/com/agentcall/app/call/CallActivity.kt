@@ -139,7 +139,7 @@ fun ActiveCallScreen(
                     tonalElevation = 4.dp
                 ) {
                     Row(modifier = Modifier.padding(14.dp), verticalAlignment = Alignment.Top) {
-                        Icon(Icons.Default.Info, null, modifier = Modifier.size(18.dp), tint = Indigo300)
+                        Icon(Icons.Default.Info, "AI calling about", modifier = Modifier.size(18.dp), tint = Indigo300)
                         Spacer(modifier = Modifier.width(10.dp))
                         Column {
                             Text("AI is calling about:",
@@ -171,7 +171,7 @@ fun ActiveCallScreen(
                             shape = RoundedCornerShape(12.dp), color = Amber400.copy(alpha = 0.12f),
                         ) {
                             Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Default.PauseCircle, null, tint = Amber400,
+                                Icon(Icons.Default.PauseCircle, "Call paused", tint = Amber400,
                                     modifier = Modifier.size(20.dp))
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Text("Call paused — press Record when you're ready",
@@ -284,7 +284,7 @@ private fun MessageBubble(msg: ChatBubble, isAi: Boolean) {
                         modifier = Modifier.size(28.dp).clip(CircleShape).background(avatarGradient),
                         contentAlignment = Alignment.Center,
                     ) {
-                        Icon(Icons.Default.SmartToy, null, modifier = Modifier.size(16.dp), tint = Slate50)
+                        Icon(Icons.Default.SmartToy, "AI avatar", modifier = Modifier.size(16.dp), tint = Slate50)
                     }
                 }
                 Spacer(modifier = Modifier.width(8.dp))
@@ -316,7 +316,7 @@ private fun MessageBubble(msg: ChatBubble, isAi: Boolean) {
                     modifier = Modifier.size(32.dp).clip(CircleShape).background(Slate700),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Icon(Icons.Default.Person, null, modifier = Modifier.size(18.dp), tint = Slate400)
+                    Icon(Icons.Default.Person, "You", modifier = Modifier.size(18.dp), tint = Slate400)
                 }
             }
         }
