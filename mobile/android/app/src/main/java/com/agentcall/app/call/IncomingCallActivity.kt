@@ -231,7 +231,7 @@ fun IncomingCallScreen(
                             radius = size.minDimension / 2 * 0.85f,
                         )
                     }
-                    Icon(Icons.Default.Call, null, modifier = Modifier.size(54.dp), tint = Slate50)
+                    Icon(Icons.Default.Call, "Incoming call", modifier = Modifier.size(54.dp), tint = Slate50)
                 }
             }
 
@@ -257,7 +257,7 @@ fun IncomingCallScreen(
                     color = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f),
                 ) {
                     Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.Top) {
-                        Icon(Icons.Default.Info, null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Icon(Icons.Default.Info, "Call context", modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
                         Spacer(modifier = Modifier.width(10.dp))
                         Text(
                             contextSummary,

@@ -223,7 +223,7 @@ fun SettingsScreen(
                             singleLine = true,
                             placeholder = { Text("dydcghsn0my6-production-qgbb8wql.australia-southeast1.suga.run", color = MaterialTheme.colorScheme.onSurfaceVariant) },
                             leadingIcon = {
-                                Icon(Icons.Default.Computer, null, tint = Indigo400, modifier = Modifier.size(20.dp))
+                                Icon(Icons.Default.Computer, "Server address", tint = Indigo400, modifier = Modifier.size(20.dp))
                             },
                             keyboardOptions = KeyboardOptions(
                                 keyboardType = KeyboardType.Uri,
@@ -257,7 +257,7 @@ fun SettingsScreen(
                                 shape = RoundedCornerShape(12.dp),
                                 colors = ButtonDefaults.buttonColors(containerColor = Indigo600),
                             ) {
-                                Icon(Icons.Default.Wifi, null, modifier = Modifier.size(18.dp))
+                                Icon(Icons.Default.Wifi, "Connect to server", modifier = Modifier.size(18.dp))
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Text("Connect")
                             }
@@ -285,7 +285,7 @@ fun SettingsScreen(
                         Spacer(modifier = Modifier.height(12.dp))
 
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.Speed, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(18.dp))
+                            Icon(Icons.Default.Speed, "Test connection speed", tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(18.dp))
                             Spacer(modifier = Modifier.width(8.dp))
                             Text("Test Connection",
                                 style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurface,
@@ -315,14 +315,14 @@ fun SettingsScreen(
                                     }
                                     ConnectionTestStatus.SUCCESS -> {
                                         Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Icon(Icons.Default.CheckCircle, null, tint = Green400, modifier = Modifier.size(18.dp))
+                                            Icon(Icons.Default.CheckCircle, "Connection test passed", tint = Green400, modifier = Modifier.size(18.dp))
                                             Spacer(modifier = Modifier.width(4.dp))
                                             Text("${testLatency}ms", style = MaterialTheme.typography.labelSmall, color = Green400)
                                         }
                                     }
                                     ConnectionTestStatus.FAILED -> {
                                         Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Icon(Icons.Default.Error, null, tint = Red400, modifier = Modifier.size(18.dp))
+                                            Icon(Icons.Default.Error, "Connection test failed", tint = Red400, modifier = Modifier.size(18.dp))
                                             Spacer(modifier = Modifier.width(4.dp))
                                             Text("Failed", style = MaterialTheme.typography.labelSmall, color = Red400)
                                         }
@@ -506,7 +506,7 @@ private fun InfoRow(
                 }
             }
             if (onClick != null) {
-                Icon(Icons.Default.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f), modifier = Modifier.size(18.dp))
+                Icon(Icons.Default.ChevronRight, if (title != null) "View $title" else "Navigate", tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f), modifier = Modifier.size(18.dp))
             }
         }
     }
