@@ -88,7 +88,7 @@ class SignalingClient @Inject constructor(
 
     private class ConnectivityNetworkCallback(
         private val client: SignalingClient,
-    ) : NetworkCallback() {
+    ) : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) {
             Log.d(TAG, "[NET] network available $network")
             client.onNetworkAvailable()
