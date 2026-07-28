@@ -30,6 +30,8 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
+import com.agentcall.app.call.SignalingClient
+import com.agentcall.app.call.SignalingClient.ConnectionState
 import com.agentcall.app.data.api.ApiClient
 import com.agentcall.app.ui.composables.AmbientBackground
 import com.agentcall.app.ui.theme.*
@@ -48,11 +50,13 @@ enum class ConnectionTestStatus {
 }
 
 @HiltViewModel
-class SettingsViewModel @Inject constructor() : ViewModel() {
+class SettingsViewModel @Inject constructor(
+    private val signalingClient: SignalingClient,
+) : ViewModel() {
     private val _serverHost = MutableStateFlow(ApiClient.serverHost)
     val serverHost: StateFlow<String> = _serverHost.asStateFlow()
 
-    private val _connectionStatus = MutableStateFlow("Connected")
+    private val _connectionStatus = MutableStateFlow("Checking...")
     val connectionStatus: StateFlow<String> = _connectionStatus.asStateFlow()
 
     private val _testStatus = MutableStateFlow(ConnectionTestStatus.IDLE)
@@ -61,6 +65,19 @@ class SettingsViewModel @Inject constructor() : ViewModel() {
     private val _testLatency = MutableStateFlow(0L)
     val testLatency: StateFlow<Long> = _testLatency.asStateFlow()
 
+    init {
+        viewModelScope.launch {
+            signalingClient.connectionState.collect { state ->
+                _connectionStatus.value = when (state) {
+                    ConnectionState.CONNECTED -> "Connected"
+                    ConnectionState.CONNECTING -> "Connecting..."
+                    ConnectionState.RECONNECTING -> "Reconnecting..."
+                    ConnectionState.DISCONNECTED -> "Disconnected"
+                }
+            }
+        }
+    }
+
     fun updateServerHost(host: String) {
         _serverHost.value = host
     }
@@ -68,7 +85,6 @@ class SettingsViewModel @Inject constructor() : ViewModel() {
     fun connect() {
         val host = _serverHost.value.trim().ifBlank { ApiClient.serverHost }
         ApiClient.setServerHost(host)
-        _connectionStatus.value = "Reconnecting\u2026"
         com.agentcall.app.home.ServerConfigEvent.reconnectRequests.value++
     }
 
@@ -378,7 +394,7 @@ fun SettingsScreen(
                         InfoRow(
                             icon = Icons.Default.Cloud,
                             title = "Connection Type",
-                            subtitle = "Local WiFi",
+                            subtitle = if (Regex("^[\\d.]+$").matches(serverHost)) "Local Network ($serverHost)" else "Production ($serverHost)",
                         )
                     }
                 }
