@@ -15,13 +15,26 @@ const ALLOWED_ORIGINS = [
 ];
 
 /**
- * Check if the request includes a valid API key.
+ * Check if the request includes a valid API key (via header or URL path).
+ * Supports two methods:
+ *   - x-api-key header (used by Claude Desktop, Claude Code, curl, etc.)
+ *   - URL path segment (used by ChatGPT Developer Mode, which doesn't support custom headers)
  * If MCP_API_KEY is not set (empty string), auth is skipped (dev mode).
  */
 function checkApiKey(req: http.IncomingMessage): boolean {
-  if (!config.mcpApiKey) return true; // No key configured = skip auth
-  const apiKey = req.headers['x-api-key'] as string | undefined;
-  return apiKey === config.mcpApiKey;
+  if (!config.mcpApiKey) return true;
+
+  // 1. Check x-api-key header (Claude, curl, etc.)
+  const headerKey = req.headers['x-api-key'] as string | undefined;
+  if (headerKey === config.mcpApiKey) return true;
+
+  // 2. Check URL path segments for embedded key
+  //    ChatGPT connector URL format: https://.../mcp/<API_KEY>
+  const url = new URL(req.url ?? '/', 'http://localhost');
+  const segments = url.pathname.split('/').filter(Boolean);
+  if (segments.some((s) => s === config.mcpApiKey)) return true;
+
+  return false;
 }
 
 function setCorsHeaders(res: http.ServerResponse, origin: string): void {
@@ -71,8 +84,8 @@ export async function startSSEServer(server: Server): Promise<void> {
         auth_required: !!config.mcpApiKey,
         transport: 'streamable-http',
         endpoints: {
-          mcp: 'POST / (ChatGPT Streamable HTTP) or POST /message?sessionId=xxx (SSE)',
-          sse: 'GET /sse (establish SSE stream)',
+          chatgpt: 'POST /mcp/<API_KEY> (ChatGPT Developer Mode connector URL)',
+          claude: 'POST / (with x-api-key header) or GET /sse (SSE stream)',
           health: 'GET /health',
         },
       }));
@@ -82,7 +95,14 @@ export async function startSSEServer(server: Server): Promise<void> {
     // All other routes require API key auth
     if (!checkApiKey(req)) {
       res.writeHead(401, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: 'UNAUTHORIZED', message: 'Invalid or missing API key. Provide it via the x-api-key header.' }));
+      res.end(JSON.stringify({
+        error: 'UNAUTHORIZED',
+        message: 'Invalid or missing API key.',
+        auth_methods: [
+          'x-api-key header (Claude Desktop, Claude Code, curl)',
+          'URL path segment: https://host/mcp/<API_KEY> (ChatGPT Developer Mode)',
+        ],
+      }));
       return;
     }
 
