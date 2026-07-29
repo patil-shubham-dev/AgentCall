@@ -285,6 +285,37 @@ export function registerRoutes(app: FastifyInstance, opts: RouteOptions): void {
     };
   });
 
+  app.get('/api/v1/calls/:callId/pending-reply', {
+    config: { rateLimit: { max: 60, timeWindow: '10 seconds' } },
+  }, async (request) => {
+    const { callId } = request.params as { callId: string };
+    const after = (request.query as { after?: string }).after;
+    const session = await voicebridge.getCall(callId);
+    if (!session) {
+      return { error: 'NOT_FOUND', message: 'Call not found' };
+    }
+
+    if (session.status === 'completed' || session.status === 'cancelled') {
+      return { reply: null, call_status: session.status };
+    }
+
+    const afterIndex = after ? session.messages.findIndex((m) => m.id === after) : -1;
+    const startIndex = afterIndex >= 0 ? afterIndex + 1 : 0;
+    const nextUserMessage = session.messages.slice(startIndex).find((m) => m.role === 'user');
+
+    if (nextUserMessage) {
+      return {
+        reply: {
+          id: nextUserMessage.id,
+          content: nextUserMessage.content,
+          created_at: nextUserMessage.createdAt,
+        },
+      };
+    }
+
+    return { reply: null };
+  });
+
   app.post('/api/v1/calls/:callId/complete', async (request, reply) => {
     const { callId } = request.params as { callId: string };
     const { result } = request.body as { result?: Record<string, unknown> };

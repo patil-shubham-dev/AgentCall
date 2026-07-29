@@ -173,10 +173,86 @@ export const cancelCallTool = {
   },
 };
 
+export const sendMessageAndWaitTool = {
+  name: 'send_message_and_wait',
+  description: 'Send a text message to the human during an active call and wait for their reply (up to timeout_seconds). ' +
+    'Returns the human\'s spoken or typed response if they reply within the window. ' +
+    'If no reply arrives in time, returns a timeout so you can continue working and check back later with get_transcript.',
+  inputSchema: {
+    type: 'object',
+    required: ['call_id', 'content'],
+    properties: {
+      call_id: { type: 'string', description: 'Call ID from create_call' },
+      content: { type: 'string', description: 'Text message to speak to the human', maxLength: 2000 },
+      timeout_seconds: {
+        type: 'number',
+        description: 'Max seconds to wait for a reply (1-45, default 15)',
+        default: 15,
+        minimum: 1,
+        maximum: 45,
+      },
+    },
+  },
+  handler: async (args: Record<string, unknown>) => {
+    const callId = args.call_id as string;
+    const content = args.content as string;
+    const timeoutSeconds = Math.min(Math.max((args.timeout_seconds as number) ?? 15, 1), 45);
+
+    // Send the message first
+    const sendResult = await client.sendMessage(callId, content);
+    if ('error' in sendResult) return error(`Error sending message: ${sendResult.message ?? sendResult.error}`);
+
+    const aiMessageId = sendResult.data.message_id;
+    const deadline = Date.now() + timeoutSeconds * 1000;
+    const pollIntervalMs = 2000;
+
+    while (Date.now() < deadline) {
+      const replyResult = await client.getPendingReply(callId, aiMessageId);
+      if ('error' in replyResult) {
+        return error(`Error checking for reply: ${replyResult.message ?? replyResult.error}`);
+      }
+
+      const { reply, call_status } = replyResult.data;
+
+      if (call_status === 'completed' || call_status === 'cancelled') {
+        return text(JSON.stringify({
+          outcome: 'call_ended',
+          reason: call_status,
+          message: `The call was ${call_status} while waiting for a reply.`,
+        }, null, 2));
+      }
+
+      if (reply) {
+        return text(JSON.stringify({
+          outcome: 'reply',
+          reply: {
+            text: reply.content,
+            received_at: reply.created_at,
+          },
+          exchange: {
+            ai_message_id: aiMessageId,
+            user_message_id: reply.id,
+          },
+        }, null, 2));
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+    }
+
+    return text(JSON.stringify({
+      outcome: 'timeout',
+      waited_seconds: timeoutSeconds,
+      message: 'No reply received within the timeout window. The call is still active — use get_transcript to check for replies later, or call send_message_and_wait again.',
+      instruction: 'You can continue working and check back with get_transcript, or send another message with send_message_and_wait.',
+    }, null, 2));
+  },
+};
+
 export const tools = [
   createCallTool,
   sendMessageTool,
   getTranscriptTool,
   completeCallTool,
   cancelCallTool,
+  sendMessageAndWaitTool,
 ];

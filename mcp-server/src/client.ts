@@ -82,3 +82,11 @@ export function completeCall(callId: string, result?: Record<string, unknown>) {
 export function cancelCall(callId: string, reason = 'resolved') {
   return apiRequest<{ status: string }>('POST', `/calls/${callId}/cancel`, { reason });
 }
+
+export function getPendingReply(callId: string, after?: string) {
+  const query = after ? `?after=${encodeURIComponent(after)}` : '';
+  return apiRequest<{
+    reply: { id: string; content: string; created_at: string } | null;
+    call_status?: string;
+  }>('GET', `/calls/${callId}/pending-reply${query}`);
+}
