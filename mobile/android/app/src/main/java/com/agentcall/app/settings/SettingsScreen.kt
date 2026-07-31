@@ -140,6 +140,9 @@ fun SettingsScreen(
     val testStatus by viewModel.testStatus.collectAsStateWithLifecycle()
     val testLatency by viewModel.testLatency.collectAsStateWithLifecycle()
     val focusManager = LocalFocusManager.current
+    val context = LocalContext.current
+    var declineTemplate by remember { mutableStateOf(MessageTemplates.declineMessage(context)) }
+    var laterTemplate by remember { mutableStateOf(MessageTemplates.laterTemplateRaw(context)) }
 
     Column(
         modifier = Modifier
@@ -421,6 +424,70 @@ fun SettingsScreen(
                 }
             }
 
+            // ── Call Messages ────────────────────────────
+            SettingsSection(title = "CALL MESSAGES") {
+                GlassCard {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        var declineSaved by remember { mutableStateOf(false) }
+                        var laterSaved by remember { mutableStateOf(false) }
+                        var laterMissingPlaceholder by remember { mutableStateOf(false) }
+                        TemplateEditor(
+                            title = "Decline message",
+                            subtitle = "Sent to the AI when you decline a call",
+                            value = declineTemplate,
+                            onValueChange = { declineTemplate = it },
+                            onSave = {
+                                MessageTemplates.setDeclineMessage(context, declineTemplate)
+                                declineSaved = true
+                            },
+                            onReset = {
+                                declineTemplate = MessageTemplates.DECLINE_DEFAULT
+                                MessageTemplates.resetDecline(context)
+                            },
+                            saved = declineSaved,
+                        )
+                        LaunchedEffect(declineSaved) {
+                            if (declineSaved) {
+                                delay(2000)
+                                declineSaved = false
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(16.dp))
+                        TemplateEditor(
+                            title = "Call-back-later message",
+                            subtitle = "Sent when you pick a time; {X} is replaced with the minutes you choose",
+                            value = laterTemplate,
+                            onValueChange = {
+                                laterTemplate = it
+                                laterMissingPlaceholder = false
+                            },
+                            onSave = {
+                                if ("{X}" !in laterTemplate) {
+                                    laterMissingPlaceholder = true
+                                } else {
+                                    MessageTemplates.setLaterTemplate(context, laterTemplate)
+                                    laterSaved = true
+                                }
+                            },
+                            onReset = {
+                                laterTemplate = MessageTemplates.LATER_DEFAULT
+                                MessageTemplates.resetLater(context)
+                                laterMissingPlaceholder = false
+                            },
+                            saved = laterSaved,
+                            warning = if (laterMissingPlaceholder)
+                                "Keep the {X} placeholder so the chosen minutes get substituted." else null,
+                        )
+                        LaunchedEffect(laterSaved) {
+                            if (laterSaved) {
+                                delay(2000)
+                                laterSaved = false
+                            }
+                        }
+                    }
+                }
+            }
+
             // ── Network Info ──────────────────────────────
             SettingsSection(title = "NETWORK INFO") {
                 GlassCard {
@@ -564,4 +631,90 @@ private fun SettingsDivider() {
         color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
         modifier = Modifier.padding(start = 66.dp, end = 16.dp),
     )
+}
+
+@Composable
+private fun TemplateEditor(
+    title: String,
+    subtitle: String,
+    value: String,
+    onValueChange: (String) -> Unit,
+    onSave: () -> Unit,
+    onReset: () -> Unit,
+    saved: Boolean = false,
+    warning: String? = null,
+) {
+    Column {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.titleSmall,
+            color = MaterialTheme.colorScheme.onSurface,
+            fontWeight = FontWeight.Medium,
+        )
+        Spacer(modifier = Modifier.height(2.dp))
+        Text(
+            text = subtitle,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(modifier = Modifier.height(10.dp))
+        OutlinedTextField(
+            value = value,
+            onValueChange = onValueChange,
+            modifier = Modifier.fillMaxWidth(),
+            minLines = 3,
+            maxLines = 6,
+            isError = warning != null,
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedTextColor = MaterialTheme.colorScheme.onSurface,
+                unfocusedTextColor = MaterialTheme.colorScheme.onSurface,
+                cursorColor = Indigo400,
+                focusedBorderColor = Indigo600,
+                unfocusedBorderColor = MaterialTheme.colorScheme.outline,
+                focusedContainerColor = MaterialTheme.colorScheme.surface,
+                unfocusedContainerColor = MaterialTheme.colorScheme.surface,
+            ),
+            shape = RoundedCornerShape(12.dp),
+        )
+        if (warning != null) {
+            Text(
+                text = warning,
+                style = MaterialTheme.typography.labelSmall,
+                color = Red400,
+                modifier = Modifier.padding(top = 4.dp),
+            )
+        }
+        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            TextButton(onClick = onReset) {
+                Icon(Icons.Default.RestartAlt, "Reset to default", modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("Reset to default", style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            Spacer(modifier = Modifier.weight(1f))
+            AnimatedContent(
+                targetState = saved,
+                transitionSpec = { fadeIn() togetherWith fadeOut() },
+                label = "savedState",
+            ) { isSaved ->
+                if (isSaved) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.CheckCircle, "Saved", tint = Green400, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Saved", style = MaterialTheme.typography.labelMedium, color = Green400)
+                    }
+                } else {
+                    Button(
+                        onClick = onSave,
+                        shape = RoundedCornerShape(10.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = Indigo600),
+                    ) {
+                        Icon(Icons.Default.Save, "Save message", modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Save", style = MaterialTheme.typography.labelMedium)
+                    }
+                }
+            }
+        }
+    }
 }

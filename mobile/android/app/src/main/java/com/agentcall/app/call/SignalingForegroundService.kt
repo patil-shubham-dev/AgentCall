@@ -77,6 +77,12 @@ class SignalingForegroundService : Service() {
             is VoiceBridgeEvent.CallIncoming -> {
                 ringFromEvent(event)
             }
+            is VoiceBridgeEvent.CallAnswered -> {
+                // The backend confirmed the answer — the ring is resolved even
+                // if the answering surface never reported back locally, so the
+                // 60s auto-decline can never fire on a live call.
+                clearRing()
+            }
             is VoiceBridgeEvent.CallEnded, is VoiceBridgeEvent.CallCancelled -> {
                 clearRing()
             }

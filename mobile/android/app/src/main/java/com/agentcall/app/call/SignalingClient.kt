@@ -24,6 +24,7 @@ sealed class VoiceBridgeEvent {
     data class AiMessage(val callId: String, val messageId: String, val content: String) : VoiceBridgeEvent()
     data class CallbackScheduled(val callId: String, val delayMinutes: Int) : VoiceBridgeEvent()
     data class CallIncoming(val callId: String, val reason: String, val summary: String, val callerName: String) : VoiceBridgeEvent()
+    data class CallAnswered(val callId: String) : VoiceBridgeEvent()
     data class CallEnded(val callId: String) : VoiceBridgeEvent()
     data class CallCancelled(val callId: String) : VoiceBridgeEvent()
     data class Connected(val userId: String) : VoiceBridgeEvent()
@@ -234,6 +235,11 @@ class SignalingClient @Inject constructor(
                     val delay = payload.optInt("delayMinutes", 10)
                     Log.d(TAG, "[WS] callback_scheduled callId=$callId delay=$delay")
                     _events.emit(VoiceBridgeEvent.CallbackScheduled(callId, delay))
+                }
+                "call_answered" -> {
+                    val callId = payload?.getString("callId") ?: return
+                    Log.d(TAG, "[WS] call_answered callId=$callId")
+                    _events.emit(VoiceBridgeEvent.CallAnswered(callId))
                 }
                 "call_ended" -> {
                     val callId = payload?.getString("callId") ?: return

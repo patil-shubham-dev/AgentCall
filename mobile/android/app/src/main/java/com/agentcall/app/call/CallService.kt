@@ -292,6 +292,11 @@ class CallService : Service() {
                             CallEventBus.emit(CallEvent.AiMessage(event.content))
                             repository.saveAiMessage(callId, event.content)
                         }
+                        is VoiceBridgeEvent.CallAnswered -> {
+                            if (event.callId != callId) return@collect
+                            Log.i(TAG, "[WS] backend confirmed answer for $callId")
+                            CallEventBus.emit(CallEvent.CallAnswered)
+                        }
                         is VoiceBridgeEvent.CallEnded -> {
                             if (event.callId != callId) return@collect
                             CallEventBus.emit(CallEvent.CallEnded)

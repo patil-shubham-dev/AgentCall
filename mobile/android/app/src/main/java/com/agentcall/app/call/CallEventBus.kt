@@ -8,6 +8,7 @@ sealed class CallEvent {
     data class AiMessage(val text: String) : CallEvent()
     data class UserMessage(val text: String) : CallEvent()
     data class UserTextSent(val text: String) : CallEvent()
+    data object CallAnswered : CallEvent()
     data object CallEnded : CallEvent()
     data object AiSpeakingStarted : CallEvent()
     data object AiSpeakingFinished : CallEvent()

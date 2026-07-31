@@ -95,6 +95,12 @@ class CallViewModel @Inject constructor(
                     is CallEvent.AiMessage -> addAiMessage(event.text)
                     is CallEvent.UserMessage -> addUserTranscript(event.text)
                     is CallEvent.UserTextSent -> {}
+                    is CallEvent.CallAnswered -> {
+                        _uiState.value = _uiState.value.copy(
+                            isConnected = true,
+                            statusText = "Connected",
+                        )
+                    }
                     is CallEvent.CallEnded -> disconnect()
                     is CallEvent.AiSpeakingStarted -> setAiSpeaking(true)
                     is CallEvent.AiSpeakingFinished -> setAiSpeaking(false)

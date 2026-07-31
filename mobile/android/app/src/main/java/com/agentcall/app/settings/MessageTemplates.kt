@@ -31,8 +31,27 @@ object MessageTemplates {
     }
 
     fun laterMessage(context: Context, minutes: Int): String {
-        val template = prefs(context).getString(KEY_LATER, LATER_DEFAULT) ?: LATER_DEFAULT
-        return template.replace("{X}", minutes.toString())
+        return laterTemplateRaw(context).replace("{X}", minutes.toString())
+    }
+
+    fun laterTemplateRaw(context: Context): String {
+        return prefs(context).getString(KEY_LATER, LATER_DEFAULT) ?: LATER_DEFAULT
+    }
+
+    fun setDeclineMessage(context: Context, text: String) {
+        prefs(context).edit().putString(KEY_DECLINE, text).apply()
+    }
+
+    fun setLaterTemplate(context: Context, text: String) {
+        prefs(context).edit().putString(KEY_LATER, text).apply()
+    }
+
+    fun resetDecline(context: Context) {
+        prefs(context).edit().remove(KEY_DECLINE).apply()
+    }
+
+    fun resetLater(context: Context) {
+        prefs(context).edit().remove(KEY_LATER).apply()
     }
 
     private fun prefs(context: Context): SharedPreferences =
