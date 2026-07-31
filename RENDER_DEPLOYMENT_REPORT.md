@@ -115,7 +115,7 @@ The following files have been created/modified for deployment:
 
 | Variable | Value | Notes |
 |----------|-------|-------|
-| `SERVICE_TOKEN` | `<REDACTED>` | Generate a **different** token if deploying for real |
+| `SERVICE_TOKEN` | `<your-own-token>` | Generate a **different** token if deploying for real |
 | `DATABASE_URL` | `postgresql://...` | Paste from Neon dashboard (Step 2) |
 
 6. Click **Deploy**

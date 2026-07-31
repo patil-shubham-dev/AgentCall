@@ -11,7 +11,7 @@ The `mcp-server/` is ready for Render. It runs in **Streamable HTTP / SSE mode**
 | Fixed deprecated `--only=production` | `Dockerfile:23` | `--only=production` removed in modern npm; replaced with `--omit=dev` |
 | Added `HEALTHCHECK` | `Dockerfile` | Render requires a health check path (`/health`) |
 | Created `.dockerignore` | `.dockerignore` | Excludes `node_modules/`, `.env`, `dist/` from Docker context |
-| Generated `MCP_API_KEY` | `.env` | `<REDACTED>` |
+| Generated `MCP_API_KEY` | `.env` | `<your-own-key>` |
 | Updated `.env.example` | `.env.example` | Placeholder key for new devs |
 | Added `PORT` fallback to config | `src/config.ts:16` | Reads `PORT` first (Render auto-inject), then `MCP_SERVER_PORT`, then `3000` |
 | Replaced GPT Actions docs with correct ChatGPT MCP connector | `MCP_SERVER_RENDER_DEPLOYMENT.md` | GPT Actions are legacy; the correct path is Developer Mode + MCP connector URL |
@@ -49,8 +49,8 @@ curl -X POST http://localhost:3000 -d '{}'
 | `PORT` | `3000` | Render auto-injects `PORT`. Our code reads `PORT` first, then `MCP_SERVER_PORT` as fallback |
 | `NODE_ENV` | `production` | Controls pino log level |
 | `BACKEND_API_URL` | `https://agentcall-66ke.onrender.com/api/v1` | Production backend URL |
-| `SERVICE_TOKEN` | `<REDACTED>` | Backend service auth token |
-| `MCP_API_KEY` | `<REDACTED>` | API key for AI clients (ChatGPT, etc.) |
+| `SERVICE_TOKEN` | `<your-own-token>` | Backend service auth token |
+| `MCP_API_KEY` | `<your-own-key>` | API key for AI clients (ChatGPT, etc.) |
 
 > **Port handling:** The config reads `PORT` first (Render auto-inject), then falls back to `MCP_SERVER_PORT`, then defaults to `3000`. No need to set `MCP_SERVER_PORT` explicitly on Render.
 
@@ -78,8 +78,8 @@ MCP_TRANSPORT=sse
 PORT=3000
 NODE_ENV=production
 BACKEND_API_URL=https://agentcall-66ke.onrender.com/api/v1
-SERVICE_TOKEN=<REDACTED>
-MCP_API_KEY=<REDACTED>
+SERVICE_TOKEN=<your-own-token>
+MCP_API_KEY=<your-own-key>
 ```
 
 5. **Plan:** Starter (free tier) is sufficient for initial use
@@ -109,7 +109,7 @@ The MCP server uses `StreamableHTTPServerTransport` from the MCP SDK (`src/sse.t
 | `GET /sse` | `/sse` | **SSE stream** — Claude-style long-lived connection | `x-api-key` header |
 | `GET /health` | `/health` | Health check (public, no auth required) | None |
 
-For ChatGPT Developer Mode, use connector URL: `https://agentcall-mcp.onrender.com/mcp/<REDACTED>`
+For ChatGPT Developer Mode, use connector URL: `https://agentcall-mcp.onrender.com/mcp/<your-own-key>`
 
 ### Prerequisites
 
@@ -129,7 +129,7 @@ For ChatGPT Developer Mode, use connector URL: `https://agentcall-mcp.onrender.c
 1. Go to **Settings → Apps** → click **Create** (or the + button)
 2. Fill in:
    - **Name:** `AgentCall MCP`
-   - **Server URL:** `https://agentcall-mcp.onrender.com/mcp/<REDACTED>`
+   - **Server URL:** `https://agentcall-mcp.onrender.com/mcp/<your-own-key>`
 3. **Authentication:** Select **None** (the API key is embedded in the URL path itself)
 4. Click **Scan Tools** — ChatGPT will connect and discover the 5 tools automatically
 5. Click **Create**
@@ -147,7 +147,7 @@ ChatGPT's MCP connector UI does not support custom HTTP headers (only OAuth 2.0 
 
 **Solution: URL-embedded API key.** The API key is embedded directly in the URL path. ChatGPT treats the connector URL as opaque and sends all requests to that exact path. The server extracts the key from the path segment and validates it.
 
-- **ChatGPT** uses URL: `https://agentcall-mcp.onrender.com/mcp/<REDACTED>` — key validated from `/mcp/<key>` path
+- **ChatGPT** uses URL: `https://agentcall-mcp.onrender.com/mcp/<your-own-key>` — key validated from `/mcp/<key>` path
 - **Claude Desktop/Code** uses `x-api-key` header with the same key at `POST /` or `GET /sse`
 - **Both work simultaneously**, both use the same `MCP_API_KEY` env var
 
