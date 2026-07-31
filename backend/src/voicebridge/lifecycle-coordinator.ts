@@ -10,14 +10,18 @@ export class LifecycleCoordinator {
     private notifyPhone: (userId: string, payload: Record<string, unknown>) => boolean,
   ) {}
 
-  resumeCallback(userId: string, callId: string, delayMinutes: number, resumeAt: number): void {
-    this.cleanupScheduler.schedule(`resume:${callId}`, resumeAt, () => {
-      this.handleResume(userId, callId, delayMinutes, resumeAt);
+  resumeCallback(userId: string, callId: string, delayMinutes: number, resumeAt: number | string): void {
+    const resumeAtMs = typeof resumeAt === 'number' ? resumeAt : Number(resumeAt);
+    if (Number.isNaN(resumeAtMs)) {
+      throw new TypeError(`Invalid resumeAt for callback ${callId}: ${resumeAt}`);
+    }
+    this.cleanupScheduler.schedule(`resume:${callId}`, resumeAtMs, () => {
+      this.handleResume(userId, callId, delayMinutes, resumeAtMs);
     });
 
     const pauseTtlMs = 24 * 60 * 60 * 1000;
-    this.cleanupScheduler.schedule(`pause-ttl:${callId}`, resumeAt + pauseTtlMs, () => {
-      this.handlePauseExpiry(userId, callId, resumeAt, delayMinutes);
+    this.cleanupScheduler.schedule(`pause-ttl:${callId}`, resumeAtMs + pauseTtlMs, () => {
+      this.handlePauseExpiry(userId, callId, resumeAtMs, delayMinutes);
     });
   }
 

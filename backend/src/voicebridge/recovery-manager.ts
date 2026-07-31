@@ -50,9 +50,10 @@ export class RecoveryManager {
         continue;
       }
       const pausedMs = session.pausedAt ? new Date(session.pausedAt).getTime() : Date.now();
-      const delayMinutes = Math.max(1, Math.floor((cb.resumeAt - pausedMs) / 60000));
+      const resumeAtMs = Number(cb.resumeAt);
+      const delayMinutes = Math.max(1, Math.floor((resumeAtMs - pausedMs) / 60000));
 
-      lifecycleCoordinator.resumeCallback(cb.userId, cb.callId, delayMinutes, cb.resumeAt);
+      lifecycleCoordinator.resumeCallback(cb.userId, cb.callId, delayMinutes, resumeAtMs);
       logger.info(
         { callId: cb.callId, userId: cb.userId, resumeAt: cb.resumeAt, delayMinutes },
         '[RecoveryManager] rebuilt callback timer',

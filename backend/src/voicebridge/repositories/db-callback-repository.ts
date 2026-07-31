@@ -6,13 +6,15 @@ import { logger } from '../../common/logger.js';
 interface CallbackRow extends QueryResultRow {
   user_id: string;
   call_id: string;
-  resume_at: number;
+  resume_at: string;
 }
 
 function rowToData(row: CallbackRow): CallbackData {
   return {
     callId: row.call_id,
-    resumeAt: row.resume_at,
+    // node-postgres returns BIGINT (int8) columns as strings — epoch-ms
+    // timestamps fit safely in JS numbers, so normalize at the boundary.
+    resumeAt: Number(row.resume_at),
   };
 }
 
@@ -96,7 +98,7 @@ export class DatabaseCallbackRepository implements CallbackRepository {
       return result.rows.map((row) => ({
         userId: row.user_id,
         callId: row.call_id,
-        resumeAt: row.resume_at,
+        resumeAt: Number(row.resume_at),
       }));
     } catch (cause) {
       throw new RepositoryError('Failed to list callbacks', cause);
