@@ -271,6 +271,12 @@ async function main() {
     await recoveryManager.rebuildTimers(cleanupScheduler, lifecycleCoordinator);
   }
 
+  // Auto-complete orphaned pending/active sessions older than the stale threshold
+  // (recovered from DB) so a phone reconnect can never re-surface them.
+  await voiceBridgeService.sweepStaleSessions().catch((err) => {
+    logger.error({ err }, '[startup] stale-session sweep failed');
+  });
+
   const deletionCoordinator = new DeletionCoordinator();
 
   const sessionSweeper = new SessionSweeper({

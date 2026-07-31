@@ -30,8 +30,10 @@ import type { LifecycleCoordinator } from './lifecycle-coordinator.js';
 
 const COMPLETED_RETENTION_MS = 60 * 60 * 1000;
 const CANCELLED_RETENTION_MS = 5 * 60 * 1000;
+const STALE_ACTIVE_THRESHOLD_MS = 30 * 60 * 1000;
 
 const phoneConnections = new Map<string, WebSocket>();
+const pendingNotifications = new Map<string, Array<{ payload: Record<string, unknown>; timestamp: string }>>();
 
 export function getConnectedPhones(): { userId: string; connected: boolean }[] {
   return Array.from(phoneConnections.entries()).map(([userId, ws]) => ({
@@ -120,7 +122,11 @@ export class VoiceBridgeService {
 
   async getUserActiveCall(userId: string): Promise<VoiceCallSession | undefined> {
     const userSessions = await this.sessionRepo.findByUserId(userId);
-    return userSessions.find((s) => s.status === 'pending' || s.status === 'active');
+    const cutoff = Date.now() - STALE_ACTIVE_THRESHOLD_MS;
+    return userSessions.find((s) => {
+      if (s.status !== 'pending' && s.status !== 'active') return false;
+      return new Date(s.createdAt).getTime() >= cutoff;
+    });
   }
 
   async addMessage(
@@ -266,6 +272,34 @@ export class VoiceBridgeService {
     return this.sessionRepo.list();
   }
 
+  async sweepStaleSessions(): Promise<number> {
+    const sessions = await this.sessionRepo.list();
+    const nowMs = Date.now();
+    const cutoff = nowMs - STALE_ACTIVE_THRESHOLD_MS;
+    let completed = 0;
+
+    for (const session of sessions) {
+      if (session.status !== 'pending' && session.status !== 'active') continue;
+      const createdMs = new Date(session.createdAt).getTime();
+      if (createdMs >= cutoff) continue;
+
+      const ageMinutes = Math.max(1, Math.round((nowMs - createdMs) / 60000));
+      await this.completeCall(session.id, {
+        transcriptSummary: `Auto-completed by stale-session sweep (no phone activity for ${ageMinutes} min)`,
+      });
+      logger.info(
+        { callId: session.id, userId: session.userId, ageMinutes },
+        '[sweep] stale session auto-completed',
+      );
+      completed++;
+    }
+
+    if (completed > 0) {
+      logger.info({ completed }, '[sweep] stale-session sweep finished');
+    }
+    return completed;
+  }
+
   async deleteSession(callId: string): Promise<VoiceCallSession | undefined> {
     return this.sessionRepo.delete(callId);
   }
@@ -297,6 +331,17 @@ export function registerPhone(userId: string, ws: WebSocket): void {
   ws.on('error', (err) => {
     logger.error({ err, userId }, '[WS] phone connection error');
   });
+
+  // Flush any notifications queued while phone was disconnected
+  const queued = pendingNotifications.get(userId);
+  if (queued && queued.length > 0) {
+    pendingNotifications.delete(userId);
+    const count = queued.length;
+    logger.info({ userId, count }, '[WS] flushing pending notifications');
+    for (const { payload } of queued) {
+      notifyPhone(userId, payload);
+    }
+  }
 }
 
 export function notifyPhone(userId: string, payload: Record<string, unknown>): boolean {
@@ -320,8 +365,13 @@ export function notifyPhone(userId: string, payload: Record<string, unknown>): b
       return false;
     }
   }
-  logger.warn({ userId, msgType, readyState: ws?.readyState, elapsed: Date.now() - start }, '[WS] phone not connected, message not delivered');
+  logger.warn({ userId, msgType, readyState: ws?.readyState, elapsed: Date.now() - start }, '[WS] phone not connected, queuing notification');
   publishNotificationFailed(userId, msgType, 'phone not connected');
+  // Queue for delivery when phone reconnects
+  const existing = pendingNotifications.get(userId) ?? [];
+  existing.push({ payload, timestamp: new Date().toISOString() });
+  pendingNotifications.set(userId, existing);
+  logger.info({ userId, msgType, queueSize: existing.length }, '[WS] notification queued for later delivery');
   return false;
 }
 
