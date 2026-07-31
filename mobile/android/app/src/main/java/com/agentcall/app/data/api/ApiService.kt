@@ -13,6 +13,13 @@ data class CompleteRequest(
 @Serializable
 data class CancelRequest(
     @SerialName("reason") val reason: String = "user_requested",
+    @SerialName("note") val note: String? = null,
+)
+
+@Serializable
+data class CallbackRequest(
+    @SerialName("delay_minutes") val delayMinutes: Int,
+    @SerialName("note") val note: String? = null,
 )
 
 @Serializable
@@ -60,7 +67,7 @@ interface ApiService {
     @POST("calls/{callId}/callback")
     suspend fun scheduleCallback(
         @Path("callId") callId: String,
-        @Body body: Map<String, Int>,
+        @Body body: CallbackRequest,
     ): CallbackResponse
 
     @GET("users/{userId}/active-call")

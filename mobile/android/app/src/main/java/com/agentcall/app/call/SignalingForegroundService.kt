@@ -13,6 +13,7 @@ import androidx.core.app.NotificationCompat
 import com.agentcall.app.MainActivity
 import com.agentcall.app.R
 import com.agentcall.app.data.repository.CallRepository
+import com.agentcall.app.settings.MessageTemplates
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -127,6 +128,7 @@ class SignalingForegroundService : Service() {
                 startService(Intent(this@SignalingForegroundService, CallService::class.java).apply {
                     action = CallService.ACTION_CANCEL_CALL
                     putExtra(CallService.EXTRA_CALL_ID, callId)
+                    putExtra(CallService.EXTRA_TEXT, MessageTemplates.declineMessage(this@SignalingForegroundService))
                 })
             }
         }

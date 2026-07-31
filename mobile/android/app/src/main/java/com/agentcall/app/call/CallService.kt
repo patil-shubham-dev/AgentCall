@@ -17,6 +17,7 @@ import androidx.core.app.NotificationCompat
 import com.agentcall.app.R
 import com.agentcall.app.data.api.ApiClient
 import com.agentcall.app.data.api.ApiService
+import com.agentcall.app.data.api.CallbackRequest
 import com.agentcall.app.data.api.CancelRequest
 import com.agentcall.app.data.database.dao.TranscriptMessageDao
 import com.agentcall.app.data.repository.CallRepository
@@ -149,14 +150,17 @@ class CallService : Service() {
             }
             ACTION_CANCEL_CALL -> {
                 val id = intent.getStringExtra(EXTRA_CALL_ID) ?: return START_NOT_STICKY
+                val note = intent.getStringExtra(EXTRA_TEXT)?.takeIf { it.isNotBlank() }
+                if (note != null) savePendingNote(id, note)
                 retryWithBackoff(id, KEY_PENDING_CANCELS, "CANCEL") { attemptCancel(it) }
             }
             ACTION_SCHEDULE_CALLBACK -> {
                 val id = intent.getStringExtra(EXTRA_CALL_ID) ?: return START_NOT_STICKY
                 val delayMin = intent.getStringExtra(EXTRA_TEXT)?.toIntOrNull() ?: 10
+                val note = intent.getStringExtra(EXTRA_NOTE)?.takeIf { it.isNotBlank() }
                 scope.launch {
                     try {
-                        api.scheduleCallback(id, mapOf("delay_minutes" to delayMin))
+                        api.scheduleCallback(id, CallbackRequest(delayMinutes = delayMin, note = note))
                     } catch (_: Exception) {}
                 }
             }
@@ -185,7 +189,7 @@ class CallService : Service() {
 
     private suspend fun attemptCancel(callId: String): Boolean {
         return try {
-            api.cancelCall(callId, CancelRequest())
+            api.cancelCall(callId, CancelRequest(note = pendingNoteFor(callId)))
             repository.saveCallEnded(callId, "cancelled")
             Log.i(TAG, "[CANCEL] backend confirmed cancel for $callId")
             true
@@ -241,8 +245,18 @@ class CallService : Service() {
         val prefs = getSharedPreferences(PREFS_CALL_STATE, MODE_PRIVATE)
         val ids = prefs.getStringSet(key, emptySet())?.toMutableSet() ?: return
         if (ids.remove(callId)) {
-            prefs.edit().putStringSet(key, ids).apply()
+            prefs.edit().putStringSet(key, ids).remove("note:$callId").apply()
         }
+    }
+
+    private fun savePendingNote(callId: String, note: String) {
+        getSharedPreferences(PREFS_CALL_STATE, MODE_PRIVATE)
+            .edit().putString("note:$callId", note).apply()
+    }
+
+    private fun pendingNoteFor(callId: String): String? {
+        return getSharedPreferences(PREFS_CALL_STATE, MODE_PRIVATE)
+            .getString("note:$callId", null)
     }
 
     fun speakText(text: String, force: Boolean = false) {
@@ -466,6 +480,7 @@ class CallService : Service() {
         const val ACTION_SCHEDULE_CALLBACK = "com.agentcall.action.SCHEDULE_CALLBACK"
         const val EXTRA_CALL_ID = "call_id"
         const val EXTRA_TEXT = "text"
+        const val EXTRA_NOTE = "note"
         const val CHANNEL_ONGOING_CALL = "ongoing_call"
         // v2: old "incoming_call" channel had no ringtone/vibration and ColorOS drops
         // channel updates/delete, so an in-place upgrade is impossible — version the ID.

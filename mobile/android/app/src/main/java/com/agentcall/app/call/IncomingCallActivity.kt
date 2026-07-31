@@ -47,6 +47,7 @@ import androidx.compose.ui.unit.sp
 import com.agentcall.app.data.api.ApiClient
 import com.agentcall.app.data.api.ApiService
 import com.agentcall.app.settings.CallerTuneManager
+import com.agentcall.app.settings.MessageTemplates
 import com.agentcall.app.ui.composables.AmbientBackground
 import com.agentcall.app.ui.theme.*
 import dagger.hilt.android.AndroidEntryPoint
@@ -201,6 +202,7 @@ class IncomingCallActivity : ComponentActivity() {
                             startService(Intent(this@IncomingCallActivity, CallService::class.java).apply {
                                 action = CallService.ACTION_CANCEL_CALL
                                 putExtra(CallService.EXTRA_CALL_ID, currentCallId)
+                                putExtra(CallService.EXTRA_TEXT, MessageTemplates.declineMessage(this@IncomingCallActivity))
                             })
                             isProcessing.set(false)
                             finish()
@@ -213,6 +215,7 @@ class IncomingCallActivity : ComponentActivity() {
                                 action = CallService.ACTION_SCHEDULE_CALLBACK
                                 putExtra(CallService.EXTRA_CALL_ID, currentCallId)
                                 putExtra(CallService.EXTRA_TEXT, minutes.toString())
+                                putExtra(CallService.EXTRA_NOTE, MessageTemplates.laterMessage(this@IncomingCallActivity, minutes))
                             })
                             isProcessing.set(false)
                             finish()
