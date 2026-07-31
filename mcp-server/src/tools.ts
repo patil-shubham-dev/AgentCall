@@ -144,7 +144,7 @@ export const completeCallTool = {
     if ('error' in r) return error(`Error: ${r.message ?? r.error}`);
 
     return text(JSON.stringify({
-      status: 'completed',
+      status: r.data.status,
       call_id: callId,
       instruction: 'Use get_transcript to review the full conversation.',
     }, null, 2));

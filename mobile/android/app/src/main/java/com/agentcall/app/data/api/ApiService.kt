@@ -1,7 +1,32 @@
 package com.agentcall.app.data.api
 
 import com.agentcall.app.data.model.*
+import kotlinx.serialization.SerialName
+import kotlinx.serialization.Serializable
 import retrofit2.http.*
+
+@Serializable
+data class CompleteRequest(
+    @SerialName("result") val result: String? = null,
+)
+
+@Serializable
+data class CancelRequest(
+    @SerialName("reason") val reason: String = "user_requested",
+)
+
+@Serializable
+data class StatusResponse(
+    @SerialName("status") val status: String = "",
+    @SerialName("call_id") val callId: String? = null,
+)
+
+@Serializable
+data class CallbackResponse(
+    @SerialName("status") val status: String = "",
+    @SerialName("call_id") val callId: String? = null,
+    @SerialName("resume_in_minutes") val resumeInMinutes: Int? = null,
+)
 
 interface ApiService {
 
@@ -20,14 +45,20 @@ interface ApiService {
     @POST("calls/{callId}/complete")
     suspend fun completeCall(
         @Path("callId") callId: String,
-        @Body result: Map<String, @JvmSuppressWildcards Any>,
-    )
+        @Body body: CompleteRequest = CompleteRequest(),
+    ): StatusResponse
+
+    @POST("calls/{callId}/cancel")
+    suspend fun cancelCall(
+        @Path("callId") callId: String,
+        @Body body: CancelRequest = CancelRequest(),
+    ): StatusResponse
 
     @POST("calls/{callId}/callback")
     suspend fun scheduleCallback(
         @Path("callId") callId: String,
         @Body body: Map<String, Int>,
-    ): Map<String, @JvmSuppressWildcards Any>
+    ): CallbackResponse
 
     @GET("users/{userId}/active-call")
     suspend fun getActiveCall(@Path("userId") userId: String): ActiveCallResponse

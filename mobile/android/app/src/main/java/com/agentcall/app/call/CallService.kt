@@ -17,6 +17,7 @@ import androidx.core.app.NotificationCompat
 import com.agentcall.app.R
 import com.agentcall.app.data.api.ApiClient
 import com.agentcall.app.data.api.ApiService
+import com.agentcall.app.data.api.CancelRequest
 import com.agentcall.app.data.database.dao.TranscriptMessageDao
 import com.agentcall.app.data.repository.CallRepository
 import dagger.hilt.android.AndroidEntryPoint
@@ -33,6 +34,9 @@ class CallService : Service() {
     @Inject lateinit var repository: CallRepository
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    // Survives stopSelf(): End/Done + Decline persist their intent first, then retry
+    // on this scope so a service teardown can never cancel a pending delivery.
+    private val retryScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var wakeLock: PowerManager.WakeLock? = null
 
     var callId: String? = null
@@ -91,6 +95,10 @@ class CallService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        scope.launch {
+            flushPending(KEY_PENDING_CANCELS) { attemptCancel(it) }
+            flushPending(KEY_PENDING_COMPLETES) { attemptComplete(it) }
+        }
         when (intent?.action) {
             ACTION_START_CALL -> {
                 val id = intent.getStringExtra(EXTRA_CALL_ID) ?: return START_NOT_STICKY
@@ -125,9 +133,10 @@ class CallService : Service() {
                 }
             }
             ACTION_END_CALL -> {
-                val cid = callId
+                val cid = intent.getStringExtra(EXTRA_CALL_ID) ?: callId
                 if (cid != null) {
                     scope.launch { repository.saveCallEnded(cid, "ended") }
+                    retryWithBackoff(cid, KEY_PENDING_COMPLETES, "COMPLETE") { attemptComplete(it) }
                 }
                 CallEventBus.emit(CallEvent.CallEnded)
                 endCall()
@@ -135,11 +144,7 @@ class CallService : Service() {
             }
             "com.agentcall.action.CANCEL_CALL" -> {
                 val id = intent.getStringExtra(EXTRA_CALL_ID) ?: return START_NOT_STICKY
-                scope.launch {
-                    try {
-                        api.completeCall(id, mapOf("status" to "cancelled"))
-                    } catch (_: Exception) {}
-                }
+                retryWithBackoff(id, KEY_PENDING_CANCELS, "CANCEL") { attemptCancel(it) }
             }
             "com.agentcall.action.SCHEDULE_CALLBACK" -> {
                 val id = intent.getStringExtra(EXTRA_CALL_ID) ?: return START_NOT_STICKY
@@ -152,6 +157,76 @@ class CallService : Service() {
             }
         }
         return START_STICKY
+    }
+
+    private fun retryWithBackoff(callId: String, key: String, tag: String, attempt: suspend (String) -> Boolean) {
+        persistPendingId(key, callId)
+        retryScope.launch {
+            val backoffMs = longArrayOf(1000, 2000, 4000, 8000, 16000, 32000, 60000)
+            for (delayMs in backoffMs) {
+                if (attempt(callId)) {
+                    removePendingId(key, callId)
+                    return@launch
+                }
+                delay(delayMs)
+            }
+            if (attempt(callId)) {
+                removePendingId(key, callId)
+            } else {
+                Log.w(TAG, "[$tag] retries exhausted for $callId; kept pending for next service start")
+            }
+        }
+    }
+
+    private suspend fun attemptCancel(callId: String): Boolean {
+        return try {
+            api.cancelCall(callId, CancelRequest())
+            repository.saveCallEnded(callId, "cancelled")
+            Log.i(TAG, "[CANCEL] backend confirmed cancel for $callId")
+            true
+        } catch (e: Exception) {
+            Log.w(TAG, "[CANCEL] cancel $callId failed, will retry", e)
+            false
+        }
+    }
+
+    private suspend fun attemptComplete(callId: String): Boolean {
+        return try {
+            api.completeCall(callId)
+            Log.i(TAG, "[COMPLETE] backend confirmed completion for $callId")
+            true
+        } catch (e: Exception) {
+            Log.w(TAG, "[COMPLETE] complete $callId failed, will retry", e)
+            false
+        }
+    }
+
+    private suspend fun flushPending(key: String, attempt: suspend (String) -> Boolean) {
+        val pending = getSharedPreferences(PREFS_CALL_STATE, MODE_PRIVATE)
+            .getStringSet(key, emptySet())
+            ?.toList()
+            ?: return
+        for (callId in pending) {
+            if (attempt(callId)) {
+                removePendingId(key, callId)
+            }
+        }
+    }
+
+    private fun persistPendingId(key: String, callId: String) {
+        val prefs = getSharedPreferences(PREFS_CALL_STATE, MODE_PRIVATE)
+        val ids = prefs.getStringSet(key, emptySet())?.toMutableSet() ?: mutableSetOf()
+        if (ids.add(callId)) {
+            prefs.edit().putStringSet(key, ids).apply()
+        }
+    }
+
+    private fun removePendingId(key: String, callId: String) {
+        val prefs = getSharedPreferences(PREFS_CALL_STATE, MODE_PRIVATE)
+        val ids = prefs.getStringSet(key, emptySet())?.toMutableSet() ?: return
+        if (ids.remove(callId)) {
+            prefs.edit().putStringSet(key, ids).apply()
+        }
     }
 
     fun speakText(text: String, force: Boolean = false) {
@@ -332,7 +407,9 @@ class CallService : Service() {
         val pi = PendingIntent.getActivity(this, 0, intent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         val endPi = PendingIntent.getService(this, 2,
-            Intent(this, CallService::class.java).setAction(ACTION_END_CALL),
+            Intent(this, CallService::class.java)
+                .setAction(ACTION_END_CALL)
+                .putExtra(EXTRA_CALL_ID, callId),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
 
         return NotificationCompat.Builder(this, CHANNEL_ONGOING_CALL)
@@ -371,6 +448,9 @@ class CallService : Service() {
         const val EXTRA_CALLER_NAME = "caller_name"
         const val EXTRA_CONTEXT_SUMMARY = "context_summary"
         const val EXTRA_PRIORITY = "priority"
+        private const val PREFS_CALL_STATE = "agentcall_call_state"
+        private const val KEY_PENDING_CANCELS = "pending_cancel_ids"
+        private const val KEY_PENDING_COMPLETES = "pending_complete_ids"
         private const val NOTIFICATION_ID_ONGOING = 1001
         private const val NOTIFICATION_ID_INCOMING = 1002
 

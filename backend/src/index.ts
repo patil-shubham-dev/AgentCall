@@ -277,6 +277,15 @@ async function main() {
     logger.error({ err }, '[startup] stale-session sweep failed');
   });
 
+  // Periodic backstop for orphaned sessions (e.g. phone offline during decline,
+  // app force-stopped mid-retry): without this, a pending call survives until
+  // the next restart, and AI message traffic keeps resetting its activity clock.
+  setInterval(() => {
+    voiceBridgeService.sweepStaleSessions().catch((err) => {
+      logger.error({ err }, '[sweep] periodic stale-session sweep failed');
+    });
+  }, 5 * 60 * 1000);
+
   const deletionCoordinator = new DeletionCoordinator();
 
   const sessionSweeper = new SessionSweeper({

@@ -225,6 +225,13 @@ export class VoiceBridgeService {
       const session = await this.sessionRepo.findById(callId);
       if (!session) return undefined;
 
+      // Idempotent for terminal states: retries from the phone's persisted
+      // completion queue must never re-notify or rewrite a finished call.
+      if (session.status === 'completed' || session.status === 'cancelled') {
+        logger.info({ callId, status: session.status }, 'Call session already terminal, no-op');
+        return session;
+      }
+
       session.status = 'completed';
       session.completedAt = now();
       session.retentionExpiresAt = new Date(Date.now() + COMPLETED_RETENTION_MS).toISOString();
@@ -254,6 +261,17 @@ export class VoiceBridgeService {
     return withSessionLock(callId, async () => {
       const session = await this.sessionRepo.findById(callId);
       if (!session) return undefined;
+
+      // Idempotent for terminal states: retries from the phone's decline queue
+      // must never re-notify the phone or re-publish for an already-finished call.
+      if (session.status === 'cancelled') {
+        logger.info({ callId }, 'Call session already cancelled, no-op');
+        return session;
+      }
+      if (session.status === 'completed') {
+        logger.info({ callId }, 'Call already completed, ignoring cancel');
+        return session;
+      }
 
       session.status = 'cancelled';
       session.completedAt = now();

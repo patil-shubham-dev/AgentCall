@@ -319,25 +319,31 @@ export function registerRoutes(app: FastifyInstance, opts: RouteOptions): void {
   app.post('/api/v1/calls/:callId/complete', async (request, reply) => {
     const { callId } = request.params as { callId: string };
     const { result } = request.body as { result?: Record<string, unknown> };
+    const before = await voicebridge.getCall(callId);
 
     const session = await voicebridge.completeCall(callId, result as Parameters<typeof voicebridge.completeCall>[1]);
     if (!session) {
       return reply.status(404).send({ error: 'NOT_FOUND', message: 'Call not found' });
     }
 
-    metrics?.incrementCounter('sessions.completed');
-    return { status: 'completed', call_id: callId };
+    if (before && before.status !== 'completed' && before.status !== 'cancelled') {
+      metrics?.incrementCounter('sessions.completed');
+    }
+    return { status: session.status, call_id: callId };
   });
 
   app.post('/api/v1/calls/:callId/cancel', async (request) => {
     const { callId } = request.params as { callId: string };
+    const before = await voicebridge.getCall(callId);
     const session = await voicebridge.cancelCall(callId);
     if (!session) {
       return { error: 'NOT_FOUND', message: 'Call not found' };
     }
 
-    metrics?.incrementCounter('sessions.cancelled');
-    return { status: 'cancelled', call_id: callId };
+    if (before && before.status !== 'cancelled' && before.status !== 'completed') {
+      metrics?.incrementCounter('sessions.cancelled');
+    }
+    return { status: session.status, call_id: callId };
   });
 
   app.get('/api/v1/users/:userId/active-call', async (request) => {

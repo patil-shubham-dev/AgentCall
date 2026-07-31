@@ -166,6 +166,7 @@ class IncomingCallActivity : ComponentActivity() {
                         onEndCall = {
                             startService(Intent(this@IncomingCallActivity, CallService::class.java).apply {
                                 action = CallService.ACTION_END_CALL
+                                putExtra(CallService.EXTRA_CALL_ID, currentCallId)
                             })
                             finish()
                         })
