@@ -7,7 +7,6 @@ import com.agentcall.app.call.VoiceBridgeEvent
 import com.agentcall.app.data.database.entity.AiProfileEntity
 import com.agentcall.app.data.repository.CallRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
-import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -16,7 +15,6 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -26,12 +24,6 @@ data class HomeUiState(
     val isReconnecting: Boolean = false,
     val statusText: String = "Connecting...",
     val isLoading: Boolean = true,
-)
-
-data class IncomingCallEvent(
-    val callId: String,
-    val callerName: String,
-    val summary: String,
 )
 
 object ServerConfigEvent {
@@ -54,11 +46,7 @@ class HomeViewModel @Inject constructor(
     private val _snackbarEvents = MutableSharedFlow<String>(extraBufferCapacity = 4)
     val snackbarEvents: SharedFlow<String> = _snackbarEvents.asSharedFlow()
 
-    private val _incomingCallEvents = Channel<IncomingCallEvent>(Channel.BUFFERED)
-    val incomingCallEvents = _incomingCallEvents.receiveAsFlow()
-
     private var eventsJob: kotlinx.coroutines.Job? = null
-    private val handledActiveCallIds = mutableSetOf<String>()
 
     init {
         viewModelScope.launch {
@@ -100,39 +88,9 @@ class HomeViewModel @Inject constructor(
                             statusText = "Ready",
                             isLoading = false,
                         )
-                        // Check for calls created while disconnected
-                        viewModelScope.launch {
-                            val activeCall = repository.checkActiveCall(signalingClient.currentUserId)
-                            if (activeCall != null) {
-                                if (!handledActiveCallIds.add(activeCall.callId)) return@launch
-                                val callerName = when (activeCall.reason) {
-                                    "approval" -> "Approval Request"
-                                    "error" -> "Error Alert"
-                                    "clarification" -> "AI Assistant"
-                                    else -> "AI Agent"
-                                }
-                                repository.ensureProfileExists(
-                                    callerName.lowercase().replace("\\s+".toRegex(), "-"),
-                                    callerName
-                                )
-                                _incomingCallEvents.send(
-                                    IncomingCallEvent(activeCall.callId, callerName, activeCall.summary)
-                                )
-                            }
-                        }
-                    }
-                    is VoiceBridgeEvent.CallIncoming -> {
-                        if (!handledActiveCallIds.add(event.callId)) return@collect
-                        val agentId = event.callerName.lowercase().replace("\\s+".toRegex(), "-")
-                        repository.ensureProfileExists(agentId, event.callerName)
-                        _incomingCallEvents.send(
-                            IncomingCallEvent(event.callId, event.callerName, event.summary)
-                        )
                     }
                     is VoiceBridgeEvent.CallEnded -> {
                         repository.saveCallEnded(event.callId, "ended")
-                    }
-                    is VoiceBridgeEvent.CallCancelled -> {
                     }
                     is VoiceBridgeEvent.Disconnected -> {
                         _uiState.value = _uiState.value.copy(

@@ -123,4 +123,12 @@ class CallRepository @Inject constructor(
             null
         }
     }
+
+    suspend fun getCallStatus(callId: String): String? {
+        return try {
+            withContext(Dispatchers.IO) { api.getCall(callId) }.status
+        } catch (_: Exception) {
+            null
+        }
+    }
 }

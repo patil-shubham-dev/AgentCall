@@ -64,6 +64,7 @@ class CallActivity : ComponentActivity() {
         setContent {
             AgentCallTheme(darkTheme = true) {
                 ActiveCallScreen(callId = callId, context = this@CallActivity,
+                    contextSummary = intent.getStringExtra(CallService.EXTRA_CONTEXT_SUMMARY),
                     onEndCall = {
                         startService(Intent(this@CallActivity, CallService::class.java).apply {
                             action = CallService.ACTION_END_CALL
@@ -80,6 +81,7 @@ fun ActiveCallScreen(
     callId: String,
     context: Context,
     onEndCall: () -> Unit,
+    contextSummary: String? = null,
     viewModel: CallViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -89,7 +91,7 @@ fun ActiveCallScreen(
     val focusManager = LocalFocusManager.current
 
     LaunchedEffect(callId) {
-        viewModel.connect(callId)
+        viewModel.connect(callId, contextSummary)
         while (true) { delay(250); viewModel.tick() }
     }
 

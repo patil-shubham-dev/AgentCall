@@ -163,6 +163,7 @@ class IncomingCallActivity : ComponentActivity() {
 
                 if (showCall) {
                     ActiveCallScreen(callId = currentCallId, context = this@IncomingCallActivity,
+                        contextSummary = currentContextSummary.takeIf { it.isNotBlank() },
                         onEndCall = {
                             startService(Intent(this@IncomingCallActivity, CallService::class.java).apply {
                                 action = CallService.ACTION_END_CALL
@@ -176,11 +177,13 @@ class IncomingCallActivity : ComponentActivity() {
                         contextSummary = currentContextSummary,
                         onAnswer = {
                             stopRinger()
+                            SignalingForegroundService.notifyRingResolved(this@IncomingCallActivity)
                             CallService.cancelIncomingNotification(this@IncomingCallActivity)
                             val svcIntent = Intent(this@IncomingCallActivity, CallService::class.java).apply {
                                 action = CallService.ACTION_START_CALL
                                 putExtra(CallService.EXTRA_CALL_ID, currentCallId)
                                 putExtra(CallService.EXTRA_CALLER_NAME, currentCallerName)
+                                putExtra(CallService.EXTRA_CONTEXT_SUMMARY, currentContextSummary)
                             }
                             if (ContextCompat.checkSelfPermission(this@IncomingCallActivity,
                                     Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
@@ -193,9 +196,10 @@ class IncomingCallActivity : ComponentActivity() {
                         },
                         onDecline = {
                             stopRinger()
+                            SignalingForegroundService.notifyRingResolved(this@IncomingCallActivity)
                             CallService.cancelIncomingNotification(this@IncomingCallActivity)
                             startService(Intent(this@IncomingCallActivity, CallService::class.java).apply {
-                                action = "com.agentcall.action.CANCEL_CALL"
+                                action = CallService.ACTION_CANCEL_CALL
                                 putExtra(CallService.EXTRA_CALL_ID, currentCallId)
                             })
                             isProcessing.set(false)
@@ -203,9 +207,10 @@ class IncomingCallActivity : ComponentActivity() {
                         },
                         onLater = { minutes ->
                             stopRinger()
+                            SignalingForegroundService.notifyRingResolved(this@IncomingCallActivity)
                             CallService.cancelIncomingNotification(this@IncomingCallActivity)
                             startService(Intent(this@IncomingCallActivity, CallService::class.java).apply {
-                                action = "com.agentcall.action.SCHEDULE_CALLBACK"
+                                action = CallService.ACTION_SCHEDULE_CALLBACK
                                 putExtra(CallService.EXTRA_CALL_ID, currentCallId)
                                 putExtra(CallService.EXTRA_TEXT, minutes.toString())
                             })

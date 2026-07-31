@@ -48,6 +48,7 @@ class CallService : Service() {
 
     private var transcriptSequence = 0
     private var lastAiMessage: String = ""
+    private var incomingSummary: String? = null
 
     private var speechRecognizer: SpeechRecognizer? = null
     private var pendingSpeakText: String? = null
@@ -98,6 +99,7 @@ class CallService : Service() {
         scope.launch {
             flushPending(KEY_PENDING_CANCELS) { attemptCancel(it) }
             flushPending(KEY_PENDING_COMPLETES) { attemptComplete(it) }
+            flushPending(KEY_PENDING_ANSWERS) { attemptAnswer(it) }
         }
         when (intent?.action) {
             ACTION_START_CALL -> {
@@ -105,11 +107,14 @@ class CallService : Service() {
                 val callerName = intent.getStringExtra(EXTRA_CALLER_NAME) ?: "AI Agent"
                 callId = id
                 transcriptSequence = 0
+                incomingSummary = intent.getStringExtra(EXTRA_CONTEXT_SUMMARY)
+                SignalingForegroundService.notifyRingResolved(this)
                 startForeground(NOTIFICATION_ID_ONGOING, createOngoingCallNotification("AI Call"))
                 acquireWakeLock()
                 val agentId = callerName.lowercase().replace("\\s+".toRegex(), "-")
                 scope.launch { repository.markCallAnswered(id, agentId, callerName) }
                 startVoiceSession(id)
+                retryWithBackoff(id, KEY_PENDING_ANSWERS, "ANSWER") { attemptAnswer(it) }
             }
             ACTION_START_RECORDING -> startRecording()
             ACTION_STOP_RECORDING -> stopRecording()
@@ -142,11 +147,11 @@ class CallService : Service() {
                 endCall()
                 stopSelf()
             }
-            "com.agentcall.action.CANCEL_CALL" -> {
+            ACTION_CANCEL_CALL -> {
                 val id = intent.getStringExtra(EXTRA_CALL_ID) ?: return START_NOT_STICKY
                 retryWithBackoff(id, KEY_PENDING_CANCELS, "CANCEL") { attemptCancel(it) }
             }
-            "com.agentcall.action.SCHEDULE_CALLBACK" -> {
+            ACTION_SCHEDULE_CALLBACK -> {
                 val id = intent.getStringExtra(EXTRA_CALL_ID) ?: return START_NOT_STICKY
                 val delayMin = intent.getStringExtra(EXTRA_TEXT)?.toIntOrNull() ?: 10
                 scope.launch {
@@ -197,6 +202,17 @@ class CallService : Service() {
             true
         } catch (e: Exception) {
             Log.w(TAG, "[COMPLETE] complete $callId failed, will retry", e)
+            false
+        }
+    }
+
+    private suspend fun attemptAnswer(callId: String): Boolean {
+        return try {
+            api.answerCall(callId)
+            Log.i(TAG, "[ANSWER] backend confirmed answer for $callId")
+            true
+        } catch (e: Exception) {
+            Log.w(TAG, "[ANSWER] answer $callId failed, will retry", e)
             false
         }
     }
@@ -286,9 +302,14 @@ class CallService : Service() {
 
             try {
                 val call = api.getCall(callId)
-                summary = call.result?.userResponse ?: call.result?.transcriptSummary ?: "AI needs your input."
+                summary = incomingSummary?.takeIf { it.isNotBlank() }
+                    ?: call.context?.summary?.takeIf { it.isNotBlank() }
+                    ?: call.result?.userResponse
+                    ?: call.result?.transcriptSummary
+                    ?: "AI needs your input."
             } catch (e: Exception) {
                 Log.w(TAG, "[WS] failed to fetch call data on start, continuing anyway", e)
+                summary = incomingSummary?.takeIf { it.isNotBlank() } ?: "AI needs your input."
             }
 
             speakTextOnMain(summary)
@@ -441,16 +462,21 @@ class CallService : Service() {
         const val ACTION_REPEAT_LAST = "com.agentcall.action.REPEAT_LAST"
         const val ACTION_SEND_TEXT = "com.agentcall.action.SEND_TEXT"
         const val ACTION_END_CALL = "com.agentcall.action.END_CALL"
+        const val ACTION_CANCEL_CALL = "com.agentcall.action.CANCEL_CALL"
+        const val ACTION_SCHEDULE_CALLBACK = "com.agentcall.action.SCHEDULE_CALLBACK"
         const val EXTRA_CALL_ID = "call_id"
         const val EXTRA_TEXT = "text"
         const val CHANNEL_ONGOING_CALL = "ongoing_call"
-        const val CHANNEL_INCOMING_CALL = "incoming_call"
+        // v2: old "incoming_call" channel had no ringtone/vibration and ColorOS drops
+        // channel updates/delete, so an in-place upgrade is impossible — version the ID.
+        const val CHANNEL_INCOMING_CALL = "incoming_call_v2"
         const val EXTRA_CALLER_NAME = "caller_name"
         const val EXTRA_CONTEXT_SUMMARY = "context_summary"
         const val EXTRA_PRIORITY = "priority"
         private const val PREFS_CALL_STATE = "agentcall_call_state"
         private const val KEY_PENDING_CANCELS = "pending_cancel_ids"
         private const val KEY_PENDING_COMPLETES = "pending_complete_ids"
+        private const val KEY_PENDING_ANSWERS = "pending_answer_ids"
         private const val NOTIFICATION_ID_ONGOING = 1001
         private const val NOTIFICATION_ID_INCOMING = 1002
 

@@ -57,7 +57,7 @@ class CallViewModel @Inject constructor(
     private val _uiState = MutableStateFlow(ActiveCallUiState())
     val uiState: StateFlow<ActiveCallUiState> = _uiState.asStateFlow()
 
-    fun connect(callId: String) {
+    fun connect(callId: String, contextSummary: String? = null) {
         callStartTime = System.currentTimeMillis()
         _uiState.value = _uiState.value.copy(callId = callId)
 
@@ -65,16 +65,25 @@ class CallViewModel @Inject constructor(
             try {
                 val api: ApiService = ApiClient.create()
                 val call = api.getCall(callId)
-                val summary = call.result?.userResponse ?: call.result?.transcriptSummary ?: "AI needs your input."
+                val summary = contextSummary?.takeIf { it.isNotBlank() }
+                    ?: call.context?.summary?.takeIf { it.isNotBlank() }
+                    ?: call.result?.userResponse
+                    ?: call.result?.transcriptSummary
+                    ?: "AI needs your input."
                 _uiState.value = _uiState.value.copy(
                     isConnected = true,
                     statusText = "Connected",
-                    callContext = CallContextInfo(summary = summary),
+                    callContext = CallContextInfo(
+                        summary = summary,
+                        reason = call.context?.reason ?: "",
+                        options = call.context?.options ?: emptyList(),
+                    ),
                 )
             } catch (_: Exception) {
                 _uiState.value = _uiState.value.copy(
                     isConnected = true,
                     statusText = "Connected",
+                    callContext = CallContextInfo(summary = contextSummary ?: "AI needs your input."),
                 )
             }
         }

@@ -3,6 +3,8 @@ package com.agentcall.app
 import android.app.Application
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.media.AudioAttributes
+import android.media.RingtoneManager
 import android.os.Build
 import android.util.Log
 import com.agentcall.app.call.CallService
@@ -49,8 +51,25 @@ class AgentCallApp : Application() {
         ).apply {
             description = "Notifications for incoming AI calls"
             setShowBadge(true)
+            setSound(
+                RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE),
+                AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                    .build(),
+            )
+            enableVibration(true)
+            vibrationPattern = longArrayOf(0, 1000, 500, 1000)
         }
         manager.createNotificationChannel(incomingCall)
+
+        // Legacy "incoming_call" channel predates ringtone/vibration. ColorOS ignores
+        // channel updates AND deleteNotificationChannel, so the versioned ID above is
+        // the only reliable upgrade path; attempt cleanup for AOSP (no-op elsewhere).
+        val legacy = manager.getNotificationChannel("incoming_call")
+        if (legacy != null && legacy.vibrationPattern == null) {
+            manager.deleteNotificationChannel("incoming_call")
+        }
 
         val signaling = NotificationChannel(
             SignalingForegroundService.CHANNEL_SIGNALING,

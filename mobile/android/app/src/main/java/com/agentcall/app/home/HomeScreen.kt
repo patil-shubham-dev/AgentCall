@@ -1,6 +1,5 @@
 package com.agentcall.app.home
 
-import android.content.Intent
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.Canvas
@@ -25,15 +24,12 @@ import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.agentcall.app.call.CallService
-import com.agentcall.app.call.IncomingCallActivity
 import com.agentcall.app.data.database.entity.AiProfileEntity
 import com.agentcall.app.ui.composables.AmbientBackground
 import com.agentcall.app.ui.composables.GradientAvatar
@@ -49,28 +45,12 @@ fun HomeScreen(
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val profiles by viewModel.profiles.collectAsStateWithLifecycle()
-    val context = LocalContext.current
 
     val snackbarHostState = remember { SnackbarHostState() }
 
     LaunchedEffect(Unit) {
         viewModel.snackbarEvents.collect { message ->
             snackbarHostState.showSnackbar(message, duration = SnackbarDuration.Short)
-        }
-    }
-
-    LaunchedEffect(Unit) {
-        viewModel.incomingCallEvents.collect { event ->
-            CallService.showIncomingCallNotification(
-                context, event.callId, event.callerName, event.summary
-            )
-            val intent = Intent(context, IncomingCallActivity::class.java).apply {
-                putExtra("call_id", event.callId)
-                putExtra("caller_name", event.callerName)
-                putExtra("context_summary", event.summary)
-                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
-            }
-            context.startActivity(intent)
         }
     }
 

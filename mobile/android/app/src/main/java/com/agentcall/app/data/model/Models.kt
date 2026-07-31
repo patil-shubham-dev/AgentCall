@@ -19,8 +19,17 @@ data class CallResponse(
     @SerialName("created_at") val createdAt: String? = null,
     @SerialName("connected_at") val connectedAt: String? = null,
     @SerialName("ended_at") val endedAt: String? = null,
+    val context: CallContext? = null,
     val result: CallResult? = null,
     @SerialName("message_count") val messageCount: Int? = null,
+)
+
+@Serializable
+data class CallContext(
+    @SerialName("task_id") val taskId: String? = null,
+    val summary: String? = null,
+    val reason: String? = null,
+    val options: List<String>? = null,
 )
 
 @Serializable

@@ -54,6 +54,9 @@ interface ApiService {
         @Body body: CancelRequest = CancelRequest(),
     ): StatusResponse
 
+    @POST("calls/{callId}/answer")
+    suspend fun answerCall(@Path("callId") callId: String): StatusResponse
+
     @POST("calls/{callId}/callback")
     suspend fun scheduleCallback(
         @Path("callId") callId: String,
