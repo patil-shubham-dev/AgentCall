@@ -31,8 +31,12 @@ async function apiRequest<T>(
 
     return { data };
   } catch (err) {
-    logger.error({ err, url }, 'API request failed');
-    return { error: 'NETWORK_ERROR', message: 'Failed to reach backend' };
+    const cause = err instanceof Error ? err.message : String(err);
+    const causeType = err instanceof TypeError ? err.message
+      : err && typeof err === 'object' && 'code' in err ? String((err as { code: unknown }).code)
+      : 'unknown';
+    logger.error({ err, url, cause, causeType }, 'API request failed');
+    return { error: 'NETWORK_ERROR', message: `Failed to reach backend: ${cause}` };
   }
 }
 
