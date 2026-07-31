@@ -39,19 +39,21 @@ object MessageTemplates {
     }
 
     fun setDeclineMessage(context: Context, text: String) {
-        prefs(context).edit().putString(KEY_DECLINE, text).apply()
+        // commit() (not apply()) so the disk write is synchronous: the
+        // Settings "Saved" indicator must not outlive a lost async flush.
+        prefs(context).edit().putString(KEY_DECLINE, text).commit()
     }
 
     fun setLaterTemplate(context: Context, text: String) {
-        prefs(context).edit().putString(KEY_LATER, text).apply()
+        prefs(context).edit().putString(KEY_LATER, text).commit()
     }
 
     fun resetDecline(context: Context) {
-        prefs(context).edit().remove(KEY_DECLINE).apply()
+        prefs(context).edit().remove(KEY_DECLINE).commit()
     }
 
     fun resetLater(context: Context) {
-        prefs(context).edit().remove(KEY_LATER).apply()
+        prefs(context).edit().remove(KEY_LATER).commit()
     }
 
     private fun prefs(context: Context): SharedPreferences =
