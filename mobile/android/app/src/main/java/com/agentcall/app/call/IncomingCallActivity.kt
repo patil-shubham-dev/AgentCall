@@ -24,8 +24,10 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.PhoneForwarded
 import androidx.compose.material.icons.filled.*
@@ -409,14 +411,30 @@ fun IncomingCallScreen(
             Spacer(modifier = Modifier.weight(0.1f))
 
             if (showLaterPicker) {
-                Surface(
-                    modifier = Modifier.fillMaxWidth(0.85f),
-                    shape = RoundedCornerShape(20.dp), color = MaterialTheme.colorScheme.surface,
-                ) {
-                    Column(modifier = Modifier.padding(20.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text("Call back in...",
-                            style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface,
-                            fontWeight = FontWeight.SemiBold)
+                Box(modifier = Modifier.weight(1f).fillMaxWidth().padding(top = 16.dp)) {
+                    Surface(
+                        modifier = Modifier.fillMaxSize(),
+                        shape = RoundedCornerShape(20.dp), color = MaterialTheme.colorScheme.surface,
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .padding(20.dp)
+                                .verticalScroll(rememberScrollState()),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                        ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text("Call back in...",
+                                style = MaterialTheme.typography.titleMedium,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                fontWeight = FontWeight.SemiBold,
+                                modifier = Modifier.weight(1f))
+                            IconButton(onClick = { showLaterPicker = false }) {
+                                Icon(Icons.Default.Close, "Back to call", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        }
                         Spacer(modifier = Modifier.height(16.dp))
                         laterOptions.forEach { (mins, label) ->
                             val isSelected = selectedMinutes == mins
@@ -441,6 +459,7 @@ fun IncomingCallScreen(
                             modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp),
                             colors = ButtonDefaults.buttonColors(containerColor = Indigo600)) {
                             Text("Call me back in $selectedMinutes min")
+                        }
                         }
                     }
                 }
