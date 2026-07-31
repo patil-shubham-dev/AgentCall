@@ -54,11 +54,13 @@ object ApiClient {
 
     fun setServerHost(host: String) {
         serverHost = host.trim().ifBlank { BuildConfig.DEFAULT_HOST }
+        phoneToken = null
         _retrofit = null
     }
 
     fun resetToDefault() {
         serverHost = BuildConfig.DEFAULT_HOST
+        phoneToken = null
         _retrofit = null
     }
 

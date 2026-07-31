@@ -2,6 +2,7 @@ package com.agentcall.app.call
 
 import android.app.*
 import android.content.Context
+import android.os.Build
 import android.content.Intent
 import android.os.Bundle
 import android.os.IBinder
@@ -45,6 +46,7 @@ class CallService : Service() {
     private var lastAiMessage: String = ""
 
     private var speechRecognizer: SpeechRecognizer? = null
+    private var pendingSpeakText: String? = null
 
     private val api: ApiService = ApiClient.create()
 
@@ -74,6 +76,10 @@ class CallService : Service() {
                         isAiSpeaking = false
                     }
                 })
+                pendingSpeakText?.let {
+                    pendingSpeakText = null
+                    speakText(it)
+                }
             }
         }
     }
@@ -105,7 +111,7 @@ class CallService : Service() {
             }
             ACTION_REPEAT_LAST -> {
                 if (lastAiMessage.isNotBlank()) {
-                    speakText(lastAiMessage)
+                    speakText(lastAiMessage, force = true)
                 }
             }
             ACTION_SEND_TEXT -> {
@@ -123,6 +129,7 @@ class CallService : Service() {
                 if (cid != null) {
                     scope.launch { repository.saveCallEnded(cid, "ended") }
                 }
+                CallEventBus.emit(CallEvent.CallEnded)
                 endCall()
                 stopSelf()
             }
@@ -147,9 +154,14 @@ class CallService : Service() {
         return START_STICKY
     }
 
-    fun speakText(text: String) {
-        val tts = textToSpeech ?: run { initTts(); return }
-        if (isPaused) return
+    fun speakText(text: String, force: Boolean = false) {
+        if (!force && isPaused) return
+        val tts = textToSpeech
+        if (tts == null || !ttsInitialized) {
+            pendingSpeakText = text
+            if (tts == null) initTts()
+            return
+        }
 
         val utteranceId = UUID.randomUUID().toString()
         tts.speak(text, TextToSpeech.QUEUE_ADD, null, utteranceId)
@@ -161,45 +173,52 @@ class CallService : Service() {
 
     private fun startVoiceSession(callId: String) {
         scope.launch {
-            try {
-                val call = api.getCall(callId)
-                val summary = call.result?.userResponse ?: call.result?.transcriptSummary ?: call.messageCount?.let {
-                    "Continuing our conversation."
-                } ?: "AI needs your input."
-                speakTextOnMain(summary)
+            var summary = "AI needs your input."
 
-                launch {
-                    signalingClient.events.collect { event ->
-                        when (event) {
-                            is VoiceBridgeEvent.AiMessage -> {
-                                speakTextOnMain(event.content)
-                                lastAiMessage = event.content
-                                CallEventBus.emit(CallEvent.AiMessage(event.content))
-                                repository.saveAiMessage(callId, event.content)
-                            }
-                            is VoiceBridgeEvent.CallEnded -> {
-                                CallEventBus.emit(CallEvent.CallEnded)
-                                speakTextOnMain("Call ended.")
-                                repository.saveCallEnded(callId, "ended")
-                                delay(1500); stopSelf()
-                            }
-                            is VoiceBridgeEvent.CallCancelled -> {
-                                CallEventBus.emit(CallEvent.CallEnded)
-                                speakTextOnMain("Call was cancelled.")
-                                repository.saveCallEnded(callId, "cancelled")
-                                delay(1500); stopSelf()
-                            }
-                            is VoiceBridgeEvent.Disconnected -> {
-                                CallEventBus.emit(CallEvent.CallEnded)
-                                stopSelf()
-                            }
-                            else -> {}
+            // Subscribe to signaling events FIRST — before any network call —
+            // so the collector is ready before any WebSocket AiMessage can arrive.
+            val eventsJob = launch {
+                signalingClient.events.collect { event ->
+                    when (event) {
+                        is VoiceBridgeEvent.AiMessage -> {
+                            if (event.callId != callId) return@collect
+                            speakTextOnMain(event.content)
+                            lastAiMessage = event.content
+                            CallEventBus.emit(CallEvent.AiMessage(event.content))
+                            repository.saveAiMessage(callId, event.content)
                         }
+                        is VoiceBridgeEvent.CallEnded -> {
+                            if (event.callId != callId) return@collect
+                            CallEventBus.emit(CallEvent.CallEnded)
+                            speakTextOnMain("Call ended.")
+                            repository.saveCallEnded(callId, "ended")
+                            delay(1500); stopSelf()
+                        }
+                        is VoiceBridgeEvent.CallCancelled -> {
+                            if (event.callId != callId) return@collect
+                            CallEventBus.emit(CallEvent.CallEnded)
+                            speakTextOnMain("Call was cancelled.")
+                            repository.saveCallEnded(callId, "cancelled")
+                            delay(1500); stopSelf()
+                        }
+                        // Disconnected is defined but NOT emitted by SignalingClient.
+                        // The client handles reconnection internally (onFailure/onClosed).
+                        // If ever wired up, should show "Reconnecting..." UI, NOT tear down call.
+                        else -> {}
                     }
                 }
+            }
+
+            try {
+                val call = api.getCall(callId)
+                summary = call.result?.userResponse ?: call.result?.transcriptSummary ?: "AI needs your input."
             } catch (e: Exception) {
-                Log.e(TAG, "[WS] voice session failed to start", e)
-                stopSelf()
+                Log.w(TAG, "[WS] failed to fetch call data on start, continuing anyway", e)
+            }
+
+            speakTextOnMain(summary)
+            if (lastAiMessage.isBlank()) {
+                lastAiMessage = summary
             }
         }
     }
@@ -287,8 +306,11 @@ class CallService : Service() {
     }
 
     private fun endCall() {
-        signalingClient.disconnect()
         textToSpeech?.stop()
+        speechRecognizer?.destroy()
+        speechRecognizer = null
+        isRecording = false
+        isAiSpeaking = false
         releaseWakeLock()
         stopForeground(STOP_FOREGROUND_REMOVE)
     }
@@ -353,6 +375,14 @@ class CallService : Service() {
         private const val NOTIFICATION_ID_INCOMING = 1002
 
         fun showIncomingCallNotification(context: Context, callId: String, callerName: String, summary: String) {
+            val mgr = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            val canUseFullScreen = Build.VERSION.SDK_INT < 34 || mgr.canUseFullScreenIntent()
+
+            if (!canUseFullScreen) {
+                Log.w(TAG, "[NOTIF] USE_FULL_SCREEN_INTENT not granted — full-screen incoming call will not show")
+                showFullScreenIntentWarning(context)
+            }
+
             val intent = Intent(context, IncomingCallActivity::class.java).apply {
                 putExtra("call_id", callId)
                 putExtra("caller_name", callerName)
@@ -374,8 +404,37 @@ class CallService : Service() {
                 .setOngoing(false)
                 .build()
 
-            val mgr = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             mgr.notify(NOTIFICATION_ID_INCOMING, notification)
+        }
+
+        private const val NOTIFICATION_ID_FSI_WARNING = 1004
+
+        fun showFullScreenIntentWarning(context: Context) {
+            val openSettingsIntent = Intent(
+                android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                android.net.Uri.fromParts("package", context.packageName, null),
+            )
+            val settingsPi = PendingIntent.getActivity(
+                context, 0, openSettingsIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
+
+            val warning = NotificationCompat.Builder(context, SignalingForegroundService.CHANNEL_SIGNALING)
+                .setContentTitle("Incoming calls may not work")
+                .setContentText("Tap to grant \"Full screen intent\" permission in App Settings > Notifications")
+                .setSmallIcon(android.R.drawable.ic_dialog_alert)
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setOngoing(true)
+                .setContentIntent(settingsPi)
+                .build()
+
+            val mgr = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            mgr.notify(NOTIFICATION_ID_FSI_WARNING, warning)
+        }
+
+        fun cancelFullScreenIntentWarning(context: Context) {
+            val mgr = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            mgr.cancel(NOTIFICATION_ID_FSI_WARNING)
         }
 
         fun cancelIncomingNotification(context: Context) {

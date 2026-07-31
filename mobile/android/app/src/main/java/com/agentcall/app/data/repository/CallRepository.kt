@@ -7,6 +7,7 @@ import com.agentcall.app.data.database.dao.TranscriptMessageDao
 import com.agentcall.app.data.database.entity.AiProfileEntity
 import com.agentcall.app.data.database.entity.CallRecordEntity
 import com.agentcall.app.data.database.entity.TranscriptMessageEntity
+import com.agentcall.app.data.model.ActiveCall
 import com.agentcall.app.data.model.TranscriptMessage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
@@ -112,5 +113,14 @@ class CallRepository @Inject constructor(
     suspend fun ensureTranscriptFetched(callId: String) {
         val call = callDao.getCall(callId) ?: return
         if (!call.transcriptFetched) saveTranscriptLocally(callId)
+    }
+
+    suspend fun checkActiveCall(userId: String): ActiveCall? {
+        return try {
+            val response = withContext(Dispatchers.IO) { api.getActiveCall(userId) }
+            response.activeCall
+        } catch (_: Exception) {
+            null
+        }
     }
 }

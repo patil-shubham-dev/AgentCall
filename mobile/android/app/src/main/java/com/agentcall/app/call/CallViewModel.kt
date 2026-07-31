@@ -51,6 +51,8 @@ class CallViewModel @Inject constructor(
 
     private var messageCounter = 0
     private var callStartTime = 0L
+    @Volatile private var isSending = false
+    private var eventCollectionJob: kotlinx.coroutines.Job? = null
 
     private val _uiState = MutableStateFlow(ActiveCallUiState())
     val uiState: StateFlow<ActiveCallUiState> = _uiState.asStateFlow()
@@ -77,12 +79,13 @@ class CallViewModel @Inject constructor(
             }
         }
 
-        viewModelScope.launch {
+        eventCollectionJob?.cancel()
+        eventCollectionJob = viewModelScope.launch {
             CallEventBus.events.collect { event ->
                 when (event) {
                     is CallEvent.AiMessage -> addAiMessage(event.text)
                     is CallEvent.UserMessage -> addUserTranscript(event.text)
-                    is CallEvent.UserTextSent -> addUserTranscript(event.text)
+                    is CallEvent.UserTextSent -> {}
                     is CallEvent.CallEnded -> disconnect()
                     is CallEvent.AiSpeakingStarted -> setAiSpeaking(true)
                     is CallEvent.AiSpeakingFinished -> setAiSpeaking(false)
@@ -127,9 +130,10 @@ class CallViewModel @Inject constructor(
     }
 
     fun sendTextMessage(text: String) {
-        if (text.isBlank()) return
+        if (text.isBlank() || isSending) return
+        isSending = true
         val cid = _uiState.value.callId
-        if (cid.isBlank()) return
+        if (cid.isBlank()) { isSending = false; return }
 
         val msg = ChatBubble(
             id = "user_${messageCounter++}",
@@ -147,7 +151,7 @@ class CallViewModel @Inject constructor(
                 val api: ApiService = ApiClient.create()
                 api.sendUserText(cid, mapOf("text" to text))
             } catch (_: Exception) {}
-            CallEventBus.emit(CallEvent.UserTextSent(text))
+            isSending = false
         }
     }
 

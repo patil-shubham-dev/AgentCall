@@ -1,12 +1,23 @@
 package com.agentcall.app.call
 
+import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.media.MediaPlayer
+import android.media.Ringtone
 import android.media.RingtoneManager
 import android.net.Uri
+import android.util.Log
+import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.core.content.ContextCompat
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.lifecycle.lifecycleScope
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -51,8 +62,32 @@ class IncomingCallActivity : ComponentActivity() {
 
     @Inject lateinit var callerTuneManager: CallerTuneManager
     private var mediaPlayer: MediaPlayer? = null
+    private var ringtoneFallback: Ringtone? = null
+    @Volatile private var isPlayerValid = false
+
+    private var showCall by mutableStateOf(false)
+    private var showMicPermissionDenied by mutableStateOf(false)
+    private var pendingCallIntent: Intent? = null
+    private var currentCallId by mutableStateOf("")
+    private var currentCallerName by mutableStateOf("AI Agent")
+    private var currentContextSummary by mutableStateOf("")
+    private var currentTimeoutSeconds by mutableStateOf(60)
+    private val requestRecordAudioLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            pendingCallIntent?.let {
+                pendingCallIntent = null
+                startService(it)
+                showCall = true
+            }
+        } else {
+            showMicPermissionDenied = true
+        }
+    }
 
     companion object {
+        private const val TAG = "IncomingCallActivity"
         private val isProcessing = AtomicBoolean(false)
     }
 
@@ -62,28 +97,43 @@ class IncomingCallActivity : ComponentActivity() {
             val mp = MediaPlayer().apply {
                 setDataSource(this@IncomingCallActivity, uri)
                 isLooping = true
+                setOnErrorListener { _, what, extra ->
+                    Log.w(TAG, "MediaPlayer error: what=$what extra=$extra")
+                    isPlayerValid = false
+                    true
+                }
             }
             kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
                 try {
-                    withContext(Dispatchers.IO) { mp.prepare() }
+                    mp.prepare()
                     mp.start()
+                    isPlayerValid = true
                 } catch (_: Exception) {
                     mp.release()
-                    RingtoneManager.getRingtone(this@IncomingCallActivity, RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE))?.play()
+                    ringtoneFallback = RingtoneManager.getRingtone(this@IncomingCallActivity, RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE))
+                    ringtoneFallback?.play()
                 }
             }
             mediaPlayer = mp
         } catch (_: Exception) {
-            RingtoneManager.getRingtone(this, RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE))?.play()
+            ringtoneFallback = RingtoneManager.getRingtone(this, RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE))
+            ringtoneFallback?.play()
         }
     }
 
     private fun stopRinger() {
-        mediaPlayer?.apply {
-            if (isPlaying) stop()
-            release()
-        }
+        try {
+            mediaPlayer?.apply {
+                if (isPlayerValid && isPlaying) stop()
+                release()
+            }
+        } catch (_: Exception) { }
+        try {
+            ringtoneFallback?.stop()
+        } catch (_: Exception) { }
         mediaPlayer = null
+        ringtoneFallback = null
+        isPlayerValid = false
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -94,68 +144,124 @@ class IncomingCallActivity : ComponentActivity() {
             return
         }
 
-        val callId = intent.getStringExtra("call_id") ?: run { isProcessing.set(false); finish(); return }
-        val callerName = intent.getStringExtra("caller_name") ?: "AI Agent"
-        val contextSummary = intent.getStringExtra("context_summary") ?: ""
+        currentCallId = intent.getStringExtra("call_id") ?: run { isProcessing.set(false); finish(); return }
+        currentCallerName = intent.getStringExtra("caller_name") ?: "AI Agent"
+        currentContextSummary = intent.getStringExtra("context_summary") ?: ""
 
         startRinger()
 
         setContent {
             AgentCallTheme(darkTheme = true) {
-                IncomingCallScreen(
-                    callerName = callerName,
-                    contextSummary = contextSummary,
-                    onAnswer = {
-                        stopRinger()
-                        CallService.cancelIncomingNotification(this@IncomingCallActivity)
-                        val intent = Intent(this, CallActivity::class.java).apply {
-                            putExtra("call_id", callId)
-                            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
-                        }
-                        startActivity(intent)
-                        val svcIntent = Intent(this, CallService::class.java).apply {
-                            action = CallService.ACTION_START_CALL
-                            putExtra(CallService.EXTRA_CALL_ID, callId)
-                            putExtra(CallService.EXTRA_CALLER_NAME, callerName)
-                        }
-                        startService(svcIntent)
-                        isProcessing.set(false)
-                        finish()
-                    },
-                    onDecline = {
-                        stopRinger()
-                        CallService.cancelIncomingNotification(this@IncomingCallActivity)
-                        startService(Intent(this, CallService::class.java).apply {
-                            action = "com.agentcall.action.CANCEL_CALL"
-                            putExtra(CallService.EXTRA_CALL_ID, callId)
+                if (showMicPermissionDenied) {
+                    LaunchedEffect(Unit) {
+                        Toast.makeText(this@IncomingCallActivity,
+                            "Microphone permission required for calls. Grant it in Settings.",
+                            Toast.LENGTH_LONG).show()
+                        showMicPermissionDenied = false
+                    }
+                }
+
+                if (showCall) {
+                    ActiveCallScreen(callId = currentCallId, context = this@IncomingCallActivity,
+                        onEndCall = {
+                            startService(Intent(this@IncomingCallActivity, CallService::class.java).apply {
+                                action = CallService.ACTION_END_CALL
+                            })
+                            finish()
                         })
-                        isProcessing.set(false)
-                        finish()
-                    },
-                    onLater = { minutes ->
-                        stopRinger()
-                        CallService.cancelIncomingNotification(this@IncomingCallActivity)
-                        startService(Intent(this, CallService::class.java).apply {
-                            action = "com.agentcall.action.SCHEDULE_CALLBACK"
-                            putExtra(CallService.EXTRA_CALL_ID, callId)
-                            putExtra(CallService.EXTRA_TEXT, minutes.toString())
-                        })
-                        isProcessing.set(false)
-                        finish()
-                    },
-                )
+                } else {
+                    IncomingCallScreen(
+                        callerName = currentCallerName,
+                        contextSummary = currentContextSummary,
+                        onAnswer = {
+                            stopRinger()
+                            CallService.cancelIncomingNotification(this@IncomingCallActivity)
+                            val svcIntent = Intent(this@IncomingCallActivity, CallService::class.java).apply {
+                                action = CallService.ACTION_START_CALL
+                                putExtra(CallService.EXTRA_CALL_ID, currentCallId)
+                                putExtra(CallService.EXTRA_CALLER_NAME, currentCallerName)
+                            }
+                            if (ContextCompat.checkSelfPermission(this@IncomingCallActivity,
+                                    Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+                                startService(svcIntent)
+                                showCall = true
+                            } else {
+                                pendingCallIntent = svcIntent
+                                requestRecordAudioLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                            }
+                        },
+                        onDecline = {
+                            stopRinger()
+                            CallService.cancelIncomingNotification(this@IncomingCallActivity)
+                            startService(Intent(this@IncomingCallActivity, CallService::class.java).apply {
+                                action = "com.agentcall.action.CANCEL_CALL"
+                                putExtra(CallService.EXTRA_CALL_ID, currentCallId)
+                            })
+                            isProcessing.set(false)
+                            finish()
+                        },
+                        onLater = { minutes ->
+                            stopRinger()
+                            CallService.cancelIncomingNotification(this@IncomingCallActivity)
+                            startService(Intent(this@IncomingCallActivity, CallService::class.java).apply {
+                                action = "com.agentcall.action.SCHEDULE_CALLBACK"
+                                putExtra(CallService.EXTRA_CALL_ID, currentCallId)
+                                putExtra(CallService.EXTRA_TEXT, minutes.toString())
+                            })
+                            isProcessing.set(false)
+                            finish()
+                        },
+                    )
+                }
+            }
+        }
+
+        lifecycleScope.launch {
+            CallEventBus.events.collect { event ->
+                if (event is CallEvent.CallEnded) {
+                    delay(500)
+                    finish()
+                }
             }
         }
     }
 
+    private val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main + kotlinx.coroutines.SupervisorJob())
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        val callId = intent.getStringExtra("call_id") ?: return
+        Log.d(TAG, "onNewIntent callId=$callId")
+        currentCallId = callId
+        currentCallerName = intent.getStringExtra("caller_name") ?: "AI Agent"
+        currentContextSummary = intent.getStringExtra("context_summary") ?: ""
+        showCall = false
+        showMicPermissionDenied = false
+        pendingCallIntent = null
+        stopRinger()
+        startRinger()
+    }
+
     override fun onPause() {
         super.onPause()
-        mediaPlayer?.apply { if (isPlaying) pause() }
+        try {
+            mediaPlayer?.apply {
+                if (isPlayerValid && isPlaying) pause()
+            }
+        } catch (_: Exception) { }
+        try {
+            ringtoneFallback?.stop()
+        } catch (_: Exception) { }
     }
 
     override fun onResume() {
         super.onResume()
-        mediaPlayer?.apply { if (!isPlaying) start() }
+        try {
+            mediaPlayer?.apply {
+                if (isPlayerValid && !isPlaying) start()
+            }
+        } catch (_: Exception) { }
+        ringtoneFallback?.play()
     }
 
     override fun onDestroy() {

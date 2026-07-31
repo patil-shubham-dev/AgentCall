@@ -58,6 +58,7 @@ class HomeViewModel @Inject constructor(
     val incomingCallEvents = _incomingCallEvents.receiveAsFlow()
 
     private var eventsJob: kotlinx.coroutines.Job? = null
+    private val handledActiveCallIds = mutableSetOf<String>()
 
     init {
         viewModelScope.launch {
@@ -99,8 +100,29 @@ class HomeViewModel @Inject constructor(
                             statusText = "Ready",
                             isLoading = false,
                         )
+                        // Check for calls created while disconnected
+                        viewModelScope.launch {
+                            val activeCall = repository.checkActiveCall(signalingClient.currentUserId)
+                            if (activeCall != null) {
+                                if (!handledActiveCallIds.add(activeCall.callId)) return@launch
+                                val callerName = when (activeCall.reason) {
+                                    "approval" -> "Approval Request"
+                                    "error" -> "Error Alert"
+                                    "clarification" -> "AI Assistant"
+                                    else -> "AI Agent"
+                                }
+                                repository.ensureProfileExists(
+                                    callerName.lowercase().replace("\\s+".toRegex(), "-"),
+                                    callerName
+                                )
+                                _incomingCallEvents.send(
+                                    IncomingCallEvent(activeCall.callId, callerName, activeCall.summary)
+                                )
+                            }
+                        }
                     }
                     is VoiceBridgeEvent.CallIncoming -> {
+                        if (!handledActiveCallIds.add(event.callId)) return@collect
                         val agentId = event.callerName.lowercase().replace("\\s+".toRegex(), "-")
                         repository.ensureProfileExists(agentId, event.callerName)
                         _incomingCallEvents.send(

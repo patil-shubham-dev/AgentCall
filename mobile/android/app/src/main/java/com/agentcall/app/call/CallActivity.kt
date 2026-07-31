@@ -88,7 +88,7 @@ fun ActiveCallScreen(
     var textInput by remember { mutableStateOf("") }
     val focusManager = LocalFocusManager.current
 
-    LaunchedEffect(Unit) {
+    LaunchedEffect(callId) {
         viewModel.connect(callId)
         while (true) { delay(250); viewModel.tick() }
     }

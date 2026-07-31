@@ -3,6 +3,8 @@ package com.agentcall.app
 import android.app.Application
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.os.Build
+import android.util.Log
 import com.agentcall.app.call.CallService
 import com.agentcall.app.call.SignalingForegroundService
 import dagger.hilt.android.HiltAndroidApp
@@ -12,6 +14,19 @@ class AgentCallApp : Application() {
     override fun onCreate() {
         super.onCreate()
         createNotificationChannels()
+        checkFullScreenIntentPermission()
+    }
+
+    private fun checkFullScreenIntentPermission() {
+        if (Build.VERSION.SDK_INT >= 34) {
+            val mgr = getSystemService(NotificationManager::class.java)
+            if (!mgr.canUseFullScreenIntent()) {
+                Log.w("AgentCall", "[startup] USE_FULL_SCREEN_INTENT not granted — incoming calls will not show full-screen UI")
+                CallService.showFullScreenIntentWarning(this)
+            } else {
+                CallService.cancelFullScreenIntentWarning(this)
+            }
+        }
     }
 
     private fun createNotificationChannels() {
