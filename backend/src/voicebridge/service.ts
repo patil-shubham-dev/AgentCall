@@ -131,6 +131,32 @@ export class VoiceBridgeService {
     });
   }
 
+  async answerCall(callId: string): Promise<VoiceCallSession | undefined> {
+    return withSessionLock(callId, async () => {
+      const session = await this.sessionRepo.findById(callId);
+      if (!session) return undefined;
+
+      // Idempotent: the phone's persisted answer retries must never re-notify
+      // an already-answered or finished call.
+      if (session.status === 'active') return session;
+      if (session.status === 'completed' || session.status === 'cancelled') return session;
+
+      const wasPaused = session.status === 'paused';
+      session.status = 'active';
+      session.connectedAt = now();
+      // Answering a paused (callback-scheduled) call cancels the pending resume,
+      // otherwise the resume timer would re-ring an already-live call.
+      if (wasPaused) {
+        await this.callbackRepo.delete(session.userId);
+      }
+      await this.sessionRepo.save(session);
+      publishCallAnswered(session.userId, callId);
+      notifyPhone(session.userId, { type: 'call_answered', callId });
+      logger.info({ callId }, 'Call session answered');
+      return session;
+    });
+  }
+
   async addMessage(
     callId: string,
     role: 'ai' | 'user',

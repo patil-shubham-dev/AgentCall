@@ -211,6 +211,7 @@ export function registerRoutes(app: FastifyInstance, opts: RouteOptions): void {
       created_at: session.createdAt,
       connected_at: session.connectedAt,
       ended_at: session.completedAt,
+      context: session.context ?? null,
       result: session.result ?? null,
       message_count: session.messages.length,
     };
@@ -342,6 +343,15 @@ export function registerRoutes(app: FastifyInstance, opts: RouteOptions): void {
 
     if (before && before.status !== 'cancelled' && before.status !== 'completed') {
       metrics?.incrementCounter('sessions.cancelled');
+    }
+    return { status: session.status, call_id: callId };
+  });
+
+  app.post('/api/v1/calls/:callId/answer', async (request, reply) => {
+    const { callId } = request.params as { callId: string };
+    const session = await voicebridge.answerCall(callId);
+    if (!session) {
+      return reply.status(404).send({ error: 'NOT_FOUND', message: 'Call not found' });
     }
     return { status: session.status, call_id: callId };
   });
