@@ -219,6 +219,10 @@ export const sendMessageAndWaitTool = {
           outcome: 'call_ended',
           reason: call_status,
           message: `The call was ${call_status} while waiting for a reply.`,
+          user_note: reply?.content ?? null,
+          instruction: reply?.content
+            ? 'The user left a note when the call ended. Decide what to do next based on it (keep working, try again, or stop).'
+            : undefined,
         }, null, 2));
       }
 

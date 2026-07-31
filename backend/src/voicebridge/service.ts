@@ -221,6 +221,17 @@ export class VoiceBridgeService {
       const session = await this.sessionRepo.findById(params.callId);
       if (!session) return false;
 
+      if (params.note && params.note.trim()) {
+        session.messages.push({
+          id: newId(),
+          role: 'user',
+          type: 'text',
+          content: params.note,
+          createdAt: now(),
+        });
+        session.lastActivityAt = now();
+      }
+
       const resumeAt = Date.now() + params.delayMinutes * 60 * 1000;
       session.status = 'paused';
       session.pausedAt = now();
@@ -283,7 +294,7 @@ export class VoiceBridgeService {
     });
   }
 
-  async cancelCall(callId: string): Promise<VoiceCallSession | undefined> {
+  async cancelCall(callId: string, note?: string): Promise<VoiceCallSession | undefined> {
     return withSessionLock(callId, async () => {
       const session = await this.sessionRepo.findById(callId);
       if (!session) return undefined;
@@ -297,6 +308,20 @@ export class VoiceBridgeService {
       if (session.status === 'completed') {
         logger.info({ callId }, 'Call already completed, ignoring cancel');
         return session;
+      }
+
+      // The decline note is recorded as a user message BEFORE the transition,
+      // so it is part of the transcript the AI reads when it discovers the
+      // call ended — and the pending-reply poll can deliver it inline.
+      if (note && note.trim()) {
+        session.messages.push({
+          id: newId(),
+          role: 'user',
+          type: 'text',
+          content: note,
+          createdAt: now(),
+        });
+        session.lastActivityAt = now();
       }
 
       session.status = 'cancelled';

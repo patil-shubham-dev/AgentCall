@@ -59,4 +59,5 @@ export interface CallbackRequest {
   callId: string;
   delayMinutes: number;
   reason: string;
+  note?: string;
 }

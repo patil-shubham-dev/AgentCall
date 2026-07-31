@@ -75,6 +75,40 @@ describe('cancelCall idempotency', () => {
 
     expect(session).toBeUndefined();
   });
+
+  it('records a decline note as a user message before cancelling', async () => {
+    const service = makeService([makeSession({ id: 'call-decline' })]);
+
+    const cancelled = await service.cancelCall('call-decline', 'The user is busy and will call back.');
+
+    expect(cancelled?.status).toBe('cancelled');
+    expect(cancelled?.messages).toEqual([
+      expect.objectContaining({
+        role: 'user',
+        type: 'text',
+        content: 'The user is busy and will call back.',
+      }),
+    ]);
+  });
+
+  it('does not append the note again on a cancelled retry', async () => {
+    const service = makeService([makeSession({ id: 'call-retry' })]);
+
+    await service.cancelCall('call-retry', 'decline note');
+    await service.cancelCall('call-retry', 'decline note');
+
+    const after = await service.getCall('call-retry');
+    const notes = after?.messages.filter((m) => m.role === 'user' && m.content === 'decline note');
+    expect(notes).toHaveLength(1);
+  });
+
+  it('ignores a blank note', async () => {
+    const service = makeService([makeSession({ id: 'call-blank' })]);
+
+    const cancelled = await service.cancelCall('call-blank', '   ');
+
+    expect(cancelled?.messages).toHaveLength(0);
+  });
 });
 
 describe('completeCall idempotency', () => {

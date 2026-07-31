@@ -82,6 +82,36 @@ describe('answerCall', () => {
     expect(await callbackRepo.findByUserId('user-1')).toBeUndefined();
   });
 
+  it('records a callback note as a user message when pausing', async () => {
+    const service = makeService([makeSession({ id: 'call-note' })]);
+
+    await service.scheduleCallback({
+      callId: 'call-note',
+      delayMinutes: 5,
+      reason: 'user_requested',
+      note: 'The user wants you to call back in 5 minutes.',
+    });
+
+    const after = await service.getCall('call-note');
+    expect(after?.status).toBe('paused');
+    expect(after?.messages).toEqual([
+      expect.objectContaining({
+        role: 'user',
+        content: 'The user wants you to call back in 5 minutes.',
+      }),
+    ]);
+  });
+
+  it('does not append a note when none is provided', async () => {
+    const service = makeService([makeSession({ id: 'call-nonote' })]);
+
+    await service.scheduleCallback({ callId: 'call-nonote', delayMinutes: 5, reason: 'user_requested' });
+
+    const after = await service.getCall('call-nonote');
+    expect(after?.status).toBe('paused');
+    expect(after?.messages).toHaveLength(0);
+  });
+
   it('returns undefined for an unknown call', async () => {
     const service = makeService([]);
     expect(await service.answerCall('nope')).toBeUndefined();

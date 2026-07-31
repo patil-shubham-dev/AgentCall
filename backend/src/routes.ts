@@ -297,7 +297,25 @@ export function registerRoutes(app: FastifyInstance, opts: RouteOptions): void {
     }
 
     if (session.status === 'completed' || session.status === 'cancelled') {
-      return { reply: null, call_status: session.status };
+      // Terminal states: the last user message since the AI's message is the
+      // human's final word — typically a decline/callback note attached to the
+      // cancel. Delivering it here means the AI's blocking poll learns WHY the
+      // call ended at the same moment it learns the call ended.
+      const afterMessage = after ? session.messages.find((m) => m.id === after) : undefined;
+      const cutoff = afterMessage ? afterMessage.createdAt : '';
+      const terminalNote = [...session.messages].reverse().find(
+        (m) => m.role === 'user' && m.createdAt > cutoff,
+      );
+      return {
+        reply: terminalNote
+          ? {
+              id: terminalNote.id,
+              content: terminalNote.content,
+              created_at: terminalNote.createdAt,
+            }
+          : null,
+        call_status: session.status,
+      };
     }
 
     const afterIndex = after ? session.messages.findIndex((m) => m.id === after) : -1;
@@ -335,8 +353,10 @@ export function registerRoutes(app: FastifyInstance, opts: RouteOptions): void {
 
   app.post('/api/v1/calls/:callId/cancel', async (request) => {
     const { callId } = request.params as { callId: string };
+    const body = (request.body ?? {}) as { note?: unknown };
+    const note = typeof body.note === 'string' ? body.note : undefined;
     const before = await voicebridge.getCall(callId);
-    const session = await voicebridge.cancelCall(callId);
+    const session = await voicebridge.cancelCall(callId, note);
     if (!session) {
       return { error: 'NOT_FOUND', message: 'Call not found' };
     }
@@ -375,10 +395,19 @@ export function registerRoutes(app: FastifyInstance, opts: RouteOptions): void {
 
   app.post('/api/v1/calls/:callId/callback', async (request, reply) => {
     const { callId } = request.params as { callId: string };
-    const { delay_minutes } = request.body as { delay_minutes?: number };
-    const minutes = delay_minutes ?? 10;
+    const { delay_minutes, note } = (request.body ?? {}) as {
+      delay_minutes?: unknown;
+      note?: unknown;
+    };
+    const minutes = typeof delay_minutes === 'number' && delay_minutes > 0 ? delay_minutes : 10;
+    const noteText = typeof note === 'string' ? note : undefined;
 
-    const ok = await voicebridge.scheduleCallback({ callId, delayMinutes: minutes, reason: 'user_requested' });
+    const ok = await voicebridge.scheduleCallback({
+      callId,
+      delayMinutes: minutes,
+      reason: 'user_requested',
+      note: noteText,
+    });
     if (!ok) {
       return reply.status(404).send({ error: 'NOT_FOUND', message: 'Call not found' });
     }
