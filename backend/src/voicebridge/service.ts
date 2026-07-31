@@ -106,6 +106,7 @@ export class VoiceBridgeService {
     notifyPhone(session.userId, {
       type: 'call_incoming',
       callId: session.id,
+      callerName: input.agentId,
       reason: input.reason,
       summary: input.summary,
       options: input.options,

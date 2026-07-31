@@ -9,11 +9,13 @@ import { logger } from './common/logger.js';
 import { MetricsCollector } from './common/metrics-collector.js';
 import { DatabaseHealthMonitor } from './common/db-health-monitor.js';
 import { registerRoutes } from './routes.js';
+import { registerMcpEndpoint } from './mcp/endpoint.js';
 import type { RouteOptions } from './routes.js';
 import { createSignalingServer } from './signaling/server.js';
 import { DefaultEventBus, createEventLoggerHook } from './event-bus/index.js';
 import type { EventBus } from './event-bus/index.js';
 import { initializePhoneTokens } from './voicebridge/phone-tokens.js';
+import { initializeAiKeys } from './voicebridge/ai-keys.js';
 import { register as registerNotifications } from './voicebridge/notifications/index.js';
 import { register as registerPresence } from './voicebridge/presence/index.js';
 import { register as registerCalls } from './voicebridge/calls/index.js';
@@ -170,6 +172,9 @@ async function main() {
   // Initialize phone tokens (database-backed if a pool exists, in-memory otherwise)
   await initializePhoneTokens(pool);
 
+  // Initialize the named AI keys registry (Add-AI flow)
+  await initializeAiKeys(pool);
+
   // Wrap repositories with instrumentation (timing + retry + slow-query logging)
   sessionRepository = new InstrumentedSessionRepository(sessionRepository, metrics);
   callbackRepository = new InstrumentedCallbackRepository(callbackRepository, metrics);
@@ -321,6 +326,9 @@ async function main() {
     startupComplete: false,
   };
   registerRoutes(app, routeOpts);
+
+  // Streamable HTTP MCP endpoint — the AI-facing connector surface (/mcp)
+  registerMcpEndpoint(app, voiceBridgeService);
 
   let signalingServer: WebSocketServer | undefined;
   try {

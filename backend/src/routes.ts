@@ -9,6 +9,13 @@ import { getConnectedPhoneCount } from './voicebridge/service.js';
 import type { VoiceBridgeService } from './voicebridge/service.js';
 import type { CreateCallInput } from './voicebridge/types.js';
 import type { SessionRepository, CallbackRepository } from './voicebridge/repositories/index.js';
+import {
+  createAiKey,
+  deleteAiKey,
+  listAiKeys,
+  resolveAiKey,
+  DEFAULT_AGENT_NAME,
+} from './voicebridge/ai-keys.js';
 
 export interface RouteOptions {
   voicebridge: VoiceBridgeService;
@@ -36,6 +43,8 @@ interface AuthContext {
   userId: string;
   role: 'user' | 'agent' | 'service';
   authenticated: boolean;
+  agentId?: string;
+  agentName?: string;
 }
 
 async function getAuthUser(request: FastifyRequest): Promise<AuthContext> {
@@ -45,7 +54,12 @@ async function getAuthUser(request: FastifyRequest): Promise<AuthContext> {
   }
   const token = header.slice(7);
   if (token === config.serviceToken) {
-    return { userId: 'service', role: 'service', authenticated: true };
+    return { userId: 'service', role: 'service', authenticated: true, agentName: DEFAULT_AGENT_NAME };
+  }
+  // Named AI keys (from the Add-AI flow) resolve to the registered AI identity
+  const aiKey = await resolveAiKey(token).catch(() => null);
+  if (aiKey) {
+    return { userId: aiKey.name, role: 'agent', authenticated: true, agentId: aiKey.id, agentName: aiKey.name };
   }
   // Also accept phone tokens
   const phoneUserId = await validatePhoneToken(token).catch(() => null);
@@ -61,8 +75,9 @@ export function registerRoutes(app: FastifyInstance, opts: RouteOptions): void {
     // Auth middleware: protects all routes except health/ready/metrics
   app.addHook('onRequest', async (request, reply) => {
     const url = request.url ?? '';
-    // Skip auth for health check endpoints (required by K8s probes) and phone token registration
-    if (url.startsWith('/api/v1/health') || url.startsWith('/api/v1/ready') || url.startsWith('/api/v1/metrics') || url === '/api/v1/phone/token') {
+    // Skip auth for health check endpoints (required by K8s probes), phone token
+    // registration, and the MCP endpoint (which does its own multi-method auth)
+    if (url.startsWith('/api/v1/health') || url.startsWith('/api/v1/ready') || url.startsWith('/api/v1/metrics') || url === '/api/v1/phone/token' || url === '/mcp') {
       return;
     }
     const isDev = config.serviceToken === 'dev-service-token';
@@ -163,7 +178,10 @@ export function registerRoutes(app: FastifyInstance, opts: RouteOptions): void {
     logger.debug({ body: inspectBody(body) }, '[CALLS] step 1 - raw body');
 
     const userId = (body.user_id as string) ?? 'solo-user';
-    const agentId = (body.agent_id as string) ?? 'ai-agent';
+    // An authenticated AI key (or the service token) determines who is calling;
+    // the body agent_id is honoured for backward compatibility when unauthenticated.
+    const auth = (request as FastifyRequest & { auth: AuthContext }).auth;
+    const agentId = auth.agentName ?? (body.agent_id as string) ?? 'ai-agent';
     const summary = (body.summary as string) ?? (body.context as Record<string, unknown> | undefined)?.summary as string ?? '';
     const reason = (body.reason as string) ?? (body.context as Record<string, unknown> | undefined)?.reason as string ?? 'input_required';
     const taskId = (body.context as Record<string, unknown> | undefined)?.task_id as string | undefined;
@@ -425,6 +443,52 @@ export function registerRoutes(app: FastifyInstance, opts: RouteOptions): void {
     const userId = user_id ?? 'solo-user';
     const token = await createPhoneToken(userId);
     return { status: 'ok', token, user_id: userId };
+  });
+
+  // ── AI keys (multi-client identity) ──────────────────────────
+  app.post('/api/v1/ai/keys', {
+    config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
+  }, async (request, reply) => {
+    const auth = (request as FastifyRequest & { auth: AuthContext }).auth;
+    if (auth.role !== 'service') {
+      return reply.status(403).send({ error: 'FORBIDDEN', message: 'Only the service token can create AI keys' });
+    }
+    const name = String((request.body as Record<string, unknown> | undefined)?.name ?? '').trim();
+    if (!name || name.length > 50) {
+      return reply.status(400).send({ error: 'VALIDATION_ERROR', message: 'name is required (max 50 chars)' });
+    }
+    const created = await createAiKey(name);
+    metrics?.incrementCounter('ai_keys.created');
+    return reply.status(201).send({
+      key_id: created.id,
+      name: created.name,
+      key: created.key,
+      // The plaintext key is returned exactly once
+      warning: 'Store this key now — it will not be shown again.',
+    });
+  });
+
+  app.get('/api/v1/ai/keys', async (request, reply) => {
+    const auth = (request as FastifyRequest & { auth: AuthContext }).auth;
+    if (auth.role !== 'service' && auth.role !== 'user') {
+      return reply.status(403).send({ error: 'FORBIDDEN', message: 'Not permitted' });
+    }
+    const keys = await listAiKeys();
+    return { keys: keys.map((k) => ({ key_id: k.id, name: k.name, created_at: k.createdAt, last_used_at: k.lastUsedAt })) };
+  });
+
+  app.delete('/api/v1/ai/keys/:keyId', async (request, reply) => {
+    const auth = (request as FastifyRequest & { auth: AuthContext }).auth;
+    if (auth.role !== 'service') {
+      return reply.status(403).send({ error: 'FORBIDDEN', message: 'Only the service token can delete AI keys' });
+    }
+    const { keyId } = request.params as { keyId: string };
+    const deleted = await deleteAiKey(keyId);
+    if (!deleted) {
+      return reply.status(404).send({ error: 'NOT_FOUND', message: 'AI key not found' });
+    }
+    metrics?.incrementCounter('ai_keys.deleted');
+    return { status: 'deleted', key_id: keyId };
   });
 
   app.post('/api/v1/phone/register', async (request, reply) => {

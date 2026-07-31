@@ -35,6 +35,7 @@ export class LifecycleCoordinator {
     this.notifyPhone(userId, {
       type: 'call_incoming',
       callId,
+      callerName: existing.agentId,
       reason: existing.reason,
       summary: existing.context.summary,
       options: existing.context.options,
