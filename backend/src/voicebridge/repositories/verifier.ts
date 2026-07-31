@@ -62,6 +62,7 @@ function compareSessions(
 
   const tsFields: Array<{ field: string; mem: string | null | undefined; db: string | null | undefined }> = [
     { field: 'createdAt', mem: memory.createdAt, db: db.createdAt },
+    { field: 'lastActivityAt', mem: memory.lastActivityAt, db: db.lastActivityAt },
     { field: 'connectedAt', mem: memory.connectedAt, db: db.connectedAt },
     { field: 'completedAt', mem: memory.completedAt, db: db.completedAt },
     { field: 'pausedAt', mem: memory.pausedAt, db: db.pausedAt },

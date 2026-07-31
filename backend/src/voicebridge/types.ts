@@ -36,6 +36,7 @@ export interface VoiceCallSession {
     actionItems?: string[];
   };
   createdAt: string;
+  lastActivityAt?: string;
   connectedAt?: string;
   pausedAt?: string;
   resumedAt?: string;

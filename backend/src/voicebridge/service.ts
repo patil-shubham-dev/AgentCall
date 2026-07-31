@@ -92,6 +92,7 @@ export class VoiceBridgeService {
         },
       ],
       createdAt: now(),
+      lastActivityAt: now(),
     };
 
     logger.info({ callId: session.id, elapsed: Date.now() - start }, '[createCall] session object built');
@@ -125,7 +126,8 @@ export class VoiceBridgeService {
     const cutoff = Date.now() - STALE_ACTIVE_THRESHOLD_MS;
     return userSessions.find((s) => {
       if (s.status !== 'pending' && s.status !== 'active') return false;
-      return new Date(s.createdAt).getTime() >= cutoff;
+      const activityMs = new Date(s.lastActivityAt ?? s.createdAt).getTime();
+      return activityMs >= cutoff;
     });
   }
 
@@ -148,6 +150,10 @@ export class VoiceBridgeService {
       };
 
       session.messages.push(msg);
+      // Real message traffic (either direction) is the only thing that counts as
+      // activity — reconnect pings, active-call polls and notification flushes
+      // must never reset this, or abandoned sessions would never expire.
+      session.lastActivityAt = msg.createdAt;
 
       if (role === 'ai') {
         if (session.status === 'pending') {
@@ -280,12 +286,12 @@ export class VoiceBridgeService {
 
     for (const session of sessions) {
       if (session.status !== 'pending' && session.status !== 'active') continue;
-      const createdMs = new Date(session.createdAt).getTime();
-      if (createdMs >= cutoff) continue;
+      const activityMs = new Date(session.lastActivityAt ?? session.createdAt).getTime();
+      if (activityMs >= cutoff) continue;
 
-      const ageMinutes = Math.max(1, Math.round((nowMs - createdMs) / 60000));
+      const ageMinutes = Math.max(1, Math.round((nowMs - activityMs) / 60000));
       await this.completeCall(session.id, {
-        transcriptSummary: `Auto-completed by stale-session sweep (no phone activity for ${ageMinutes} min)`,
+        transcriptSummary: `Auto-completed by stale-session sweep (no conversation activity for ${ageMinutes} min)`,
       });
       logger.info(
         { callId: session.id, userId: session.userId, ageMinutes },
