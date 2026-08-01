@@ -450,8 +450,8 @@ export function registerRoutes(app: FastifyInstance, opts: RouteOptions): void {
     config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
   }, async (request, reply) => {
     const auth = (request as FastifyRequest & { auth: AuthContext }).auth;
-    if (auth.role !== 'service') {
-      return reply.status(403).send({ error: 'FORBIDDEN', message: 'Only the service token can create AI keys' });
+    if (auth.role !== 'service' && auth.role !== 'user') {
+      return reply.status(403).send({ error: 'FORBIDDEN', message: 'Not permitted' });
     }
     const name = String((request.body as Record<string, unknown> | undefined)?.name ?? '').trim();
     if (!name || name.length > 50) {
@@ -479,8 +479,8 @@ export function registerRoutes(app: FastifyInstance, opts: RouteOptions): void {
 
   app.delete('/api/v1/ai/keys/:keyId', async (request, reply) => {
     const auth = (request as FastifyRequest & { auth: AuthContext }).auth;
-    if (auth.role !== 'service') {
-      return reply.status(403).send({ error: 'FORBIDDEN', message: 'Only the service token can delete AI keys' });
+    if (auth.role !== 'service' && auth.role !== 'user') {
+      return reply.status(403).send({ error: 'FORBIDDEN', message: 'Not permitted' });
     }
     const { keyId } = request.params as { keyId: string };
     const deleted = await deleteAiKey(keyId);
