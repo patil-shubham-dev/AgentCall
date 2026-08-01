@@ -377,9 +377,11 @@ class CallService : Service() {
                     ?: call.result?.userResponse
                     ?: call.result?.transcriptSummary
                     ?: "AI needs your input."
+                Log.i(TAG, "[GREET] source=${if (incomingSummary?.isNotBlank() == true) "incoming" else if (call.context?.summary?.isNotBlank() == true) "api-context" else "fallback"} summary=\"$summary\"")
             } catch (e: Exception) {
                 Log.w(TAG, "[WS] failed to fetch call data on start, continuing anyway", e)
                 summary = incomingSummary?.takeIf { it.isNotBlank() } ?: "AI needs your input."
+                Log.i(TAG, "[GREET] source=incoming-or-fallback summary=\"$summary\"")
             }
 
             speakTextOnMain(summary)
