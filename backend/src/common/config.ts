@@ -39,6 +39,10 @@ export const config = {
     corsAllowedOrigins: env('CORS_ALLOWED_ORIGINS', '*'),
     bodyLimit: parseIntSafe('BODY_LIMIT_BYTES', '1048576'),
   },
+
+  mcp: {
+    replyPollIntervalMs: parseIntSafe('AI_REPLY_POLL_INTERVAL_MS', '1000'),
+  },
 } as const;
 
 const VALID_PERSISTENCE_MODES = ['memory', 'dual-write', 'database-read', 'database'] as const;

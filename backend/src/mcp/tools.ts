@@ -3,6 +3,7 @@ import type { CallReason } from '../common/types.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { getAgentIdentity } from './identity.js';
 import { DEFAULT_AGENT_NAME } from '../voicebridge/ai-keys.js';
+import { config } from '../common/config.js';
 
 type ToolResult = CallToolResult;
 
@@ -222,7 +223,7 @@ export function createTools(voicebridge: VoiceBridgeService): McpTool[] {
 
         const aiMessageTime = msg.createdAt;
         const deadline = Date.now() + timeoutSeconds * 1000;
-        const pollIntervalMs = 2000;
+        const pollIntervalMs = config.mcp.replyPollIntervalMs;
 
         while (Date.now() < deadline) {
           const session = await voicebridge.getCall(callId);
