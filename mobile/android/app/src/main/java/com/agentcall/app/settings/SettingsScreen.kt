@@ -714,24 +714,26 @@ fun SettingsScreen(
             // ── About ─────────────────────────────────────
             SettingsSection(title = "ABOUT") {
                 GlassCard {
-                    InfoRow(
-                        icon = Icons.Default.Info,
-                        title = "Version",
-                        subtitle = "1.0.0",
-                        onClick = {},
-                    )
-                    SettingsDivider()
-                    InfoRow(
-                        icon = Icons.Default.Code,
-                        title = "Stack",
-                        subtitle = "Kotlin \u00B7 Jetpack Compose \u00B7 MCP",
-                    )
-                    SettingsDivider()
+                    Column(modifier = Modifier.padding(4.dp)) {
+                        InfoRow(
+                            icon = Icons.Default.Info,
+                            title = "Version",
+                            subtitle = "1.0.0",
+                            onClick = {},
+                        )
+                        SettingsDivider()
+                        InfoRow(
+                            icon = Icons.Default.Code,
+                            title = "Stack",
+                            subtitle = "Kotlin \u00B7 Jetpack Compose \u00B7 MCP",
+                        )
+                        SettingsDivider()
                         InfoRow(
                             icon = Icons.Default.Shield,
                             title = "Security",
                             subtitle = "HTTPS/WSS production · HTTP/WS local",
                         )
+                    }
                 }
             }
 
