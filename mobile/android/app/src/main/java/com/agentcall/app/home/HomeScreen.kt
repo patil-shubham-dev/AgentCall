@@ -243,6 +243,7 @@ private fun AiProfileCard(profile: AiProfileEntity, aiKey: AiKeyItem?, onClick: 
     val statusText = when (presence) {
         AiPresence.BUSY -> "Busy"
         AiPresence.ONLINE -> "Online"
+        AiPresence.OFFLINE -> "Offline"
         else -> lastCallText
     }
 
