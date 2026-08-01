@@ -3,6 +3,7 @@ import Fastify from 'fastify';
 import { InMemorySessionRepository, InMemoryCallbackRepository } from '../voicebridge/repositories/index.js';
 import { VoiceBridgeService } from '../voicebridge/service.js';
 import { registerMcpEndpoint } from '../mcp/endpoint.js';
+import { registerRoutes } from '../routes.js';
 import { initializeAiKeys, createAiKey } from '../voicebridge/ai-keys.js';
 import type { FastifyInstance } from 'fastify';
 
@@ -109,6 +110,28 @@ describe('MCP endpoint auth', () => {
     const { status, body } = await postMcp('/mcp?key=' + encodeURIComponent(aiKey), initializePayload);
     expect(status).toBe(200);
     expect(body.result?.protocolVersion).toBeTruthy();
+  });
+});
+
+describe('MCP endpoint behind the global auth hook', () => {
+  it('?key= query credentials are not blocked by the global auth middleware', async () => {
+    const app2 = Fastify();
+    registerRoutes(app2, { voicebridge: service });
+    registerMcpEndpoint(app2, service);
+    await app2.listen({ port: 0, host: '127.0.0.1' });
+    const address = app2.server.address();
+    const base = typeof address === 'object' && address ? `http://127.0.0.1:${address.port}` : '';
+
+    const res = await fetch(`${base}/mcp?key=${encodeURIComponent(aiKey)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream' },
+      body: JSON.stringify(initializePayload),
+    });
+    const text = await res.text();
+    const parsed = parseSse(text);
+    expect(res.status).toBe(200);
+    expect((parsed[0] as JsonRpcResponse).result?.protocolVersion).toBeTruthy();
+    await app2.close();
   });
 });
 
