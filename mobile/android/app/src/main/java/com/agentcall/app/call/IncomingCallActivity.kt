@@ -159,6 +159,11 @@ class IncomingCallActivity : ComponentActivity() {
             return
         }
         ownsRing = true
+        // The ring UI now owns the timeout: the service's 60s fallback (meant
+        // for a notification that was never opened) would otherwise fire under
+        // the open Later picker and send the AI a decline note racing the
+        // user's chosen callback. The in-UI countdown below is picker-aware.
+        SignalingForegroundService.notifyRingOpened(this@IncomingCallActivity)
 
         currentCallId = intent.getStringExtra("call_id") ?: run { isProcessing.set(false); finish(); return }
         currentCallerName = intent.getStringExtra("caller_name") ?: "AI Agent"
@@ -330,12 +335,16 @@ fun IncomingCallScreen(
     val timeoutSeconds = 60
     var secondsLeft by remember { mutableIntStateOf(timeoutSeconds) }
 
-    LaunchedEffect(Unit) {
+    // Auto-decline countdown, paused while the Later picker is open so the
+    // user can take their time choosing; resumes with the remaining seconds
+    // when the picker closes (LaunchedEffect keyed on showLaterPicker).
+    LaunchedEffect(showLaterPicker) {
+        if (showLaterPicker) return@LaunchedEffect
         while (secondsLeft > 0) {
             delay(1000)
             secondsLeft--
         }
-        if (!showLaterPicker) onDecline()
+        onDecline()
     }
 
     val laterOptions = listOf(5 to "5 min", 10 to "10 min", 15 to "15 min", 30 to "30 min", 60 to "1 hour")

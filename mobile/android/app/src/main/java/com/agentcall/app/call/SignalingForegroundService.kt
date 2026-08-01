@@ -219,6 +219,17 @@ class SignalingForegroundService : Service() {
         startForeground(NOTIFICATION_ID, notification)
 
         when (intent?.action) {
+            ACTION_RING_OPENED -> {
+                // The ring UI is open and owns the timeout (its in-UI countdown
+                // is picker-aware and auto-declines on unresolved destroy). The
+                // service timer must not fire under an open picker: a decline
+                // note racing a user's "call back later" would send the AI two
+                // contradictory instructions. Notification stays — the open UI
+                // is the ring now; only the 60s fallback for a notification
+                // that was never opened is retired.
+                ringTimeoutJob?.cancel()
+                ringTimeoutJob = null
+            }
             ACTION_RING_RESOLVED -> {
                 // The ring UI was answered/declined/postponed — stop the timeout
                 // so it can never cancel a call that is now being handled.
@@ -242,6 +253,7 @@ class SignalingForegroundService : Service() {
         const val CHANNEL_SIGNALING = "signaling_service"
         const val ACTION_DISCONNECT = "com.agentcall.app.action.DISCONNECT_SIGNALING"
         const val ACTION_RING_RESOLVED = "com.agentcall.app.action.RING_RESOLVED"
+        const val ACTION_RING_OPENED = "com.agentcall.app.action.RING_OPENED"
         private const val NOTIFICATION_ID = 1003
         private const val REQUEST_DISCONNECT = 1001
         private const val RING_TIMEOUT_MS = 60_000L
@@ -258,6 +270,14 @@ class SignalingForegroundService : Service() {
             context.startService(
                 Intent(context, SignalingForegroundService::class.java).apply {
                     action = ACTION_RING_RESOLVED
+                }
+            )
+        }
+
+        fun notifyRingOpened(context: Context) {
+            context.startService(
+                Intent(context, SignalingForegroundService::class.java).apply {
+                    action = ACTION_RING_OPENED
                 }
             )
         }
