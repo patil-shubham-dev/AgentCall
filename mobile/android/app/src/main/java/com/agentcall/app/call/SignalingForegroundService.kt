@@ -1,15 +1,20 @@
 package com.agentcall.app.call
 
+import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.app.ActivityManager
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.PackageManager
 import android.os.Build
 import android.os.IBinder
+import android.os.PowerManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
 import com.agentcall.app.MainActivity
 import com.agentcall.app.R
 import com.agentcall.app.data.repository.CallRepository
@@ -123,6 +128,7 @@ class SignalingForegroundService : Service() {
     private fun ring(callId: String, callerName: String, summary: String) {
         if (callId == ringingCallId) return
         Log.i(TAG, "[RING] ringing callId=$callId caller=$callerName")
+        logRingDiagnostics()
         ringingCallId = callId
         CallService.showIncomingCallNotification(this, callId, callerName, summary)
         // Pre-bind and warm the TTS engine now so the first spoken word after
@@ -146,6 +152,28 @@ class SignalingForegroundService : Service() {
                     putExtra(CallService.EXTRA_TEXT, MessageTemplates.declineMessage(this@SignalingForegroundService))
                 })
             }
+        }
+    }
+
+    private fun logRingDiagnostics() {
+        try {
+            val mgr = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            val fsi = Build.VERSION.SDK_INT >= 34 && mgr.canUseFullScreenIntent()
+            val channel = mgr.getNotificationChannel(CallService.CHANNEL_INCOMING_CALL)
+            val postGranted = ContextCompat.checkSelfPermission(
+                this, android.Manifest.permission.POST_NOTIFICATIONS
+            ) == PackageManager.PERMISSION_GRANTED
+            val power = getSystemService(Context.POWER_SERVICE) as PowerManager
+            val am = getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+            val memState = ActivityManager.RunningAppProcessInfo()
+            ActivityManager.getMyMemoryState(memState)
+            Log.i(
+                TAG,
+                "[RING-DIAG] fsi=$fsi channelImp=${channel?.importance} postNotifs=$postGranted " +
+                    "interactive=${power.isInteractive} procImp=${memState.importance}",
+            )
+        } catch (e: Exception) {
+            Log.w(TAG, "[RING-DIAG] failed", e)
         }
     }
 

@@ -75,6 +75,8 @@ class IncomingCallActivity : ComponentActivity() {
     private var currentCallerName by mutableStateOf("AI Agent")
     private var currentContextSummary by mutableStateOf("")
     private var currentTimeoutSeconds by mutableStateOf(60)
+    private var ownsRing = false
+    private var ringResolved = false
     private val requestRecordAudioLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
@@ -82,6 +84,7 @@ class IncomingCallActivity : ComponentActivity() {
             pendingCallIntent?.let {
                 pendingCallIntent = null
                 startService(it)
+                ringResolved = true
                 showCall = true
             }
         } else {
@@ -93,6 +96,15 @@ class IncomingCallActivity : ComponentActivity() {
         private const val TAG = "IncomingCallActivity"
         private val isProcessing = AtomicBoolean(false)
     }
+
+    private val launchSource: String
+        get() = if (intent?.flags?.and(Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY) != 0) {
+            "history"
+        } else if (intent?.action == Intent.ACTION_MAIN) {
+            "main"
+        } else {
+            "notification/fsi"
+        }
 
     private fun startRinger() {
         try {
@@ -146,10 +158,12 @@ class IncomingCallActivity : ComponentActivity() {
             finish()
             return
         }
+        ownsRing = true
 
         currentCallId = intent.getStringExtra("call_id") ?: run { isProcessing.set(false); finish(); return }
         currentCallerName = intent.getStringExtra("caller_name") ?: "AI Agent"
         currentContextSummary = intent.getStringExtra("context_summary") ?: ""
+        Log.i(TAG, "[LAUNCH] IncomingCallActivity created callId=$currentCallId via=$launchSource")
 
         startRinger()
 
@@ -191,6 +205,7 @@ class IncomingCallActivity : ComponentActivity() {
                             if (ContextCompat.checkSelfPermission(this@IncomingCallActivity,
                                     Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
                                 startService(svcIntent)
+                                ringResolved = true
                                 showCall = true
                             } else {
                                 pendingCallIntent = svcIntent
@@ -199,6 +214,7 @@ class IncomingCallActivity : ComponentActivity() {
                         },
                         onDecline = {
                             stopRinger()
+                            ringResolved = true
                             SignalingForegroundService.notifyRingResolved(this@IncomingCallActivity)
                             CallService.cancelIncomingNotification(this@IncomingCallActivity)
                             startService(Intent(this@IncomingCallActivity, CallService::class.java).apply {
@@ -211,6 +227,7 @@ class IncomingCallActivity : ComponentActivity() {
                         },
                         onLater = { minutes ->
                             stopRinger()
+                            ringResolved = true
                             SignalingForegroundService.notifyRingResolved(this@IncomingCallActivity)
                             CallService.cancelIncomingNotification(this@IncomingCallActivity)
                             startService(Intent(this@IncomingCallActivity, CallService::class.java).apply {
@@ -249,6 +266,7 @@ class IncomingCallActivity : ComponentActivity() {
         showCall = false
         showMicPermissionDenied = false
         pendingCallIntent = null
+        ringResolved = false
         stopRinger()
         startRinger()
     }
@@ -277,6 +295,21 @@ class IncomingCallActivity : ComponentActivity() {
 
     override fun onDestroy() {
         stopRinger()
+        if (ownsRing && !ringResolved) {
+            // Ring UI destroyed without answer/decline/later (e.g. back-press).
+            // Resolve immediately instead of leaving the call pending and the
+            // notification orphaned until the 60s service-side timeout.
+            val callIdToCancel = currentCallId
+            Log.i(TAG, "[DISMISS] ring destroyed unresolved — auto-declining $callIdToCancel")
+            CallService.cancelIncomingNotification(this)
+            if (callIdToCancel.isNotBlank()) {
+                startService(Intent(this@IncomingCallActivity, CallService::class.java).apply {
+                    action = CallService.ACTION_CANCEL_CALL
+                    putExtra(CallService.EXTRA_CALL_ID, callIdToCancel)
+                    putExtra(CallService.EXTRA_TEXT, MessageTemplates.declineMessage(this@IncomingCallActivity))
+                })
+            }
+        }
         super.onDestroy()
         isProcessing.set(false)
     }
