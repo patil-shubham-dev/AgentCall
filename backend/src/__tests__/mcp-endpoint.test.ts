@@ -5,6 +5,7 @@ import { VoiceBridgeService } from '../voicebridge/service.js';
 import { registerMcpEndpoint } from '../mcp/endpoint.js';
 import { registerRoutes } from '../routes.js';
 import { initializeAiKeys, createAiKey } from '../voicebridge/ai-keys.js';
+import { initializePhoneTokens, createPhoneToken } from '../voicebridge/phone-tokens.js';
 import type { FastifyInstance } from 'fastify';
 
 interface JsonRpcResponse {
@@ -32,12 +33,12 @@ function parseSse(text: string): unknown[] {
   return messages;
 }
 
-async function postMcp(path: string, body: unknown, headers: Record<string, string> = {}): Promise<{
+async function postMcp(path: string, body: unknown, headers: Record<string, string> = {}, base: string = baseUrl): Promise<{
   status: number;
   body: JsonRpcResponse;
   sessionId: string | null;
 }> {
-  const res = await fetch(`${baseUrl}${path}`, {
+  const res = await fetch(`${base}${path}`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -131,6 +132,62 @@ describe('MCP endpoint behind the global auth hook', () => {
     const parsed = parseSse(text);
     expect(res.status).toBe(200);
     expect((parsed[0] as JsonRpcResponse).result?.protocolVersion).toBeTruthy();
+    await app2.close();
+  });
+});
+
+describe('AI availability endpoint', () => {
+  it('reports online/busy per key from live usage and active calls', async () => {
+    const sessionRepo = new InMemorySessionRepository();
+    const svc = new VoiceBridgeService(sessionRepo, new InMemoryCallbackRepository());
+    const app2 = Fastify();
+    registerRoutes(app2, { voicebridge: svc, sessionRepo });
+    registerMcpEndpoint(app2, svc);
+    await app2.listen({ port: 0, host: '127.0.0.1' });
+    const address = app2.server.address();
+    const base = typeof address === 'object' && address ? `http://127.0.0.1:${address.port}` : '';
+
+    await initializePhoneTokens();
+    const phoneToken = await createPhoneToken('solo-user');
+
+    // Use the AI key over MCP and create an active call so the key is online + busy
+    const init = await postMcp('/mcp', initializePayload, { Authorization: `Bearer ${aiKey}` }, base);
+    const sid = init.sessionId;
+    expect(sid).toBeTruthy();
+    await postMcp('/mcp', { jsonrpc: '2.0', id: 21, method: 'notifications/initialized', params: {} }, {
+      Authorization: `Bearer ${aiKey}`,
+      'Mcp-Session-Id': sid ?? '',
+    }, base);
+    const call = await postMcp('/mcp', {
+      jsonrpc: '2.0',
+      id: 22,
+      method: 'tools/call',
+      params: {
+        name: 'create_call',
+        arguments: { context: { reason: 'clarification', summary: 'availability test' } },
+      },
+    }, { Authorization: `Bearer ${aiKey}`, 'Mcp-Session-Id': sid ?? '' }, base);
+    const callResult = JSON.parse(call.body.result?.content?.[0]?.text ?? '{}') as { call_id: string };
+    expect(callResult.call_id).toBeTruthy();
+
+    const res = await fetch(`${base}/api/v1/ai/keys`, {
+      headers: { Authorization: `Bearer ${phoneToken}` },
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      keys: Array<{
+        key_id: string;
+        name: string;
+        last_seen_at: string | null;
+        online: boolean;
+        busy: boolean;
+      }>;
+    };
+    const key = body.keys.find((k) => k.name === 'TestAgent');
+    expect(key).toBeTruthy();
+    expect(key?.online).toBe(true);
+    expect(key?.busy).toBe(true);
+    expect(key?.last_seen_at).toBeTruthy();
     await app2.close();
   });
 });

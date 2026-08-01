@@ -53,6 +53,9 @@ data class AiKeyItem(
     @SerialName("name") val name: String,
     @SerialName("created_at") val createdAt: String? = null,
     @SerialName("last_used_at") val lastUsedAt: String? = null,
+    @SerialName("last_seen_at") val lastSeenAt: String? = null,
+    @SerialName("online") val online: Boolean = false,
+    @SerialName("busy") val busy: Boolean = false,
 )
 
 @Serializable

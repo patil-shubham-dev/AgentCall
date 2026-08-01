@@ -30,6 +30,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.agentcall.app.data.api.AiKeyItem
 import com.agentcall.app.data.database.entity.AiProfileEntity
 import com.agentcall.app.ui.composables.AmbientBackground
 import com.agentcall.app.ui.composables.GradientAvatar
@@ -45,6 +46,7 @@ fun HomeScreen(
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val profiles by viewModel.profiles.collectAsStateWithLifecycle()
+    val aiStatus by viewModel.aiStatus.collectAsStateWithLifecycle()
 
     val snackbarHostState = remember { SnackbarHostState() }
 
@@ -163,6 +165,7 @@ fun HomeScreen(
                     profiles.isEmpty() && !state.isConnected -> DisconnectedContent()
                     else -> AiProfileGrid(
                         profiles = profiles,
+                        aiStatus = aiStatus,
                         waitingScale = waitingScale,
                         waitingPulse = waitingPulse,
                         onProfileClicked = onProfileClicked,
@@ -176,6 +179,7 @@ fun HomeScreen(
 @Composable
 private fun AiProfileGrid(
     profiles: List<AiProfileEntity>,
+    aiStatus: Map<String, AiKeyItem>,
     waitingScale: Float,
     waitingPulse: Float,
     onProfileClicked: (String) -> Unit,
@@ -211,6 +215,7 @@ private fun AiProfileGrid(
                 ) {
                     AiProfileCard(
                         profile = profile,
+                        aiKey = aiStatus[profile.name],
                         onClick = { onProfileClicked(profile.id) },
                     )
                 }
@@ -220,7 +225,7 @@ private fun AiProfileGrid(
 }
 
 @Composable
-private fun AiProfileCard(profile: AiProfileEntity, onClick: () -> Unit) {
+private fun AiProfileCard(profile: AiProfileEntity, aiKey: AiKeyItem?, onClick: () -> Unit) {
     val interactionSource = remember { MutableInteractionSource() }
     val isPressed by interactionSource.collectIsPressedAsState()
     val pressScale by animateFloatAsState(
@@ -229,6 +234,17 @@ private fun AiProfileCard(profile: AiProfileEntity, onClick: () -> Unit) {
     )
 
     val lastCallText = profile.lastCalledAt?.let { formatRelativeTime(it) } ?: "No calls yet"
+    val presence = aiKey?.toPresence()
+    val statusColor = when (presence) {
+        AiPresence.BUSY -> Amber400
+        AiPresence.ONLINE -> Green400
+        else -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
+    val statusText = when (presence) {
+        AiPresence.BUSY -> "Busy"
+        AiPresence.ONLINE -> "Online"
+        else -> lastCallText
+    }
 
     Surface(
         onClick = onClick,
@@ -249,9 +265,9 @@ private fun AiProfileCard(profile: AiProfileEntity, onClick: () -> Unit) {
             Spacer(modifier = Modifier.height(4.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(modifier = Modifier.size(6.dp).clip(CircleShape)
-                    .background(Green500.copy(alpha = 0.8f)))
+                    .background(statusColor.copy(alpha = 0.8f)))
                 Spacer(modifier = Modifier.width(6.dp))
-                Text(lastCallText, style = MaterialTheme.typography.labelSmall,
+                Text(statusText, style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }

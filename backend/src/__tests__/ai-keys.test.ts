@@ -4,6 +4,7 @@ import {
   createAiKey,
   resolveAiKey,
   listAiKeys,
+  listAiKeyStatuses,
   deleteAiKey,
   hashKey,
 } from '../voicebridge/ai-keys.js';
@@ -46,5 +47,45 @@ describe('ai-keys registry (memory mode)', () => {
   it('names are sanitized by the caller; registry stores what it is given', async () => {
     const created = await createAiKey('  My AI  ');
     expect(created.name).toBe('  My AI  ');
+  });
+});
+
+describe('ai-key availability status (memory mode)', () => {
+  beforeEach(async () => {
+    await initializeAiKeys();
+  });
+
+  it('marks a recently-used key online and idle keys offline', async () => {
+    const used = await createAiKey('UsedAI');
+    await resolveAiKey(used.key); // sets lastUsedAt = now
+
+    await createAiKey('IdleAI');
+
+    const statuses = await listAiKeyStatuses(new Set());
+    const usedStatus = statuses.find((s) => s.name === 'UsedAI');
+    const idleStatus = statuses.find((s) => s.name === 'IdleAI');
+
+    expect(usedStatus?.online).toBe(true);
+    expect(usedStatus?.busy).toBe(false);
+    expect(usedStatus?.lastSeenAt).not.toBeNull();
+    expect(idleStatus?.online).toBe(false);
+    expect(idleStatus?.busy).toBe(false);
+  });
+
+  it('marks a key busy when its agent name has an active call', async () => {
+    const key = await createAiKey('BusyAgent');
+    await resolveAiKey(key.key);
+
+    const statuses = await listAiKeyStatuses(new Set(['BusyAgent']));
+    const status = statuses.find((s) => s.name === 'BusyAgent');
+
+    expect(status?.online).toBe(true);
+    expect(status?.busy).toBe(true);
+  });
+
+  it('does not mark busy for agent names without a matching key', async () => {
+    await createAiKey('QuietAI');
+    const statuses = await listAiKeyStatuses(new Set(['SomeoneElse']));
+    expect(statuses.find((s) => s.name === 'QuietAI')?.busy).toBe(false);
   });
 });

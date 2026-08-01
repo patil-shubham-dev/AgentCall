@@ -28,6 +28,21 @@ export interface AiKeyInfo {
   lastUsedAt: string | null;
 }
 
+export interface AiKeyStatus {
+  id: string;
+  name: string;
+  createdAt: string;
+  lastSeenAt: string | null;
+  online: boolean;
+  busy: boolean;
+}
+
+/**
+ * An AI is considered "online" if it has authenticated within this window.
+ * last_used_at is updated on every key resolution, so it doubles as last_seen.
+ */
+export const ONLINE_WINDOW_MS = 5 * 60 * 1000;
+
 export interface ResolvedAiKey {
   id: string;
   name: string;
@@ -69,12 +84,17 @@ export async function initializeAiKeys(pool?: Pool): Promise<void> {
 }
 
 async function upsertUsed(keyId: string, usedAt: string): Promise<void> {
-  try {
-    if (dbPool) {
+  if (dbPool) {
+    try {
       await dbPool.query(`UPDATE ${TABLE} SET last_used_at = $1 WHERE id = $2`, [usedAt, keyId]);
+    } catch (err) {
+      logger.warn({ err, keyId }, '[AiKeys] failed to update last_used_at');
     }
-  } catch (err) {
-    logger.warn({ err, keyId }, '[AiKeys] failed to update last_used_at');
+    return;
+  }
+  const entry = memoryKeys.get(keyId);
+  if (entry) {
+    entry.lastUsedAt = usedAt;
   }
 }
 
@@ -160,4 +180,27 @@ export async function deleteAiKey(id: string): Promise<boolean> {
     }
   }
   return memoryKeys.delete(id);
+}
+
+/**
+ * Availability status per AI key.
+ *
+ * - `online`: the key has been used (auth'ed) within ONLINE_WINDOW_MS.
+ * - `busy`: an active call is associated with this agent name.
+ */
+export async function listAiKeyStatuses(activeAgentNames: Set<string>): Promise<AiKeyStatus[]> {
+  const now = Date.now();
+  const keys = await listAiKeys();
+  return keys.map((key) => {
+    const lastSeenAt = key.lastUsedAt;
+    const lastSeenMs = lastSeenAt ? Date.parse(lastSeenAt) : NaN;
+    return {
+      id: key.id,
+      name: key.name,
+      createdAt: key.createdAt,
+      lastSeenAt,
+      online: Number.isFinite(lastSeenMs) && now - lastSeenMs <= ONLINE_WINDOW_MS,
+      busy: activeAgentNames.has(key.name),
+    };
+  });
 }

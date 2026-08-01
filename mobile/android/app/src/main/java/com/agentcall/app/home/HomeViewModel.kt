@@ -4,6 +4,9 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.agentcall.app.call.SignalingClient
 import com.agentcall.app.call.VoiceBridgeEvent
+import com.agentcall.app.data.api.ApiClient
+import com.agentcall.app.data.api.ApiService
+import com.agentcall.app.data.api.AiKeyItem
 import com.agentcall.app.data.database.entity.AiProfileEntity
 import com.agentcall.app.data.repository.CallRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -26,6 +29,14 @@ data class HomeUiState(
     val isLoading: Boolean = true,
 )
 
+enum class AiPresence { ONLINE, BUSY, OFFLINE }
+
+fun AiKeyItem.toPresence(): AiPresence = when {
+    busy -> AiPresence.BUSY
+    online -> AiPresence.ONLINE
+    else -> AiPresence.OFFLINE
+}
+
 object ServerConfigEvent {
     val reconnectRequests = MutableStateFlow(0)
 }
@@ -42,6 +53,10 @@ class HomeViewModel @Inject constructor(
     val profiles: StateFlow<List<AiProfileEntity>> = repository
         .getAllProfiles()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    /** AI availability, keyed by AI key name (matches profile.name). */
+    private val _aiStatus = MutableStateFlow<Map<String, AiKeyItem>>(emptyMap())
+    val aiStatus: StateFlow<Map<String, AiKeyItem>> = _aiStatus.asStateFlow()
 
     private val _snackbarEvents = MutableSharedFlow<String>(extraBufferCapacity = 4)
     val snackbarEvents: SharedFlow<String> = _snackbarEvents.asSharedFlow()
@@ -71,6 +86,20 @@ class HomeViewModel @Inject constructor(
                     delay(200)
                     reconnect()
                 }
+            }
+        }
+
+        viewModelScope.launch {
+            while (true) {
+                if (_uiState.value.isConnected) {
+                    runCatching {
+                        ApiClient.ensurePhoneToken()
+                        ApiClient.create<ApiService>().listAiKeys()
+                    }.onSuccess { response ->
+                        _aiStatus.value = response.keys.associateBy { it.name }
+                    }
+                }
+                delay(15_000)
             }
         }
     }

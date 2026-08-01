@@ -12,7 +12,7 @@ import type { SessionRepository, CallbackRepository } from './voicebridge/reposi
 import {
   createAiKey,
   deleteAiKey,
-  listAiKeys,
+  listAiKeyStatuses,
   resolveAiKey,
   DEFAULT_AGENT_NAME,
 } from './voicebridge/ai-keys.js';
@@ -473,8 +473,28 @@ export function registerRoutes(app: FastifyInstance, opts: RouteOptions): void {
     if (auth.role !== 'service' && auth.role !== 'user') {
       return reply.status(403).send({ error: 'FORBIDDEN', message: 'Not permitted' });
     }
-    const keys = await listAiKeys();
-    return { keys: keys.map((k) => ({ key_id: k.id, name: k.name, created_at: k.createdAt, last_used_at: k.lastUsedAt })) };
+    // Agents with an open (pending/active/paused) call are "busy"
+    const activeAgentNames = new Set<string>();
+    if (sessionRepo) {
+      const sessions = await sessionRepo.list().catch(() => []);
+      for (const session of sessions) {
+        if (session.status === 'pending' || session.status === 'active' || session.status === 'paused') {
+          activeAgentNames.add(session.agentId);
+        }
+      }
+    }
+    const keys = await listAiKeyStatuses(activeAgentNames);
+    return {
+      keys: keys.map((k) => ({
+        key_id: k.id,
+        name: k.name,
+        created_at: k.createdAt,
+        last_used_at: k.lastSeenAt,
+        last_seen_at: k.lastSeenAt,
+        online: k.online,
+        busy: k.busy,
+      })),
+    };
   });
 
   app.delete('/api/v1/ai/keys/:keyId', async (request, reply) => {
