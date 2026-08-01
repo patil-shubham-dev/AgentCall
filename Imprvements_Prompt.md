@@ -11,6 +11,26 @@ section — do not mark anything done based on "should work."
 
 ## PRIORITY 0 — Regression: ringing fails in the most common real-world state
 
+**STATUS: RESOLVED (2026-08-01) — evidence in commit d1f3a5e + 2c959c9.**
+
+Root cause: with the screen on and unlocked, Android renders a full-screen
+intent as a heads-up by design — no app gets an auto-launch in the
+backgrounded/screen-on state. The pre-d1f3a5e build additionally had **no
+contentIntent** on the incoming-call notification, so that state had no tap
+path either (notification taps did nothing), making the ring UI unreachable
+until force-stop/relaunch. Not BAL, not OEM suppression: runtime
+`canUseFullScreenIntent()` returned true, heads-up displayed, and FSI
+auto-launch worked with the screen off.
+
+Fixes: `.setContentIntent(pi)` added to the incoming notification (d1f3a5e) —
+notification-tap launches are BAL-exempt; auto-decline on ring-UI destroy
+without answer/decline/later (2c959c9). Instrumentation: `[RING-DIAG]`
+(runtime FSI/channel/grant/interactivity/process-importance at ring time) and
+`[LAUNCH]` (launch source) in logcat under tags `AgentCall` /
+`IncomingCallActivity`. Verified live in all three states — force-stopped,
+backgrounded-but-alive, and screen-off — plus the orphaned-call lifecycle and
+back-press auto-decline (see the corrected item 4 below).
+
 **This is the most important item in this document.** Live testing found that when the app
 is backgrounded (not force-stopped, not swiped away — just sitting behind another app, which
 is the normal everyday state), an incoming call does **not** ring or show the full-screen call
@@ -35,6 +55,22 @@ in most of the time in real use.
    declining (e.g. recents-swipe during ring), the call stays "pending" server-side for up to
    30 minutes with an orphaned notification. Ensure this either re-rings appropriately or
    auto-declines cleanly, not silently orphaned.
+
+   **CORRECTION (2026-08-01, verified live):** the "up to 30 minutes" figure was stale — the
+   app's ring timeout is 60s, with the backend stale-session sweep as the backstop. Verified
+   behavior:
+   - **Live app, ring UI destroyed without answer/decline/later (back-press):** fixed in
+     2c959c9 — `IncomingCallActivity.onDestroy` with the ring unresolved cancels the
+     notification and sends the decline message immediately (logcat `[DISMISS]`), server flips
+     `pending → cancelled` in ~350ms instead of waiting out the 60s timeout.
+   - **Process killed mid-ring (force-stop / swipe from recents):** nothing on the phone can
+     act (process dead); server keeps the call `pending`. On next app launch the WS reconnect
+     triggers `ringFromActiveCall` — the call re-rings within ~200ms of the WS connection and
+     gets a fresh 60s ring timeout; if unanswered it auto-declines cleanly
+     (logcat `[RING] timeout ... auto-declining`) and the server flips to `cancelled`. No
+     silent orphaning; the stale notification left in the shade by a real recents-swipe
+     remains tappable (contentIntent opens the ring UI) and clears on the re-ring/cancel.
+   - This is self-healing with no backend change.
 5. Re-test live in all three states — force-stopped, backgrounded-but-alive, and swiped from
    recents — and report real evidence for each, not an assumption that the same fix covers all
    three.
@@ -42,6 +78,10 @@ in most of the time in real use.
 ---
 
 ## PRIORITY 1 — Fallback message plays before the real greeting
+
+**STATUS: VERIFIED (2026-08-01)** — live answer test confirmed the greeting uses the reason
+from the ring payload (logged `[GREET] source=incoming` in commit f356671) and the server flips
+`pending → active` on answer, not on first AI message.
 
 **Root cause of two separate complaints (why the AI called, and message ordering).**
 
@@ -66,6 +106,14 @@ on the active-call screen; it only appears briefly during the ring.
 ---
 
 ## PRIORITY 2 — Custom messages on Decline / Call Back Later
+
+**STATUS: VERIFIED (2026-08-01)** — decline sends the Decline template as a transcript note
+*before* the call transitions to `cancelled` (delivered inline via `pending-reply` with
+`call_status`); Later sends the Later template with `{X}` substituted (verified live: "call
+back in 10 minutes"), server flips `pending → paused` and schedules the callback over WS
+(`callback_scheduled delay=10`). The ring countdown pauses while the Later picker is open so
+the 60s timeout can never fire a decline note racing a user's chosen callback (fix:
+`ACTION_RING_OPENED` + picker-aware countdown).
 
 When the user taps **Decline**, instead of silently cancelling, send a message to the AI
 first, explaining the situation, so the AI can decide what to do next (keep working on
@@ -97,6 +145,11 @@ original reason, with no explanation of why it was postponed).
 ---
 
 ## PRIORITY 3 — Editable message templates in Settings
+
+**STATUS: VERIFIED (2026-08-01)** — templates are stored in SharedPreferences
+(`call_message_templates.xml`); the Settings editor edits/resets/saves both templates. Live
+test: an edited decline text appeared verbatim in the AI transcript on the next decline, and
+reset-to-default restored the default, which the following decline used.
 
 Add a section to the existing Settings screen where the user can view and edit the Decline
 and Later message templates from Priority 2, instead of them being hardcoded.
