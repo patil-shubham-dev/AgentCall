@@ -125,6 +125,15 @@ class SignalingForegroundService : Service() {
         Log.i(TAG, "[RING] ringing callId=$callId caller=$callerName")
         ringingCallId = callId
         CallService.showIncomingCallNotification(this, callId, callerName, summary)
+        // Pre-bind and warm the TTS engine now so the first spoken word after
+        // the user answers never pays the engine bind/voice-load cost.
+        try {
+            startService(Intent(this, CallService::class.java).apply {
+                action = CallService.ACTION_PREWARM_TTS
+            })
+        } catch (e: Exception) {
+            Log.w(TAG, "[RING] TTS prewarm start failed", e)
+        }
         ringTimeoutJob?.cancel()
         ringTimeoutJob = scope.launch {
             delay(RING_TIMEOUT_MS)

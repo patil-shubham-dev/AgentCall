@@ -23,6 +23,7 @@ import com.agentcall.app.data.database.dao.TranscriptMessageDao
 import com.agentcall.app.data.repository.CallRepository
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.*
+import java.io.File
 import java.util.Locale
 import java.util.UUID
 import javax.inject.Inject
@@ -54,6 +55,12 @@ class CallService : Service() {
     private var speechRecognizer: SpeechRecognizer? = null
     private var pendingSpeakText: String? = null
 
+    // TTS latency telemetry: answer -> first spoken word, per service instance.
+    private var callStartMs = 0L
+    private var ttsInitStartMs = 0L
+    private var firstWordLogged = false
+    private val speakRequestedAt = mutableMapOf<String, Long>()
+
     private val api: ApiService = ApiClient.create()
 
     override fun onCreate() {
@@ -63,28 +70,48 @@ class CallService : Service() {
 
     private fun initTts() {
         if (ttsInitialized && textToSpeech != null) return
+        if (textToSpeech == null) ttsInitStartMs = System.currentTimeMillis()
         textToSpeech = TextToSpeech(this) { status ->
             if (status == TextToSpeech.SUCCESS) {
                 ttsInitialized = true
                 textToSpeech?.language = Locale.US
                 textToSpeech?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
                     override fun onStart(utteranceId: String?) {
+                        if (utteranceId == WARMUP_UTTERANCE_ID) return
+                        val now = System.currentTimeMillis()
+                        val synthMs = speakRequestedAt.remove(utteranceId)?.let { now - it }
                         isAiSpeaking = true
+                        if (!firstWordLogged) {
+                            firstWordLogged = true
+                            Log.i(
+                                TAG,
+                                "[TTS] first word: answer->word=${now - callStartMs}ms " +
+                                    "init=${now - ttsInitStartMs}ms synth=${synthMs}ms",
+                            )
+                        }
                         CallEventBus.emit(CallEvent.AiSpeakingStarted)
                     }
 
                     override fun onDone(utteranceId: String?) {
+                        if (utteranceId == WARMUP_UTTERANCE_ID) {
+                            deleteWarmupFile()
+                            return
+                        }
                         isAiSpeaking = false
                         CallEventBus.emit(CallEvent.AiSpeakingFinished)
                     }
 
                     override fun onError(utteranceId: String?) {
+                        if (utteranceId == WARMUP_UTTERANCE_ID) return
                         isAiSpeaking = false
                     }
                 })
-                pendingSpeakText?.let {
+                val queued = pendingSpeakText
+                if (queued != null) {
                     pendingSpeakText = null
-                    speakText(it)
+                    speakText(queued)
+                } else {
+                    warmUpTts()
                 }
             }
         }
@@ -103,10 +130,15 @@ class CallService : Service() {
             flushPending(KEY_PENDING_ANSWERS) { attemptAnswer(it) }
         }
         when (intent?.action) {
+            ACTION_PREWARM_TTS -> {
+                if (textToSpeech == null) initTts()
+            }
             ACTION_START_CALL -> {
                 val id = intent.getStringExtra(EXTRA_CALL_ID) ?: return START_NOT_STICKY
                 val callerName = intent.getStringExtra(EXTRA_CALLER_NAME) ?: "AI Agent"
                 callId = id
+                callStartMs = System.currentTimeMillis()
+                firstWordLogged = false
                 transcriptSequence = 0
                 incomingSummary = intent.getStringExtra(EXTRA_CONTEXT_SUMMARY)
                 SignalingForegroundService.notifyRingResolved(this)
@@ -269,11 +301,30 @@ class CallService : Service() {
         }
 
         val utteranceId = UUID.randomUUID().toString()
+        speakRequestedAt[utteranceId] = System.currentTimeMillis()
         tts.speak(text, TextToSpeech.QUEUE_ADD, null, utteranceId)
     }
 
     private suspend fun speakTextOnMain(text: String) = withContext(Dispatchers.Main) {
         speakText(text)
+    }
+
+    // Warms the engine's voice data with a silent file synthesis so the first
+    // real utterance never pays the lazy voice-load cost. Runs after any queued
+    // greeting so it can never delay the user's first spoken word.
+    private fun warmUpTts() {
+        val tts = textToSpeech ?: return
+        try {
+            tts.synthesizeToFile(WARMUP_TEXT, null, File(cacheDir, WARMUP_FILE), WARMUP_UTTERANCE_ID)
+        } catch (e: Exception) {
+            Log.w(TAG, "[TTS] warm-up synthesis failed", e)
+        }
+    }
+
+    private fun deleteWarmupFile() {
+        try {
+            File(cacheDir, WARMUP_FILE).delete()
+        } catch (_: Exception) {}
     }
 
     private fun startVoiceSession(callId: String) {
@@ -483,6 +534,7 @@ class CallService : Service() {
         const val ACTION_END_CALL = "com.agentcall.action.END_CALL"
         const val ACTION_CANCEL_CALL = "com.agentcall.action.CANCEL_CALL"
         const val ACTION_SCHEDULE_CALLBACK = "com.agentcall.action.SCHEDULE_CALLBACK"
+        const val ACTION_PREWARM_TTS = "com.agentcall.action.PREWARM_TTS"
         const val EXTRA_CALL_ID = "call_id"
         const val EXTRA_TEXT = "text"
         const val EXTRA_NOTE = "note"
@@ -499,6 +551,9 @@ class CallService : Service() {
         private const val KEY_PENDING_ANSWERS = "pending_answer_ids"
         private const val NOTIFICATION_ID_ONGOING = 1001
         private const val NOTIFICATION_ID_INCOMING = 1002
+        private const val WARMUP_UTTERANCE_ID = "tts-warmup"
+        private const val WARMUP_TEXT = "ok"
+        private const val WARMUP_FILE = "tts-warmup.wav"
 
         fun showIncomingCallNotification(context: Context, callId: String, callerName: String, summary: String) {
             val mgr = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -526,6 +581,10 @@ class CallService : Service() {
                 .setPriority(NotificationCompat.PRIORITY_HIGH)
                 .setCategory(NotificationCompat.CATEGORY_CALL)
                 .setFullScreenIntent(pi, true)
+                // Without a contentIntent the notification is inert when the
+                // full-screen intent is rejected (no USE_FULL_SCREEN_INTENT
+                // grant): the user could never open the incoming-call UI.
+                .setContentIntent(pi)
                 .setAutoCancel(true)
                 .setOngoing(false)
                 .build()
