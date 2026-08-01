@@ -41,7 +41,7 @@ export const config = {
   },
 
   mcp: {
-    replyPollIntervalMs: parseIntSafe('AI_REPLY_POLL_INTERVAL_MS', '1000'),
+    replyPollIntervalMs: parseIntSafe('AI_REPLY_POLL_INTERVAL_MS', '500'),
   },
 } as const;
 
