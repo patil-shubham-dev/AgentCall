@@ -218,53 +218,66 @@ export function createTools(voicebridge: VoiceBridgeService): McpTool[] {
         const content = args.content as string;
         const timeoutSeconds = Math.min(Math.max((args.timeout_seconds as number) ?? 15, 1), 45);
 
-        const msg = await voicebridge.addAiMessage(callId, content);
-        if (!msg) return error(`Error: Call not found: ${callId}`);
+        // Subscribe BEFORE sending so a reply that lands the instant the message
+        // is written is not missed (wake is a counter bump, not an edge).
+        const watcher = voicebridge.createSessionWatcher(callId);
+        try {
+          const msg = await voicebridge.addAiMessage(callId, content);
+          if (!msg) return error(`Error: Call not found: ${callId}`);
 
-        const aiMessageTime = msg.createdAt;
-        const deadline = Date.now() + timeoutSeconds * 1000;
-        const pollIntervalMs = config.mcp.replyPollIntervalMs;
+          const aiMessageTime = msg.createdAt;
+          const deadline = Date.now() + timeoutSeconds * 1000;
+          // Safety-net interval: the session watcher wakes the loop the moment
+          // a user message or terminal transition is persisted, so replies are
+          // delivered with no poll floor. This only fires if a change somehow
+          // bypasses the in-process event bus (e.g. a future multi-instance run).
+          const safetyNetMs = config.mcp.replyPollIntervalMs;
 
-        while (Date.now() < deadline) {
-          const session = await voicebridge.getCall(callId);
-          if (!session) return error(`Error: Call not found: ${callId}`);
+          while (Date.now() < deadline) {
+            const session = await voicebridge.getCall(callId);
+            if (!session) return error(`Error: Call not found: ${callId}`);
 
-          if (session.status === 'completed' || session.status === 'cancelled') {
-            const userMessages = session.messages.filter((m) => m.role === 'user');
-            const lastUser = userMessages.at(-1);
-            const note = lastUser ? lastUser.content : null;
-            return text(JSON.stringify({
-              outcome: 'call_ended',
-              reason: session.status,
-              message: `The call was ${session.status} while waiting for a reply.`,
-              user_note: note,
-              instruction: note
-                ? 'The user left a note when the call ended. Decide what to do next based on it (keep working, try again, or stop).'
-                : undefined,
-            }, null, 2));
+            if (session.status === 'completed' || session.status === 'cancelled') {
+              const userMessages = session.messages.filter((m) => m.role === 'user');
+              const lastUser = userMessages.at(-1);
+              const note = lastUser ? lastUser.content : null;
+              return text(JSON.stringify({
+                outcome: 'call_ended',
+                reason: session.status,
+                message: `The call was ${session.status} while waiting for a reply.`,
+                user_note: note,
+                instruction: note
+                  ? 'The user left a note when the call ended. Decide what to do next based on it (keep working, try again, or stop).'
+                  : undefined,
+              }, null, 2));
+            }
+
+            const replies = session.messages.filter(
+              (m) => m.role === 'user' && m.createdAt > aiMessageTime,
+            );
+            const reply = replies.at(0);
+            if (reply) {
+              return text(JSON.stringify({
+                outcome: 'reply',
+                reply: { text: reply.content, received_at: reply.createdAt },
+                exchange: { ai_message_id: msg.id, user_message_id: reply.id },
+              }, null, 2));
+            }
+
+            const remainingMs = deadline - Date.now();
+            if (remainingMs <= 0) break;
+            await watcher.waitForChange(Math.min(safetyNetMs, remainingMs));
           }
 
-          const replies = session.messages.filter(
-            (m) => m.role === 'user' && m.createdAt > aiMessageTime,
-          );
-          const reply = replies.at(0);
-          if (reply) {
-            return text(JSON.stringify({
-              outcome: 'reply',
-              reply: { text: reply.content, received_at: reply.createdAt },
-              exchange: { ai_message_id: msg.id, user_message_id: reply.id },
-            }, null, 2));
-          }
-
-          await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+          return text(JSON.stringify({
+            outcome: 'timeout',
+            waited_seconds: timeoutSeconds,
+            message: 'No reply received within the timeout window. The call is still active — use get_transcript to check for replies later, or call send_message_and_wait again.',
+            instruction: 'You can continue working and check back with get_transcript, or send another message with send_message_and_wait.',
+          }, null, 2));
+        } finally {
+          watcher.dispose();
         }
-
-        return text(JSON.stringify({
-          outcome: 'timeout',
-          waited_seconds: timeoutSeconds,
-          message: 'No reply received within the timeout window. The call is still active — use get_transcript to check for replies later, or call send_message_and_wait again.',
-          instruction: 'You can continue working and check back with get_transcript, or send another message with send_message_and_wait.',
-        }, null, 2));
       },
     },
   ];

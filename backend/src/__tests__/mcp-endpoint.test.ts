@@ -245,4 +245,49 @@ describe('MCP tools', () => {
     const session = await service.getCall(parsed.call_id);
     expect(session?.agentId).toBe('TestAgent');
   });
+
+  it('send_message_and_wait delivers a reply the moment it lands, not on a poll tick', async () => {
+    const { body: createBody } = await postMcp('/mcp', {
+      jsonrpc: '2.0',
+      id: 4,
+      method: 'tools/call',
+      params: {
+        name: 'create_call',
+        arguments: { context: { reason: 'clarification', summary: 'push reply timing test' } },
+      },
+    }, { Authorization: `Bearer ${aiKey}`, 'Mcp-Session-Id': sessionId ?? '' });
+    const createResult = createBody.result as { content: Array<{ text: string }> };
+    const created = JSON.parse(createResult.content[0]?.text ?? '{}') as { call_id: string };
+    await service.answerCall(created.call_id);
+
+    const waitStart = Date.now();
+    const waitPromise = postMcp('/mcp', {
+      jsonrpc: '2.0',
+      id: 5,
+      method: 'tools/call',
+      params: {
+        name: 'send_message_and_wait',
+        arguments: { call_id: created.call_id, content: 'Please confirm', timeout_seconds: 5 },
+      },
+    }, { Authorization: `Bearer ${aiKey}`, 'Mcp-Session-Id': sessionId ?? '' });
+
+    // Let the AI message land, then reply ~150ms later — well inside the
+    // 500ms safety-net interval. The event wake must beat the old poll tick.
+    await new Promise((r) => setTimeout(r, 150));
+    await service.processTextMessage(created.call_id, 'confirmed');
+
+    const { body: waitBody } = await waitPromise;
+    const result = waitBody.result as { content: Array<{ text: string }> };
+    const parsed = JSON.parse(result.content[0]?.text ?? '{}') as {
+      outcome: string;
+      reply?: { text: string };
+    };
+    const elapsedMs = Date.now() - waitStart;
+
+    expect(parsed.outcome).toBe('reply');
+    expect(parsed.reply?.text).toBe('confirmed');
+    // The poll-based implementation could not beat ~500ms (safety net); the
+    // event wake returns as soon as the reply is persisted.
+    expect(elapsedMs).toBeLessThan(450);
+  });
 });

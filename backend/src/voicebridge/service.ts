@@ -54,8 +54,17 @@ function now(): string {
   return new Date().toISOString();
 }
 
+export interface SessionWatcher {
+  /** Resolves true when the session changed since the previous call, false on timeout. */
+  waitForChange(timeoutMs: number): Promise<boolean>;
+  /** Releases the watcher. Must be called when the waiter is done. */
+  dispose(): void;
+}
+
 export class VoiceBridgeService {
   private lifecycleCoordinator: LifecycleCoordinator | null = null;
+  private readonly sessionChangeCounters = new Map<string, number>();
+  private readonly sessionChangeWaiters = new Map<string, Set<() => void>>();
 
   constructor(
     private sessionRepo: SessionRepository,
@@ -64,6 +73,53 @@ export class VoiceBridgeService {
 
   setLifecycleCoordinator(coordinator: LifecycleCoordinator): void {
     this.lifecycleCoordinator = coordinator;
+  }
+
+  /**
+   * In-process change notification for a call. The MCP send_message_and_wait
+   * tool uses this to wake the moment a user message or a terminal transition
+   * lands, instead of polling — the session repo remains the source of truth.
+   * Safe because session locks (and the whole service) are in-process: a
+   * render-free single instance guarantees the replying HTTP POST and the
+   * waiting tool handler share this event bus.
+   */
+  createSessionWatcher(callId: string): SessionWatcher {
+    const waiters = this.sessionChangeWaiters.get(callId) ?? new Set<() => void>();
+    this.sessionChangeWaiters.set(callId, waiters);
+
+    return {
+      waitForChange: (timeoutMs: number): Promise<boolean> => {
+        if (timeoutMs <= 0) return Promise.resolve(false);
+        const since = this.sessionChangeCounters.get(callId) ?? 0;
+        return new Promise((resolve) => {
+          const cleanup = (): void => {
+            clearTimeout(timer);
+            waiters.delete(wake);
+          };
+          const wake = (): void => {
+            if ((this.sessionChangeCounters.get(callId) ?? 0) <= since) return;
+            cleanup();
+            resolve(true);
+          };
+          const timer = setTimeout(() => {
+            cleanup();
+            resolve(false);
+          }, timeoutMs);
+          waiters.add(wake);
+        });
+      },
+      dispose: (): void => {
+        waiters.clear();
+        if (waiters.size === 0) {
+          this.sessionChangeWaiters.delete(callId);
+        }
+      },
+    };
+  }
+
+  private signalSessionChange(callId: string): void {
+    this.sessionChangeCounters.set(callId, (this.sessionChangeCounters.get(callId) ?? 0) + 1);
+    this.sessionChangeWaiters.get(callId)?.forEach((wake) => wake());
   }
 
   async createCall(input: CreateCallInput): Promise<VoiceCallSession> {
@@ -196,6 +252,7 @@ export class VoiceBridgeService {
       }
 
       await this.sessionRepo.save(session);
+      this.signalSessionChange(callId);
       logger.info({ callId, role, type }, 'Message added to session');
       return msg;
     });
@@ -238,6 +295,7 @@ export class VoiceBridgeService {
       session.pausedAt = now();
       await this.sessionRepo.save(session);
       await this.callbackRepo.save(session.userId, { callId: params.callId, resumeAt });
+      this.signalSessionChange(params.callId);
 
       publishCallPaused(session.userId, params.callId, params.delayMinutes, new Date(resumeAt).toISOString());
 
@@ -289,9 +347,9 @@ export class VoiceBridgeService {
       await this.sessionRepo.save(session);
       await this.callbackRepo.delete(session.userId);
       publishCallEnded(session.userId, callId);
+      this.signalSessionChange(callId);
       notifyPhone(session.userId, { type: 'call_ended', callId });
-      logger.info({ callId }, 'Call session completed');
-      return session;
+      logger.info({ callId }, 'Call session completed');      return session;
     });
   }
 
@@ -332,6 +390,7 @@ export class VoiceBridgeService {
       await this.sessionRepo.save(session);
       await this.callbackRepo.delete(session.userId);
       publishCallCancelled(session.userId, callId);
+      this.signalSessionChange(callId);
       notifyPhone(session.userId, { type: 'call_cancelled', callId });
       logger.info({ callId }, 'Call session cancelled');
       return session;

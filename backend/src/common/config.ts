@@ -41,6 +41,9 @@ export const config = {
   },
 
   mcp: {
+    // Safety-net wake interval for send_message_and_wait. Replies are now
+    // delivered by an in-process session-change event (no poll floor); this
+    // only fires if a change bypasses the event bus (e.g. multi-instance run).
     replyPollIntervalMs: parseIntSafe('AI_REPLY_POLL_INTERVAL_MS', '500'),
   },
 } as const;
