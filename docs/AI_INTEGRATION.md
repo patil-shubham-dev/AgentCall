@@ -75,34 +75,28 @@ Purpose: Cancel a pending or active session.
 
 ## How to Connect AI Providers
 
-### Option A: Local AI Agent (stdio MCP)
+### Option A: Embedded MCP Endpoint (Streamable HTTP)
 
 ```
-AI Agent (local) → stdio MCP → MCP Server → HTTP REST → Backend
+AI Agent (remote) → HTTP/SSE → /mcp (embedded in backend) → MCP tools → VoiceBridge service
 ```
+
+The MCP server is embedded in the backend at `POST /mcp` (Streamable HTTP). No separate process or transport config needed.
 
 **Setup:**
+1. Create an AI key in the Android app: **Settings → AI Connections → Add AI** (the app shows the one-time key and ready-made snippets).
+2. Point your AI agent at the endpoint with the key:
+
 ```bash
-cd mcp-server
-MCP_TRANSPORT=stdio BACKEND_API_URL=<url> npm start
+# Bearer auth (Claude, Cursor, Opencode)
+claude mcp add agentcall --transport http --url https://YOUR_SERVER/mcp \
+  --header "Authorization: Bearer ac_YOUR_KEY"
+
+# Query-param auth (ChatGPT — no custom header support)
+https://YOUR_SERVER/mcp?key=ac_YOUR_KEY
 ```
 
-Configure your AI agent with the MCP server path.
-
-### Option B: Remote AI via SSE (for ChatGPT/Claude web)
-
-```
-ChatGPT/Claude → SSE → MCP Server (public URL) → HTTP REST → Backend
-```
-
-**Setup:**
-```bash
-cd mcp-server
-MCP_TRANSPORT=sse MCP_API_KEY=your-key npm start
-# Expose via ngrok: ngrok http 3000
-```
-
-### Option C: REST API (for non-MCP providers)
+### Option B: REST API (for non-MCP providers)
 
 See [API_SPEC.md](../API_SPEC.md) for the complete REST API reference.
 

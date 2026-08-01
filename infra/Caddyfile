@@ -1,15 +1,9 @@
 {$CADDY_DOMAIN:localhost} {
     tls internal
 
-    @mcp {
-        path /mcp/*
-    }
-    handle @mcp {
-        reverse_proxy mcp-server:3000
-    }
-
     @api {
         path /api/*
+        path /mcp*
     }
     handle @api {
         reverse_proxy backend-api:4000

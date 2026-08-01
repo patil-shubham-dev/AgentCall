@@ -26,10 +26,6 @@ AgentCall/
 │   ├── package.json
 │   ├── tsconfig.json
 │   └── Dockerfile
-├── mcp-server/                 # MCP tool server
-│   ├── src/
-│   ├── package.json
-│   └── Dockerfile
 ├── mobile/
 │   ├── android/                # Android app (Kotlin/Compose)
 │   └── ios/                    # iOS app (Swift) — future
@@ -238,7 +234,7 @@ export class Service {
 ## How to Add an MCP Tool
 
 1. Define tool in API_SPEC.md first
-2. Add tool definition to `mcp-server/src/tools.ts`
+2. Add tool definition to `backend/src/mcp/tools.ts`
 3. Implement tool handler
 4. Add Zod validation for tool inputs
 5. Add backend API endpoint if needed
@@ -298,11 +294,8 @@ npm test               # Vitest unit tests
 npm run test:integration  # Integration tests
 npm run migrate        # Run database migrations
 
-# MCP Server
-cd mcp-server
-npm run dev            # Start MCP server
-npm run build          # Build for production
-npm test               # Run tests
+# MCP (embedded in backend)
+# Tools live in backend/src/mcp/tools.ts; endpoint is POST /mcp
 
 # Android
 cd mobile/android

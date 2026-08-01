@@ -31,7 +31,7 @@
 ## ✨ Features
 
 - **AI-Agnostic** — Works with Claude, ChatGPT, Gemini, Cursor, local LLMs, and any MCP-compatible agent
-- **MCP Native** — 5 built-in MCP tools: `create_call`, `send_message`, `get_transcript`, `complete_call`, `cancel_call`
+- **MCP Native** — 6 built-in MCP tools: `create_call`, `send_message`, `get_transcript`, `complete_call`, `cancel_call`, `send_message_and_wait`
 - **Real-Time Voice** — WebSocket-based voice bridge between AI and humans
 - **Android App** — Native Kotlin/Jetpack Compose app with incoming call notifications
 - **Single-Port Architecture** — HTTP, WebSocket, and health probes on one port
@@ -55,10 +55,9 @@ flowchart TB
         Local["Local LLMs"]
     end
 
-    subgraph MCP["MCP Server (mcp-server/)"]
-        Stdio["stdio transport"]
-        SSE["SSE / StreamableHTTP"]
-        Tools["5 MCP tools"]
+    subgraph MCP["MCP Endpoint (embedded in backend)"]
+        HTTP["Streamable HTTP (/mcp)"]
+        Tools["6 MCP tools"]
     end
 
     subgraph Backend["Backend API (backend/)"]
@@ -131,18 +130,31 @@ npm run dev
 # Enter your server URL in Settings
 ```
 
-### 3. MCP Server (for AI agents)
+### 3. Connect an AI Agent (MCP over HTTP)
 
-```bash
-cd mcp-server
-npm install
-npm run build
+The MCP server is embedded in the backend (`POST /mcp`, Streamable HTTP). Each AI client gets its own key:
+
+1. Open the Android app → **Settings → AI Connections → Add AI** and type a name (e.g. "Claude").
+2. The app shows a one-time key (`ac_...`) with ready-made snippets for Claude/Claude Code, Cursor, Opencode, and ChatGPT.
+
+Claude Desktop / Claude Code:
+
+```json
+{
+  "mcpServers": {
+    "agentcall": {
+      "type": "http",
+      "url": "https://YOUR_SERVER/mcp",
+      "headers": { "Authorization": "Bearer ac_YOUR_KEY" }
+    }
+  }
+}
 ```
 
-Connect your AI agent:
+ChatGPT (query-param auth, no header support):
 
-```bash
-claude --mcp-servers "agentcall=node /path/to/mcp-server/dist/index.js"
+```
+https://YOUR_SERVER/mcp?key=ac_YOUR_KEY
 ```
 
 ---

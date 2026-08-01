@@ -91,7 +91,7 @@ The following are planned to align with the canonical architecture (see [SYSTEM_
 ```
 Android App:    v1.0.0  (versionCode 1)
 Backend:        v1.0.0  (@agentcall/voicebridge)
-MCP Server:     v0.1.0  (@agentcall/mcp-server)
+MCP Endpoint:   embedded in backend (@modelcontextprotocol/sdk)
 ```
 
 ## Deployed URLs

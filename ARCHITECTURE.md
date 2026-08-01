@@ -14,16 +14,16 @@
 │  │ Claude   │  │ ChatGPT  │  │  Gemini  │  │  Ollama  │  │ OpenCode│ │
 │  │ (MCP)    │  │(MCP/HTTP)│  │ (MCP API)│  │ (MCP)    │  │ (MCP)   │ │
 │  └────┬─────┘  └────┬─────┘  └────┬─────┘  └────┬─────┘  └────┬────┘ │
-│       │ MCP         │ SSE/HTTP    │ MCP          │ MCP         │ stdio │
+│       │ MCP         │ MCP/HTTP    │ MCP          │ MCP         │ HTTP  │
 ├───────┼──────────────┼─────────────┼──────────────┼─────────────┼───────┤
 │       ▼              ▼             ▼              ▼             ▼       │
 │  ┌──────────────────────────────────────────────────────────────────┐  │
-│  │                      MCP SERVER (mcp-server/)                     │  │
-│  │  Transport: stdio | SSE | StreamableHTTP                          │  │
+│  │                MCP ENDPOINT (embedded in backend)                 │  │
+│  │  Transport: Streamable HTTP (/mcp)                             │  │
 │  │  Tools: create_call | send_message | get_transcript |            │  │
-│  │        complete_call | cancel_call                               │  │
+│  │        complete_call | cancel_call | send_message_and_wait │  │
 │  └──────────────────────────────┬───────────────────────────────────┘  │
-│                                 │ HTTP REST (SERVICE_TOKEN)            │
+│                                 │ in-process (same service)            │
 │  ┌──────────────────────────────▼───────────────────────────────────┐  │
 │  │                    BACKEND API (backend/)                         │  │
 │  │  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐  │  │
@@ -87,7 +87,7 @@
 |---------|------|----------|------|
 | Backend API | 4000 | HTTP | `/api/v1/*` |
 | WebSocket | 4000 | WS/WSS | `/phone?token=...` |
-| MCP Server | 3000 | HTTP/SSE | `/sse`, `/health` |
+| MCP Endpoint | 4000 | HTTP/SSE | `/mcp` |
 
 ---
 
@@ -133,7 +133,7 @@ Same structure for `CallbackRepository`.
 ## Infrastructure
 
 ```
-Docker Compose:  backend, mcp-server, caddy
+Docker Compose:  backend, caddy
 Kubernetes:      9 manifests (see infra/k8s/)
                  2 replicas min (HPA to 10)
                  PDB: minAvailable=1

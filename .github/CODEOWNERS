@@ -7,9 +7,6 @@
 # Backend service
 /backend/ @agentcall/backend
 
-# MCP server
-/mcp-server/ @agentcall/mcp-team
-
 # Mobile apps
 /mobile/android/ @agentcall/mobile-android
 /mobile/ios/ @agentcall/mobile-ios

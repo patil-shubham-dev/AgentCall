@@ -89,7 +89,7 @@ $ npm run dev
 > [HEALTH] All systems OK
 
 Scene 2 (30s): MCP tool invocation
-$ claude --mcp-servers "agentcall=node mcp-server/dist/index.js"
+$ claude mcp add agentcall --transport http --url http://localhost:4000/mcp --header "Authorization: Bearer ac_YOUR_KEY"
 > [MCP] create_call → call_abc123 created
 > [MCP] send_message → message sent to user
 > [MCP] get_transcript → transcript returned

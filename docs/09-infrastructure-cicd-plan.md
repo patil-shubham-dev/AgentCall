@@ -57,7 +57,7 @@ ufw enable
 | 49152-65535 | UDP | coturn (TURN relay) | Yes |
 | 5432 | TCP | PostgreSQL | No (Docker network) |
 | 6379 | TCP | Redis | No (Docker network) |
-| 3000 | TCP | MCP Server (SSE) | No (via Caddy proxy) |
+| 4000 | TCP | Backend API + MCP Endpoint (embedded) | No (via Caddy proxy) |
 | 4000-4001 | TCP | Backend services | No (internal) |
 
 ---
@@ -77,17 +77,6 @@ services:
       - ./Caddyfile:/etc/caddy/Caddyfile
       - caddy_data:/data
       - caddy_config:/config
-    networks:
-      - public
-      - internal
-
-  mcp-server:
-    build: ./mcp-server
-    ports:
-      - "3000:3000"
-    env_file: .env
-    depends_on:
-      - backend-api
     networks:
       - public
       - internal
@@ -151,9 +140,9 @@ networks:
 
 ```caddyfile
 agentcall.example.com {
-    # MCP Server (SSE transport)
-    handle_path /mcp/* {
-        reverse_proxy mcp-server:3000
+    # MCP Endpoint (embedded in backend)
+    handle_path /mcp* {
+        reverse_proxy backend-api:4000
     }
 
     # Backend API
@@ -287,8 +276,8 @@ jobs:
 
       - name: Push to registry
         run: |
-          docker tag mcp-server ghcr.io/${{ github.repository }}/mcp-server:${{ github.sha }}
-          docker push ghcr.io/${{ github.repository }}/mcp-server:${{ github.sha }}
+          docker tag backend-api ghcr.io/${{ github.repository }}/backend-api:${{ github.sha }}
+          docker push ghcr.io/${{ github.repository }}/backend-api:${{ github.sha }}
           # Tag as "latest" for main branch
 
   deploy-staging:

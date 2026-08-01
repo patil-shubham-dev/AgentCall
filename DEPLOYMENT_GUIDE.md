@@ -18,11 +18,9 @@ VoiceBridge supports two deployment modes:
 ```
 Caddy (reverse proxy, TLS)
   │
-  ├── MCP Server (port 3000)
-  │     └── SSE transport for AI providers
-  │
   └── Backend API (port 4000)
         ├── REST API (/api/v1/*)
+        ├── MCP Endpoint (/mcp — embedded, Streamable HTTP)
         └── WebSocket Gateway (/phone)
               │
               └── PostgreSQL 16 (port 5432)

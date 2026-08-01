@@ -1,6 +1,5 @@
 # Dependencies
 backend/node_modules/
-mcp-server/node_modules/
 mobile/android/.gradle/
 mobile/android/build/
 mobile/android/app/build/
@@ -28,7 +27,6 @@ backend/logs/
 
 # Build output
 backend/dist/
-mcp-server/dist/
 
 # Coverage
 coverage/

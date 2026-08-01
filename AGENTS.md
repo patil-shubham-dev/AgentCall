@@ -5,15 +5,14 @@
 - **Database:** PostgreSQL 16 (or in-memory for dev)
 - **WebRTC Signaling:** WebSocket (Node.js)
 - **STUN/TURN:** coturn (self-hosted)
-- **MCP Server:** Node.js / TypeScript (MCP SDK)
+- **MCP Endpoint:** Embedded in backend (Streamable HTTP via Fastify, MCP SDK)
 - **Mobile:** Android (Kotlin), iOS (Swift)
 - **Deployment:** Docker Compose on Hetzner VPS (manual setup first)
 - **Reverse Proxy:** Caddy with auto TLS
 
 ## Repo Structure
 ```
-/backend       — All server-side services (monorepo)
-/mcp-server    — MCP tool server
+/backend       — All server-side services (incl. embedded MCP endpoint)
 /mobile        — Android + iOS apps
 /infra         — Docker Compose, Caddyfile, coturn config
 /docs          — Design documents

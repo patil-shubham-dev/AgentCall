@@ -32,33 +32,6 @@ services:
     cap_drop:
       - ALL
 
-  mcp-server:
-    build:
-      context: ../mcp-server
-      dockerfile: Dockerfile
-    container_name: ac-mcp
-    restart: unless-stopped
-    ports:
-      - '3000:3000'
-    env_file: ../.env
-    depends_on:
-      - backend-api
-    deploy:
-      resources:
-        limits:
-          cpus: '0.5'
-          memory: 256M
-        reservations:
-          cpus: '0.1'
-          memory: 64M
-    security_opt:
-      - no-new-privileges:true
-    read_only: true
-    tmpfs:
-      - /tmp
-    cap_drop:
-      - ALL
-
   caddy:
     image: caddy:2-alpine
     container_name: ac-caddy
@@ -72,7 +45,6 @@ services:
       - caddy_config:/config
     depends_on:
       - backend-api
-      - mcp-server
     deploy:
       resources:
         limits:

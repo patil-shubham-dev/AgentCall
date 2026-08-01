@@ -76,9 +76,9 @@
 
 | Detail | Value |
 |--------|-------|
-| **Dockerfiles** | `backend/Dockerfile`, `mcp-server/Dockerfile`, root `Dockerfile` |
-| **Docker Compose** | `infra/docker-compose.yml` (3 services: backend, mcp, caddy) |
-| **Base Images** | `node:20-slim` (backend), `node:20-alpine` (MCP) |
+| **Dockerfiles** | `backend/Dockerfile` |
+| **Docker Compose** | `infra/docker-compose.yml` (2 services: backend, caddy) |
+| **Base Images** | `node:20-slim` (backend) |
 | **Usage** | CI builds only — not deployed via Docker Compose |
 
 **What it does:** Standardizes builds. The Docker Compose is ready for self-hosting but not currently used in production (Suga handles deployment).
@@ -151,7 +151,6 @@ git clone https://github.com/patil-shubham-dev/AgentCall.git
 cd AgentCall
 cp backend/.env.example backend/.env
 # Edit backend/.env with your settings
-cp mcp-server/.env.example mcp-server/.env
 
 # 3. Deploy with Docker Compose
 cd infra
@@ -164,5 +163,5 @@ CADDY_DOMAIN=yourdomain.com docker compose up -d
 **Components exposed:**
 - `https://yourdomain.com/api/*` — Backend API
 - `https://yourdomain.com/phone*` — WebSocket signaling
-- `https://yourdomain.com/mcp/*` — MCP Server
+- `https://yourdomain.com/mcp*` — MCP endpoint (embedded in backend)
 - `https://yourdomain.com/` — Status page ("AgentCall" health check)

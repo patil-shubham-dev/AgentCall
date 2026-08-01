@@ -69,7 +69,6 @@
 ## Package Registry
 
 - [ ] Publish `@agentcall/voicebridge` to npm (optional — backend is self-hosted)
-- [ ] Publish `@agentcall/mcp-server` to npm
 - [ ] Verify package names are not squatted
 - [ ] npm package includes: README, LICENSE, CHANGELOG
 - [ ] Docker image pushed to ghcr.io/agentcall/agentcall:1.0.0

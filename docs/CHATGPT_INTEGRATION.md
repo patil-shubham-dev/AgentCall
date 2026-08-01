@@ -24,7 +24,7 @@ ChatGPT can communicate with AgentCall through several mechanisms. This document
 
 ### Implementation
 
-The MCP Server's SSE transport already supports CORS for `chatgpt.com` and optional API key auth.
+The backend's Streamable HTTP MCP endpoint (`POST /mcp`) supports query-param key auth (`?key=ac_...`) for clients that cannot send custom headers, and Bearer auth otherwise.
 
 ### Pros/Cons
 
@@ -33,7 +33,7 @@ The MCP Server's SSE transport already supports CORS for `chatgpt.com` and optio
 
 ---
 
-## Integration Option 2: MCP + Client Mode (ChatGPT Desktop)
+## Integration Option 2: MCP over HTTP (ChatGPT Desktop)
 
 **Best for:** Developers using ChatGPT Desktop app
 
@@ -42,17 +42,17 @@ The MCP Server's SSE transport already supports CORS for `chatgpt.com` and optio
 {
   "mcpServers": {
     "agentcall": {
-      "command": "node",
-      "args": ["/path/to/mcp-server/dist/index.js"],
-      "env": {
-        "MCP_TRANSPORT": "stdio",
-        "BACKEND_API_URL": "https://api.agentcall.dev/api/v1",
-        "SERVICE_TOKEN": "your-token"
+      "type": "http",
+      "url": "https://api.agentcall.dev/mcp",
+      "headers": {
+        "Authorization": "Bearer ac_YOUR_KEY"
       }
     }
   }
 }
 ```
+
+Create the key in the Android app: **Settings → AI Connections → Add AI**.
 
 ---
 
@@ -105,7 +105,7 @@ Build a middleware service that provides a unified interface for any AI provider
 
 | Item | Status |
 |------|--------|
-| MCP server supports stdio + SSE + StreamableHTTP | ✅ |
+| MCP endpoint (embedded in backend, Streamable HTTP + query-param auth) | ✅ |
 | API endpoints match API_SPEC.md | 🟡 Partial |
 | JWT auth | ❌ Missing |
 | Deployment on public URL | ✅ (Suga) |

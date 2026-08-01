@@ -29,7 +29,7 @@ See [SECURITY_GUIDELINES.md](./docs/SECURITY_GUIDELINES.md) for our security arc
 
 The following are in scope for security reports:
 - Backend API (`backend/`)
-- MCP Server (`mcp-server/`)
+- MCP endpoint (embedded in backend — `backend/src/mcp/`)
 - Android app (`mobile/android/`)
 - Infrastructure configurations (`infra/`)
 - Authentication and authorization flows

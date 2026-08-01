@@ -428,32 +428,30 @@ createRepositories(db: Knex): AllRepositories
 
 ---
 
-## 14. MCP Server
+## 14. MCP Endpoint (embedded in backend)
 
-**Folder:** `mcp-server/src/`
+**Folder:** `backend/src/mcp/`
 
 **Responsibilities:**
 - MCP tool definitions and schemas
-- HTTP/SSE transport for MCP
-- API client to backend
+- Streamable HTTP transport for MCP
+- AI key auth (Bearer / query-param)
 - Request validation
 
 **Allowed Dependencies:**
 - `@modelcontextprotocol/sdk` (external)
 - `zod` (for validation)
-- `node:http`, `node:crypto`
 - `pino`
 
 **Forbidden Dependencies:**
-- Any backend internal module (communicates via HTTP only)
+- Any HTTP client dependency (talks to backend in-process)
 - Any Android/iOS code
 
 **Public Interfaces:**
 ```
 tools — array of MCP tool definitions
-startSSEServer — creates HTTP server with SSE transport
-createConfiguredServer — creates MCP Server with tool handlers
-client — HTTP client for backend API
+transport — StreamableHTTPServerTransport per session
+identity — per-key agent identity resolution
 ```
 
 ---

@@ -101,8 +101,7 @@ AgentCall never:
 ## Repo Structure
 
 ```
-├── backend/          — API server + signaling (Node.js/TypeScript)
-├── mcp-server/       — MCP tool server
+├── backend/          — API server + signaling + embedded MCP endpoint (Node.js/TypeScript)
 ├── mobile/
 │   └── android/      — Android app (Kotlin, Jetpack Compose)
 ├── infra/            — Docker Compose, Caddyfile, coturn config
