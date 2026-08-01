@@ -35,6 +35,37 @@ data class CallbackResponse(
     @SerialName("resume_in_minutes") val resumeInMinutes: Int? = null,
 )
 
+@Serializable
+data class AiKeyCreateRequest(
+    @SerialName("name") val name: String,
+)
+
+@Serializable
+data class AiKeyCreateResponse(
+    @SerialName("key_id") val keyId: String = "",
+    @SerialName("name") val name: String = "",
+    @SerialName("key") val key: String = "",
+)
+
+@Serializable
+data class AiKeyItem(
+    @SerialName("key_id") val keyId: String,
+    @SerialName("name") val name: String,
+    @SerialName("created_at") val createdAt: String? = null,
+    @SerialName("last_used_at") val lastUsedAt: String? = null,
+)
+
+@Serializable
+data class AiKeyListResponse(
+    @SerialName("keys") val keys: List<AiKeyItem> = emptyList(),
+)
+
+@Serializable
+data class AiKeyDeleteResponse(
+    @SerialName("status") val status: String = "",
+    @SerialName("key_id") val keyId: String = "",
+)
+
 interface ApiService {
 
     @POST("calls")
@@ -84,4 +115,13 @@ interface ApiService {
 
     @GET("calls/{callId}/transcript")
     suspend fun getTranscript(@Path("callId") callId: String): TranscriptResponse
+
+    @POST("ai/keys")
+    suspend fun createAiKey(@Body body: AiKeyCreateRequest): AiKeyCreateResponse
+
+    @GET("ai/keys")
+    suspend fun listAiKeys(): AiKeyListResponse
+
+    @DELETE("ai/keys/{keyId}")
+    suspend fun deleteAiKey(@Path("keyId") keyId: String): AiKeyDeleteResponse
 }

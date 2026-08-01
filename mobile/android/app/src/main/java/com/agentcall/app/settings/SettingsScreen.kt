@@ -40,6 +40,10 @@ import androidx.lifecycle.viewModelScope
 import com.agentcall.app.call.SignalingClient
 import com.agentcall.app.call.SignalingClient.ConnectionState
 import com.agentcall.app.data.api.ApiClient
+import com.agentcall.app.data.api.ApiService
+import com.agentcall.app.data.api.AiKeyCreateRequest
+import com.agentcall.app.data.api.AiKeyCreateResponse
+import com.agentcall.app.data.api.AiKeyItem
 import com.agentcall.app.ui.composables.AmbientBackground
 import com.agentcall.app.ui.theme.*
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -72,6 +76,21 @@ class SettingsViewModel @Inject constructor(
 
     private val _testLatency = MutableStateFlow(0L)
     val testLatency: StateFlow<Long> = _testLatency.asStateFlow()
+
+    private val _aiKeys = MutableStateFlow<List<AiKeyItem>>(emptyList())
+    val aiKeys: StateFlow<List<AiKeyItem>> = _aiKeys.asStateFlow()
+
+    private val _aiKeysLoading = MutableStateFlow(false)
+    val aiKeysLoading: StateFlow<Boolean> = _aiKeysLoading.asStateFlow()
+
+    private val _aiKeysError = MutableStateFlow<String?>(null)
+    val aiKeysError: StateFlow<String?> = _aiKeysError.asStateFlow()
+
+    private val _createdKey = MutableStateFlow<AiKeyCreateResponse?>(null)
+    val createdKey: StateFlow<AiKeyCreateResponse?> = _createdKey.asStateFlow()
+
+    private val _creatingKey = MutableStateFlow(false)
+    val creatingKey: StateFlow<Boolean> = _creatingKey.asStateFlow()
 
     init {
         viewModelScope.launch {
@@ -128,6 +147,61 @@ class SettingsViewModel @Inject constructor(
         _testStatus.value = ConnectionTestStatus.IDLE
         _testLatency.value = 0L
     }
+
+    fun loadAiKeys() {
+        viewModelScope.launch {
+            _aiKeysLoading.value = true
+            _aiKeysError.value = null
+            try {
+                ApiClient.ensurePhoneToken()
+                _aiKeys.value = withContext(Dispatchers.IO) {
+                    ApiClient.create<ApiService>().listAiKeys().keys
+                }
+            } catch (e: Exception) {
+                _aiKeysError.value = e.message ?: "Failed to load AI keys"
+            } finally {
+                _aiKeysLoading.value = false
+            }
+        }
+    }
+
+    fun createAiKey(name: String, onDone: () -> Unit = {}) {
+        viewModelScope.launch {
+            _creatingKey.value = true
+            _aiKeysError.value = null
+            try {
+                ApiClient.ensurePhoneToken()
+                val created = withContext(Dispatchers.IO) {
+                    ApiClient.create<ApiService>().createAiKey(AiKeyCreateRequest(name))
+                }
+                _createdKey.value = created
+                onDone()
+            } catch (e: Exception) {
+                _aiKeysError.value = e.message ?: "Failed to create AI key"
+            } finally {
+                _creatingKey.value = false
+            }
+        }
+    }
+
+    fun clearCreatedKey() {
+        _createdKey.value = null
+    }
+
+    fun deleteAiKey(keyId: String) {
+        viewModelScope.launch {
+            _aiKeysError.value = null
+            try {
+                ApiClient.ensurePhoneToken()
+                withContext(Dispatchers.IO) {
+                    ApiClient.create<ApiService>().deleteAiKey(keyId)
+                }
+                _aiKeys.value = _aiKeys.value.filter { it.keyId != keyId }
+            } catch (e: Exception) {
+                _aiKeysError.value = e.message ?: "Failed to delete AI key"
+            }
+        }
+    }
 }
 
 @Composable
@@ -139,10 +213,20 @@ fun SettingsScreen(
     val connectionStatus by viewModel.connectionStatus.collectAsStateWithLifecycle()
     val testStatus by viewModel.testStatus.collectAsStateWithLifecycle()
     val testLatency by viewModel.testLatency.collectAsStateWithLifecycle()
+    val aiKeys by viewModel.aiKeys.collectAsStateWithLifecycle()
+    val aiKeysLoading by viewModel.aiKeysLoading.collectAsStateWithLifecycle()
+    val aiKeysError by viewModel.aiKeysError.collectAsStateWithLifecycle()
+    val createdKey by viewModel.createdKey.collectAsStateWithLifecycle()
+    val creatingKey by viewModel.creatingKey.collectAsStateWithLifecycle()
     val focusManager = LocalFocusManager.current
     val context = LocalContext.current
     var declineTemplate by remember { mutableStateOf(MessageTemplates.declineMessage(context)) }
     var laterTemplate by remember { mutableStateOf(MessageTemplates.laterTemplateRaw(context)) }
+
+    var showAddAiDialog by remember { mutableStateOf(false) }
+    var keyToDelete by remember { mutableStateOf<AiKeyItem?>(null) }
+
+    LaunchedEffect(Unit) { viewModel.loadAiKeys() }
 
     Column(
         modifier = Modifier
@@ -488,6 +572,120 @@ fun SettingsScreen(
                 }
             }
 
+            // ── AI Connections ────────────────────────────
+            SettingsSection(title = "AI CONNECTIONS") {
+                GlassCard {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text(
+                            text = "Connect AI assistants (ChatGPT, Claude, Opencode, ...) to your phone so they can call you.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        if (aiKeysError != null) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.Error, "Error", tint = Red400, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = aiKeysError.orEmpty(),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = Red400,
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(8.dp))
+                        }
+
+                        if (aiKeysLoading && aiKeys.isEmpty()) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("Loading keys...", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        }
+
+                        aiKeys.forEach { key ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Icon(
+                                    Icons.Default.SmartToy,
+                                    "AI",
+                                    tint = Indigo400,
+                                    modifier = Modifier.size(20.dp),
+                                )
+                                Spacer(modifier = Modifier.width(10.dp))
+                                Text(
+                                    text = key.name,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    modifier = Modifier.weight(1f),
+                                    maxLines = 1,
+                                )
+                                IconButton(onClick = { keyToDelete = key }) {
+                                    Icon(
+                                        Icons.Default.Delete,
+                                        "Delete ${key.name}",
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                                        modifier = Modifier.size(18.dp),
+                                    )
+                                }
+                            }
+                        }
+
+                        if (createdKey != null) {
+                            Spacer(modifier = Modifier.height(12.dp))
+                            CreatedKeyCard(
+                                created = createdKey!!,
+                                onDismiss = { viewModel.clearCreatedKey() },
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Button(
+                            onClick = { showAddAiDialog = true },
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(10.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = Indigo600),
+                        ) {
+                            Icon(Icons.Default.SmartToy, "Add AI", modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Add AI", style = MaterialTheme.typography.labelLarge)
+                        }
+                    }
+                }
+            }
+
+            if (showAddAiDialog) {
+                AddAiDialog(
+                    creating = creatingKey,
+                    onDismiss = { if (!creatingKey) showAddAiDialog = false },
+                    onCreate = { name ->
+                        viewModel.createAiKey(name) { showAddAiDialog = false }
+                    },
+                )
+            }
+
+            keyToDelete?.let { key ->
+                AlertDialog(
+                    onDismissRequest = { keyToDelete = null },
+                    title = { Text("Delete ${key.name}?") },
+                    text = { Text("The AI will no longer be able to call your phone with this key.") },
+                    confirmButton = {
+                        TextButton(onClick = {
+                            viewModel.deleteAiKey(key.keyId)
+                            keyToDelete = null
+                        }) {
+                            Text("Delete", color = Red400)
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { keyToDelete = null }) { Text("Cancel") }
+                    },
+                )
+            }
+
             // ── Network Info ──────────────────────────────
             SettingsSection(title = "NETWORK INFO") {
                 GlassCard {
@@ -538,6 +736,159 @@ fun SettingsScreen(
             }
 
             Spacer(modifier = Modifier.height(96.dp))
+        }
+    }
+}
+
+@Composable
+private fun AddAiDialog(
+    creating: Boolean,
+    onDismiss: () -> Unit,
+    onCreate: (String) -> Unit,
+) {
+    var name by remember { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Add AI") },
+        text = {
+            Column {
+                Text(
+                    text = "Give this AI a name. It will appear on your phone when it calls.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    placeholder = { Text("e.g. ChatGPT, Claude, Opencode", color = MaterialTheme.colorScheme.onSurfaceVariant) },
+                    enabled = !creating,
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedTextColor = MaterialTheme.colorScheme.onSurface,
+                        unfocusedTextColor = MaterialTheme.colorScheme.onSurface,
+                        cursorColor = Indigo400,
+                        focusedBorderColor = Indigo600,
+                        unfocusedBorderColor = MaterialTheme.colorScheme.outline,
+                    ),
+                    shape = RoundedCornerShape(12.dp),
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { onCreate(name.trim()) },
+                enabled = name.isNotBlank() && !creating,
+                shape = RoundedCornerShape(10.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = Indigo600),
+            ) {
+                if (creating) {
+                    CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.onPrimary)
+                    Spacer(modifier = Modifier.width(6.dp))
+                }
+                Text("Create")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss, enabled = !creating) { Text("Cancel") }
+        },
+    )
+}
+
+@Composable
+private fun CreatedKeyCard(
+    created: AiKeyCreateResponse,
+    onDismiss: () -> Unit,
+) {
+    val context = LocalContext.current
+    val mcpUrl = com.agentcall.app.data.api.ApiClient.getHttpBaseUrl()
+        .replace(Regex("/api/v1/?$"), "") + "/mcp"
+    val headerSnippet = "claude mcp add --transport http $mcpUrl " +
+        "--header \"Authorization: Bearer ${created.key}\""
+    val urlSnippet = "$mcpUrl?key=${created.key}"
+
+    fun copy(text: String) {
+        val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+        clipboard.setPrimaryClip(android.content.ClipData.newPlainText("AI key", text))
+    }
+
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = Indigo600.copy(alpha = 0.12f),
+    ) {
+        Column(modifier = Modifier.padding(14.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.CheckCircle, "Key created", tint = Green400, modifier = Modifier.size(18.dp))
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = "${created.name} created",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    fontWeight = FontWeight.Medium,
+                )
+            }
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = "This key is shown only once. Copy it now — it is not stored on the server.",
+                style = MaterialTheme.typography.labelSmall,
+                color = Red400,
+            )
+
+            Spacer(modifier = Modifier.height(10.dp))
+            KeySnippet(text = created.key, copyLabel = "Copy key", onCopy = { copy(created.key) })
+
+            Spacer(modifier = Modifier.height(10.dp))
+            Text(
+                text = "Header-based clients (Claude, Opencode, Cursor)",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontWeight = FontWeight.SemiBold,
+            )
+            KeySnippet(text = headerSnippet, copyLabel = "Copy", onCopy = { copy(headerSnippet) })
+
+            Spacer(modifier = Modifier.height(10.dp))
+            Text(
+                text = "ChatGPT (set Authentication to \u201CNone\u201D and paste this URL)",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontWeight = FontWeight.SemiBold,
+            )
+            KeySnippet(text = urlSnippet, copyLabel = "Copy", onCopy = { copy(urlSnippet) })
+
+            Spacer(modifier = Modifier.height(12.dp))
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                TextButton(onClick = onDismiss) {
+                    Text("Done", color = Indigo400)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun KeySnippet(
+    text: String,
+    copyLabel: String,
+    onCopy: () -> Unit,
+) {
+    Surface(
+        shape = RoundedCornerShape(8.dp),
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.8f),
+    ) {
+        Column(modifier = Modifier.padding(10.dp)) {
+            Text(
+                text = text,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 4,
+            )
+            Spacer(modifier = Modifier.height(6.dp))
+            TextButton(onClick = onCopy, modifier = Modifier.padding(0.dp)) {
+                Icon(Icons.Default.ContentCopy, "Copy", tint = Indigo400, modifier = Modifier.size(14.dp))
+                Spacer(modifier = Modifier.width(4.dp))
+                Text(copyLabel, style = MaterialTheme.typography.labelSmall, color = Indigo400)
+            }
         }
     }
 }
