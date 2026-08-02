@@ -21,6 +21,8 @@ import androidx.lifecycle.lifecycleScope
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
@@ -459,9 +461,7 @@ fun IncomingCallScreen(
                         shape = RoundedCornerShape(20.dp), color = MaterialTheme.colorScheme.surface,
                     ) {
                         Column(
-                            modifier = Modifier
-                                .padding(20.dp)
-                                .verticalScroll(rememberScrollState()),
+                            modifier = Modifier.padding(16.dp),
                             horizontalAlignment = Alignment.CenterHorizontally,
                         ) {
                         Row(
@@ -477,26 +477,51 @@ fun IncomingCallScreen(
                                 Icon(Icons.Default.Close, "Back to call", tint = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
                         }
-                        Spacer(modifier = Modifier.height(16.dp))
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Column(
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxWidth()
+                                .verticalScroll(rememberScrollState()),
+                        ) {
                         laterOptions.forEach { (mins, label) ->
                             val isSelected = selectedMinutes == mins
                             Surface(
-                                modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp),
-                                onClick = { selectedMinutes = mins },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 3.dp)
+                                    .clickable { selectedMinutes = mins },
                                 shape = RoundedCornerShape(12.dp),
                                 color = if (isSelected) Indigo800 else MaterialTheme.colorScheme.surfaceVariant,
                             ) {
-                                Row(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                                Row(modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
                                     verticalAlignment = Alignment.CenterVertically) {
-                                    RadioButton(selected = isSelected, onClick = { selectedMinutes = mins },
-                                        colors = RadioButtonDefaults.colors(selectedColor = Indigo400))
-                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Box(
+                                        modifier = Modifier
+                                            .size(20.dp)
+                                            .border(
+                                                2.dp,
+                                                if (isSelected) Indigo400 else MaterialTheme.colorScheme.onSurfaceVariant,
+                                                CircleShape,
+                                            )
+                                            .background(
+                                                if (isSelected) Indigo400 else Color.Transparent,
+                                                CircleShape,
+                                            ),
+                                        contentAlignment = Alignment.Center,
+                                    ) {
+                                        if (isSelected) {
+                                            Box(Modifier.size(8.dp).background(Color.White, CircleShape))
+                                        }
+                                    }
+                                    Spacer(modifier = Modifier.width(10.dp))
                                     Text(label, style = MaterialTheme.typography.bodyLarge,
                                         color = MaterialTheme.colorScheme.onSurface)
                                 }
                             }
                         }
-                        Spacer(modifier = Modifier.height(16.dp))
+                        }
+                        Spacer(modifier = Modifier.height(8.dp))
                         Button(onClick = { onLater(selectedMinutes) },
                             modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp),
                             colors = ButtonDefaults.buttonColors(containerColor = Indigo600)) {
@@ -562,7 +587,22 @@ private fun ActionButton(
         animationSpec = spring(dampingRatio = 0.6f, stiffness = 600f), label = "pressElevation"
     )
 
-    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    val labelInteractionSource = remember { MutableInteractionSource() }
+
+    // The whole row (circle + label) is the tap target. Taps on the circle are
+    // consumed by the inner Button/Surface (it wins hit-testing on the up
+    // event), so only taps on the label fall through to this clickable — both
+    // fire the same onClick. Without this, the label text below the circle was
+    // dead space users tapped expecting an action.
+    Column(
+        modifier = Modifier.clickable(
+            interactionSource = labelInteractionSource,
+            indication = null,
+            onClick = onClick,
+        ),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
         if (isSolid) {
             Button(
                 onClick = onClick, modifier = Modifier.size(size).scale(pressScale),
