@@ -9,6 +9,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -94,6 +95,7 @@ fun ActiveCallScreen(
     val listState = rememberLazyListState()
     var showContext by remember { mutableStateOf(true) }
     var textInput by remember { mutableStateOf("") }
+    var optionsPicked by remember { mutableStateOf(false) }
     val focusManager = LocalFocusManager.current
 
     LaunchedEffect(callId) {
@@ -282,6 +284,18 @@ fun ActiveCallScreen(
 
                     Spacer(modifier = Modifier.height(8.dp))
 
+                    // Quick-reply chips offered by the AI at call creation
+                    if (state.callContext.options.isNotEmpty() && !optionsPicked) {
+                        QuickReplyChips(
+                            options = state.callContext.options,
+                            onPick = { option ->
+                                optionsPicked = true
+                                viewModel.sendTextMessage(option)
+                            },
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                    }
+
                     // Control buttons row
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -343,6 +357,47 @@ fun ActiveCallScreen(
                         Spacer(modifier = Modifier.height(2.dp))
                         Text("End", style = MaterialTheme.typography.labelSmall, color = Red400, fontWeight = FontWeight.Medium)
                     }
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun QuickReplyChips(
+    options: List<String>,
+    onPick: (String) -> Unit,
+) {
+    FlowRow(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        options.forEach { option ->
+            Surface(
+                onClick = { onPick(option) },
+                shape = RoundedCornerShape(20.dp),
+                color = Indigo900.copy(alpha = 0.55f),
+                border = BorderStroke(1.dp, Indigo400.copy(alpha = 0.45f)),
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                ) {
+                    Icon(
+                        Icons.Default.Quickreply,
+                        contentDescription = null,
+                        modifier = Modifier.size(15.dp),
+                        tint = Indigo300,
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        option,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = Indigo100,
+                        fontWeight = FontWeight.Medium,
+                    )
                 }
             }
         }
