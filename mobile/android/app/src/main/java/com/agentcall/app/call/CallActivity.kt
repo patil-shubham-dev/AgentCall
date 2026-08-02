@@ -35,6 +35,12 @@ import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.*
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isShiftPressed
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -216,10 +222,31 @@ fun ActiveCallScreen(
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
+                        val sendDraft = {
+                            if (textInput.isNotBlank()) {
+                                viewModel.sendTextMessage(textInput.trim())
+                                textInput = ""
+                                focusManager.clearFocus()
+                            }
+                        }
                         OutlinedTextField(
                             value = textInput,
                             onValueChange = { textInput = it },
-                            modifier = Modifier.weight(1f),
+                            modifier = Modifier
+                                .weight(1f)
+                                .onPreviewKeyEvent { event ->
+                                    // ENTER sends the draft (standard chat behavior);
+                                    // Shift+Enter still inserts a newline.
+                                    if (event.type == KeyEventType.KeyDown
+                                        && event.key == Key.Enter
+                                        && !event.isShiftPressed
+                                    ) {
+                                        sendDraft()
+                                        true
+                                    } else {
+                                        false
+                                    }
+                                },
                             placeholder = { Text("Type your answer...", color = Slate400) },
                             singleLine = false,
                             maxLines = 2,
@@ -235,24 +262,12 @@ fun ActiveCallScreen(
                             shape = RoundedCornerShape(12.dp),
                             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
                             keyboardActions = KeyboardActions(
-                                onSend = {
-                                    if (textInput.isNotBlank()) {
-                                        viewModel.sendTextMessage(textInput.trim())
-                                        textInput = ""
-                                        focusManager.clearFocus()
-                                    }
-                                }
+                                onSend = { sendDraft() }
                             ),
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         FilledIconButton(
-                            onClick = {
-                                if (textInput.isNotBlank()) {
-                                    viewModel.sendTextMessage(textInput.trim())
-                                    textInput = ""
-                                    focusManager.clearFocus()
-                                }
-                            },
+                            onClick = { sendDraft() },
                             modifier = Modifier.size(48.dp),
                             shape = CircleShape,
                             colors = IconButtonDefaults.filledIconButtonColors(
