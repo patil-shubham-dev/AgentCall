@@ -23,6 +23,7 @@ import com.agentcall.app.data.database.dao.TranscriptMessageDao
 import com.agentcall.app.data.repository.CallRepository
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.*
+import org.json.JSONObject
 import java.io.File
 import java.util.Locale
 import java.util.UUID
@@ -124,10 +125,15 @@ class CallService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // Snapshot before handling the intent: pending entries flushed here must
+        // be ones that predate this start, or a freshly-enqueued message would be
+        // attempted twice (flush job + its own retry loop) and POSTed twice.
+        val pendingUserTexts = snapshotPendingUserTexts()
         scope.launch {
             flushPending(KEY_PENDING_CANCELS) { attemptCancel(it) }
             flushPending(KEY_PENDING_COMPLETES) { attemptComplete(it) }
             flushPending(KEY_PENDING_ANSWERS) { attemptAnswer(it) }
+            flushPendingUserTexts(pendingUserTexts)
         }
         when (intent?.action) {
             ACTION_PREWARM_TTS -> {
@@ -163,12 +169,8 @@ class CallService : Service() {
             ACTION_SEND_TEXT -> {
                 val text = intent.getStringExtra(EXTRA_TEXT) ?: return START_NOT_STICKY
                 val cid = intent.getStringExtra(EXTRA_CALL_ID) ?: callId ?: return START_NOT_STICKY
-                scope.launch {
-                    try {
-                        api.sendUserText(cid, mapOf("text" to text))
-                        repository.saveUserTextMessage(cid, text)
-                    } catch (_: Exception) {}
-                }
+                val messageId = intent.getStringExtra(EXTRA_MESSAGE_ID) ?: UUID.randomUUID().toString()
+                enqueueUserText(cid, messageId, text)
             }
             ACTION_END_CALL -> {
                 val cid = intent.getStringExtra(EXTRA_CALL_ID) ?: callId
@@ -414,8 +416,9 @@ class CallService : Service() {
                     if (speechRecognizer == recognizer) speechRecognizer = null
                     val currentCallId = callId
                     if (text != null && text.isNotBlank() && currentCallId != null) {
+                        val messageId = UUID.randomUUID().toString()
                         scope.launch {
-                            processUserText(text, currentCallId)
+                            processUserText(text, currentCallId, messageId)
                             repository.saveUserTextMessage(currentCallId, text)
                         }
                     } else {
@@ -458,17 +461,93 @@ class CallService : Service() {
         }
     }
 
-    private fun processUserText(text: String, callId: String) {
-        sendUserTextToBackend(callId, text)
-        CallEventBus.emit(CallEvent.UserMessage(text))
+    private fun processUserText(text: String, callId: String, messageId: String) {
+        CallEventBus.emit(CallEvent.UserMessage(messageId, text))
+        enqueueUserText(callId, messageId, text)
     }
 
-    private fun sendUserTextToBackend(callId: String, text: String) {
-        scope.launch {
-            try {
-                api.sendUserText(callId, mapOf("text" to text))
-            } catch (e: Exception) {
-                Log.e(TAG, "[HTTP] POST /calls/$callId/user-text failed", e)
+    // Persisted retry-with-backoff for user replies (voice or typed). Mirrors the
+    // ANSWER/COMPLETE/CANCEL pattern so a flaky network can never silently drop
+    // a message; the backend dedupes by client_message_id so retries can't
+    // duplicate a message that was actually accepted.
+    private fun enqueueUserText(callId: String, messageId: String, text: String) {
+        persistPendingUserText(callId, messageId, text)
+        retryScope.launch {
+            val backoffMs = longArrayOf(1000, 2000, 4000, 8000, 16000, 32000, 60000)
+            for (delayMs in backoffMs) {
+                if (attemptUserText(callId, messageId, text)) {
+                    removePendingUserText(messageId)
+                    CallEventBus.emit(CallEvent.UserTextSent(messageId))
+                    return@launch
+                }
+                delay(delayMs)
+            }
+            if (attemptUserText(callId, messageId, text)) {
+                removePendingUserText(messageId)
+                CallEventBus.emit(CallEvent.UserTextSent(messageId))
+            } else {
+                Log.w(TAG, "[USER-TEXT] retries exhausted for $messageId; kept pending for next service start")
+                CallEventBus.emit(CallEvent.UserTextFailed(messageId, text))
+            }
+        }
+    }
+
+    private suspend fun attemptUserText(callId: String, messageId: String, text: String): Boolean {
+        return try {
+            api.sendUserText(callId, mapOf("text" to text, "client_message_id" to messageId))
+            Log.i(TAG, "[USER-TEXT] backend confirmed user text $messageId")
+            true
+        } catch (e: Exception) {
+            Log.w(TAG, "[USER-TEXT] send $messageId failed, will retry", e)
+            false
+        }
+    }
+
+    private fun persistPendingUserText(callId: String, messageId: String, text: String) {
+        val prefs = getSharedPreferences(PREFS_CALL_STATE, MODE_PRIVATE)
+        val entries = prefs.getStringSet(KEY_PENDING_USER_TEXTS, emptySet())?.toMutableSet() ?: mutableSetOf()
+        val entry = JSONObject()
+            .put("callId", callId)
+            .put("messageId", messageId)
+            .put("text", text)
+            .toString()
+        if (entries.add(entry)) {
+            prefs.edit().putStringSet(KEY_PENDING_USER_TEXTS, entries).apply()
+        }
+    }
+
+    private fun removePendingUserText(messageId: String) {
+        val prefs = getSharedPreferences(PREFS_CALL_STATE, MODE_PRIVATE)
+        val entries = prefs.getStringSet(KEY_PENDING_USER_TEXTS, emptySet())?.toMutableSet() ?: return
+        val matching = entries.filter {
+            runCatching { JSONObject(it).getString("messageId") }.getOrNull() == messageId
+        }
+        if (matching.isNotEmpty()) {
+            entries.removeAll(matching.toSet())
+            prefs.edit().putStringSet(KEY_PENDING_USER_TEXTS, entries).apply()
+        }
+    }
+
+    private fun snapshotPendingUserTexts(): List<String> {
+        return getSharedPreferences(PREFS_CALL_STATE, MODE_PRIVATE)
+            .getStringSet(KEY_PENDING_USER_TEXTS, emptySet())
+            ?.toList()
+            ?: emptyList()
+    }
+
+    private fun flushPendingUserTexts(entries: List<String>) {
+        for (entry in entries) {
+            val obj = try {
+                JSONObject(entry)
+            } catch (_: Exception) {
+                continue
+            }
+            val messageId = obj.getString("messageId")
+            retryScope.launch {
+                if (attemptUserText(obj.getString("callId"), messageId, obj.getString("text"))) {
+                    removePendingUserText(messageId)
+                    CallEventBus.emit(CallEvent.UserTextSent(messageId))
+                }
             }
         }
     }
@@ -539,6 +618,7 @@ class CallService : Service() {
         const val ACTION_PREWARM_TTS = "com.agentcall.action.PREWARM_TTS"
         const val EXTRA_CALL_ID = "call_id"
         const val EXTRA_TEXT = "text"
+        const val EXTRA_MESSAGE_ID = "message_id"
         const val EXTRA_NOTE = "note"
         const val CHANNEL_ONGOING_CALL = "ongoing_call"
         // v2: old "incoming_call" channel had no ringtone/vibration and ColorOS drops
@@ -551,6 +631,7 @@ class CallService : Service() {
         private const val KEY_PENDING_CANCELS = "pending_cancel_ids"
         private const val KEY_PENDING_COMPLETES = "pending_complete_ids"
         private const val KEY_PENDING_ANSWERS = "pending_answer_ids"
+        private const val KEY_PENDING_USER_TEXTS = "pending_user_texts"
         private const val NOTIFICATION_ID_ONGOING = 1001
         private const val NOTIFICATION_ID_INCOMING = 1002
         private const val WARMUP_UTTERANCE_ID = "tts-warmup"

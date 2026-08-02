@@ -1,5 +1,7 @@
 package com.agentcall.app.call
 
+import android.content.Context
+import android.content.Intent
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.agentcall.app.data.api.ApiClient
@@ -12,6 +14,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import java.util.UUID
 import javax.inject.Inject
 import kotlin.math.abs
 import kotlin.math.sin
@@ -21,6 +24,7 @@ data class ChatBubble(
     val role: String,
     val text: String,
     val timestamp: Long = System.currentTimeMillis(),
+    val failed: Boolean = false,
 )
 
 data class CallContextInfo(
@@ -93,8 +97,9 @@ class CallViewModel @Inject constructor(
             CallEventBus.events.collect { event ->
                 when (event) {
                     is CallEvent.AiMessage -> addAiMessage(event.text)
-                    is CallEvent.UserMessage -> addUserTranscript(event.text)
-                    is CallEvent.UserTextSent -> {}
+                    is CallEvent.UserMessage -> addUserTranscript(event.messageId, event.text)
+                    is CallEvent.UserTextSent -> markUserTextSent(event.messageId)
+                    is CallEvent.UserTextFailed -> markUserTextFailed(event.messageId)
                     is CallEvent.CallAnswered -> {
                         _uiState.value = _uiState.value.copy(
                             isConnected = true,
@@ -127,9 +132,9 @@ class CallViewModel @Inject constructor(
         }
     }
 
-    fun addUserTranscript(text: String) {
+    fun addUserTranscript(messageId: String, text: String) {
         val msg = ChatBubble(
-            id = "user_${messageCounter++}",
+            id = messageId,
             role = "user",
             text = text,
         )
@@ -144,14 +149,14 @@ class CallViewModel @Inject constructor(
         }
     }
 
-    fun sendTextMessage(text: String) {
+    fun sendTextMessage(text: String, messageId: String = UUID.randomUUID().toString()) {
         if (text.isBlank() || isSending) return
         isSending = true
         val cid = _uiState.value.callId
         if (cid.isBlank()) { isSending = false; return }
 
         val msg = ChatBubble(
-            id = "user_${messageCounter++}",
+            id = messageId,
             role = "user",
             text = text,
         )
@@ -162,12 +167,42 @@ class CallViewModel @Inject constructor(
 
         viewModelScope.launch {
             repository.saveUserTextMessage(cid, text)
-            try {
-                val api: ApiService = ApiClient.create()
-                api.sendUserText(cid, mapOf("text" to text))
-            } catch (_: Exception) {}
             isSending = false
         }
+    }
+
+    fun markUserTextSent(messageId: String) {
+        _uiState.value = _uiState.value.copy(
+            messages = _uiState.value.messages.map {
+                if (it.id == messageId) it.copy(failed = false) else it
+            },
+        )
+    }
+
+    fun markUserTextFailed(messageId: String) {
+        _uiState.value = _uiState.value.copy(
+            messages = _uiState.value.messages.map {
+                if (it.id == messageId && it.role == "user") it.copy(failed = true) else it
+            },
+            statusText = "Message not sent — tap to retry",
+        )
+    }
+
+    fun retryUserText(context: Context, messageId: String, text: String) {
+        val cid = _uiState.value.callId
+        if (cid.isBlank()) return
+        _uiState.value = _uiState.value.copy(
+            messages = _uiState.value.messages.map {
+                if (it.id == messageId) it.copy(failed = false) else it
+            },
+            statusText = "Resending...",
+        )
+        context.startService(Intent(context, CallService::class.java).apply {
+            action = CallService.ACTION_SEND_TEXT
+            putExtra(CallService.EXTRA_CALL_ID, cid)
+            putExtra(CallService.EXTRA_TEXT, text)
+            putExtra(CallService.EXTRA_MESSAGE_ID, messageId)
+        })
     }
 
     fun setPaused(paused: Boolean) {

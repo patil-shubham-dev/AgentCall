@@ -56,6 +56,7 @@ import com.agentcall.app.ui.composables.AmbientBackground
 import com.agentcall.app.ui.theme.*
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.delay
+import java.util.UUID
 
 @AndroidEntryPoint
 class CallActivity : ComponentActivity() {
@@ -178,7 +179,13 @@ fun ActiveCallScreen(
                 contentPadding = PaddingValues(vertical = 8.dp),
             ) {
                 items(state.messages, key = { it.id }) { msg ->
-                    MessageBubble(msg = msg, isAi = msg.role == "ai")
+                    MessageBubble(
+                        msg = msg,
+                        isAi = msg.role == "ai",
+                        onRetry = if (msg.role == "user" && msg.failed) {
+                            { viewModel.retryUserText(context, msg.id, msg.text) }
+                        } else null,
+                    )
                 }
 
                 if (state.isAiSpeaking && state.messages.isNotEmpty()) {
@@ -226,9 +233,17 @@ fun ActiveCallScreen(
                     ) {
                         val sendDraft = {
                             if (textInput.isNotBlank()) {
-                                viewModel.sendTextMessage(textInput.trim())
+                                val messageId = UUID.randomUUID().toString()
+                                val msg = textInput.trim()
+                                viewModel.sendTextMessage(msg, messageId)
                                 textInput = ""
                                 focusManager.clearFocus()
+                                context.startService(Intent(context, CallService::class.java).apply {
+                                    action = CallService.ACTION_SEND_TEXT
+                                    putExtra(CallService.EXTRA_CALL_ID, state.callId)
+                                    putExtra(CallService.EXTRA_TEXT, msg)
+                                    putExtra(CallService.EXTRA_MESSAGE_ID, messageId)
+                                })
                             }
                         }
                         OutlinedTextField(
@@ -290,7 +305,14 @@ fun ActiveCallScreen(
                             options = state.callContext.options,
                             onPick = { option ->
                                 optionsPicked = true
-                                viewModel.sendTextMessage(option)
+                                val messageId = UUID.randomUUID().toString()
+                                viewModel.sendTextMessage(option, messageId)
+                                context.startService(Intent(context, CallService::class.java).apply {
+                                    action = CallService.ACTION_SEND_TEXT
+                                    putExtra(CallService.EXTRA_CALL_ID, state.callId)
+                                    putExtra(CallService.EXTRA_TEXT, option)
+                                    putExtra(CallService.EXTRA_MESSAGE_ID, messageId)
+                                })
                             },
                         )
                         Spacer(modifier = Modifier.height(8.dp))
@@ -405,7 +427,7 @@ private fun QuickReplyChips(
 }
 
 @Composable
-private fun MessageBubble(msg: ChatBubble, isAi: Boolean) {
+private fun MessageBubble(msg: ChatBubble, isAi: Boolean, onRetry: (() -> Unit)? = null) {
     var visible by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) {
         delay(if (isAi) 50 else 100)
@@ -466,6 +488,25 @@ private fun MessageBubble(msg: ChatBubble, isAi: Boolean) {
                     contentAlignment = Alignment.Center,
                 ) {
                     Icon(Icons.Default.Person, "You", modifier = Modifier.size(18.dp), tint = Slate400)
+                }
+            }
+        }
+
+        if (!isAi && msg.failed) {
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                Surface(
+                    onClick = onRetry ?: {},
+                    shape = RoundedCornerShape(12.dp),
+                    color = Amber400.copy(alpha = 0.15f),
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                    ) {
+                        Icon(Icons.Default.Warning, "not sent", modifier = Modifier.size(14.dp), tint = Amber400)
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Not sent — tap to retry", style = MaterialTheme.typography.labelSmall, color = Amber300)
+                    }
                 }
             }
         }
