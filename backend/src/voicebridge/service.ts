@@ -219,16 +219,28 @@ export class VoiceBridgeService {
     role: 'ai' | 'user',
     content: string,
     type: 'text' | 'audio' = 'text',
+    clientMessageId?: string,
   ): Promise<VoiceMessage | undefined> {
     return withSessionLock(callId, async () => {
       const session = await this.sessionRepo.findById(callId);
       if (!session) return undefined;
+
+      // Idempotency key: retries from the phone's persisted user-text queue
+      // must never duplicate a message the backend already accepted.
+      if (clientMessageId) {
+        const existing = session.messages.find((m) => m.clientMessageId === clientMessageId);
+        if (existing) {
+          logger.info({ callId, clientMessageId }, 'Duplicate message ignored (idempotent)');
+          return existing;
+        }
+      }
 
       const msg: VoiceMessage = {
         id: newId(),
         role,
         type,
         content,
+        ...(clientMessageId ? { clientMessageId } : {}),
         createdAt: now(),
       };
 
@@ -262,13 +274,13 @@ export class VoiceBridgeService {
     return this.addMessage(callId, 'ai', content, 'text');
   }
 
-  async processTextMessage(callId: string, text: string): Promise<{ text: string }> {
+  async processTextMessage(callId: string, text: string, clientMessageId?: string): Promise<{ text: string }> {
     const session = await this.sessionRepo.findById(callId);
     if (!session) throw new Error(`Call session not found: ${callId}`);
 
     logger.info({ callId, text: text.slice(0, 100) }, '[STT] user text received');
 
-    await this.addMessage(callId, 'user', text, 'text');
+    await this.addMessage(callId, 'user', text, 'text', clientMessageId);
 
     logger.info({ callId }, '[STT] text processed');
     return { text };

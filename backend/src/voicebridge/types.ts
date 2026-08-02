@@ -9,6 +9,7 @@ export interface VoiceMessage {
   role: MessageRole;
   type: MessageType;
   content: string;
+  clientMessageId?: string;
   audioUrl?: string;
   audioDurationMs?: number;
   createdAt: string;

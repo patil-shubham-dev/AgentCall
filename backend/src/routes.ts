@@ -264,14 +264,14 @@ export function registerRoutes(app: FastifyInstance, opts: RouteOptions): void {
     try {
       logger.debug({ body: inspectBody(request.body), params: request.params }, '[STT] user-text entered');
       const { callId } = request.params as { callId: string };
-      const { text } = request.body as { text: string };
+      const { text, client_message_id } = request.body as { text: string; client_message_id?: string };
 
       if (!text || text.trim().length === 0) {
         return reply.status(400).send({ error: 'VALIDATION_ERROR', message: 'text is required' });
       }
 
       logger.debug({ callId, text: text.slice(0, 100) }, '[STT] user-text processing');
-      const result = await voicebridge.processTextMessage(callId, text);
+      const result = await voicebridge.processTextMessage(callId, text, client_message_id);
       logger.debug({ callId }, '[STT] user-text processed');
 
       return {
