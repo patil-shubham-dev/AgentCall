@@ -231,6 +231,7 @@ export function registerRoutes(app: FastifyInstance, opts: RouteOptions): void {
       ended_at: session.completedAt,
       context: session.context ?? null,
       result: session.result ?? null,
+      ai_wait: opts.voicebridge.getAiWaitStatus(callId),
       message_count: session.messages.length,
     };
   });
@@ -406,6 +407,7 @@ export function registerRoutes(app: FastifyInstance, opts: RouteOptions): void {
         status: session.status,
         reason: session.reason,
         summary: session.context.summary,
+        ai_wait: opts.voicebridge.getAiWaitStatus(session.id),
         created_at: session.createdAt,
       },
     };

@@ -217,6 +217,7 @@ export function createTools(voicebridge: VoiceBridgeService): McpTool[] {
         const callId = args.call_id as string;
         const content = args.content as string;
         const timeoutSeconds = Math.min(Math.max((args.timeout_seconds as number) ?? 15, 1), 45);
+        const disposeAiWait = voicebridge.registerAiWait(callId, timeoutSeconds * 1000);
 
         // Subscribe BEFORE sending so a reply that lands the instant the message
         // is written is not missed (wake is a counter bump, not an edge).
@@ -277,6 +278,7 @@ export function createTools(voicebridge: VoiceBridgeService): McpTool[] {
           }, null, 2));
         } finally {
           watcher.dispose();
+          disposeAiWait();
         }
       },
     },

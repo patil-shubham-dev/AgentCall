@@ -61,10 +61,17 @@ export interface SessionWatcher {
   dispose(): void;
 }
 
+export interface AiWaitStatus {
+  active: boolean;
+  activeUntil: string | null;
+  lastActiveAt: string | null;
+}
+
 export class VoiceBridgeService {
   private lifecycleCoordinator: LifecycleCoordinator | null = null;
   private readonly sessionChangeCounters = new Map<string, number>();
   private readonly sessionChangeWaiters = new Map<string, Set<() => void>>();
+  private readonly aiWaitLeases = new Map<string, { count: number; activeUntil: string; lastActiveAt: string }>();
 
   constructor(
     private sessionRepo: SessionRepository,
@@ -120,6 +127,60 @@ export class VoiceBridgeService {
   private signalSessionChange(callId: string): void {
     this.sessionChangeCounters.set(callId, (this.sessionChangeCounters.get(callId) ?? 0) + 1);
     this.sessionChangeWaiters.get(callId)?.forEach((wake) => wake());
+  }
+
+  registerAiWait(callId: string, timeoutMs: number): () => void {
+    const startedAt = now();
+    const activeUntil = new Date(Date.now() + Math.max(timeoutMs, 1000)).toISOString();
+    const existing = this.aiWaitLeases.get(callId);
+    this.aiWaitLeases.set(callId, {
+      count: (existing?.count ?? 0) + 1,
+      activeUntil,
+      lastActiveAt: startedAt,
+    });
+    this.notifyAiWaitStatus(callId);
+
+    let disposed = false;
+    return () => {
+      if (disposed) return;
+      disposed = true;
+      const current = this.aiWaitLeases.get(callId);
+      if (!current) return;
+      if (current.count <= 1) {
+        this.aiWaitLeases.set(callId, {
+          count: 0,
+          activeUntil: current.activeUntil,
+          lastActiveAt: now(),
+        });
+      } else {
+        this.aiWaitLeases.set(callId, { ...current, count: current.count - 1 });
+      }
+      this.notifyAiWaitStatus(callId);
+    };
+  }
+
+  getAiWaitStatus(callId: string): AiWaitStatus {
+    const lease = this.aiWaitLeases.get(callId);
+    if (!lease) return { active: false, activeUntil: null, lastActiveAt: null };
+    const active = lease.count > 0 && Date.parse(lease.activeUntil) > Date.now();
+    return {
+      active,
+      activeUntil: active ? lease.activeUntil : null,
+      lastActiveAt: lease.lastActiveAt,
+    };
+  }
+
+  private async notifyAiWaitStatus(callId: string): Promise<void> {
+    const session = await this.sessionRepo.findById(callId);
+    if (!session) return;
+    const status = this.getAiWaitStatus(callId);
+    notifyPhone(session.userId, {
+      type: 'ai_wait_status',
+      callId,
+      active: status.active,
+      activeUntil: status.activeUntil,
+      lastActiveAt: status.lastActiveAt,
+    });
   }
 
   async createCall(input: CreateCallInput): Promise<VoiceCallSession> {
