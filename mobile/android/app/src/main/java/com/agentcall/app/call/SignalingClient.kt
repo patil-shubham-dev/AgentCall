@@ -29,6 +29,12 @@ sealed class VoiceBridgeEvent {
     data class CallCancelled(val callId: String) : VoiceBridgeEvent()
     data class Connected(val userId: String) : VoiceBridgeEvent()
     data class Error(val code: String, val message: String) : VoiceBridgeEvent()
+    data class AiWaitStatus(
+        val callId: String,
+        val active: Boolean,
+        val activeUntilMs: Long?,
+        val lastActiveAtMs: Long?,
+    ) : VoiceBridgeEvent()
     object Disconnected : VoiceBridgeEvent()
 }
 
@@ -251,6 +257,14 @@ class SignalingClient @Inject constructor(
                     Log.d(TAG, "[WS] call_cancelled callId=$callId")
                     _events.emit(VoiceBridgeEvent.CallCancelled(callId))
                 }
+                "ai_wait_status" -> {
+                    val callId = payload?.getString("callId") ?: return
+                    val active = payload.optBoolean("active", false)
+                    val activeUntilMs = payload.optString("activeUntil", "").toEpochMsOrNull()
+                    val lastActiveAtMs = payload.optString("lastActiveAt", "").toEpochMsOrNull()
+                    Log.d(TAG, "[WS] ai_wait_status callId=$callId active=$active")
+                    _events.emit(VoiceBridgeEvent.AiWaitStatus(callId, active, activeUntilMs, lastActiveAtMs))
+                }
                 "error" -> {
                     val code = payload?.getString("code") ?: "UNKNOWN"
                     val message = payload?.getString("message") ?: "Unknown error"
@@ -264,6 +278,13 @@ class SignalingClient @Inject constructor(
             _events.emit(VoiceBridgeEvent.Error("PARSE", "Failed to parse message"))
         }
     }
+
+    private fun String.toEpochMsOrNull(): Long? =
+        try {
+            if (isBlank()) null else java.time.Instant.parse(this).toEpochMilli()
+        } catch (_: Exception) {
+            null
+        }
 
     fun disconnect() {
         Log.d(TAG, "[WS] disconnect")

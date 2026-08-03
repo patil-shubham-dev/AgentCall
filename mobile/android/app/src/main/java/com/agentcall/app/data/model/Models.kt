@@ -22,6 +22,14 @@ data class CallResponse(
     val context: CallContext? = null,
     val result: CallResult? = null,
     @SerialName("message_count") val messageCount: Int? = null,
+    @SerialName("ai_wait") val aiWait: AiWaitStatus? = null,
+)
+
+@Serializable
+data class AiWaitStatus(
+    val active: Boolean = false,
+    val activeUntil: String? = null,
+    val lastActiveAt: String? = null,
 )
 
 @Serializable

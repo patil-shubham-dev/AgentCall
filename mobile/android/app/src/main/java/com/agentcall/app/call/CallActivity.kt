@@ -148,6 +148,22 @@ fun ActiveCallScreen(
                     fontWeight = FontWeight.Light, color = Slate50, letterSpacing = 1.sp)
             }
 
+            AnimatedVisibility(visible = state.aiResponding == false,
+                enter = slideInVertically(animationSpec = spring(dampingRatio = 0.8f)) + fadeIn(),
+                exit = slideOutVertically() + fadeOut()) {
+                Surface(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                    shape = RoundedCornerShape(12.dp), color = Amber400.copy(alpha = 0.12f),
+                ) {
+                    Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Box(modifier = Modifier.size(8.dp).clip(CircleShape).background(Amber400))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("AI is not currently responding — your reply will be saved",
+                            style = MaterialTheme.typography.labelMedium, color = Amber300)
+                    }
+                }
+            }
+
             AnimatedVisibility(visible = showContext && state.callContext.summary.isNotBlank(),
                 enter = slideInVertically(animationSpec = spring(dampingRatio = 0.8f)) + fadeIn(),
                 exit = slideOutVertically() + fadeOut()) {

@@ -46,6 +46,8 @@ data class ActiveCallUiState(
     val waveformLevels: List<Float> = List(40) { 0.08f },
     val peakWaveformLevel: Float = 0f,
     val callId: String = "",
+    val aiResponding: Boolean? = null,
+    val aiRespondingUntilMs: Long? = null,
 )
 
 @HiltViewModel
@@ -82,6 +84,8 @@ class CallViewModel @Inject constructor(
                         reason = call.context?.reason ?: "",
                         options = call.context?.options ?: emptyList(),
                     ),
+                    aiResponding = call.aiWait?.active,
+                    aiRespondingUntilMs = call.aiWait?.activeUntil?.toEpochMsOrNull(),
                 )
             } catch (_: Exception) {
                 _uiState.value = _uiState.value.copy(
@@ -109,6 +113,7 @@ class CallViewModel @Inject constructor(
                     is CallEvent.CallEnded -> disconnect()
                     is CallEvent.AiSpeakingStarted -> setAiSpeaking(true)
                     is CallEvent.AiSpeakingFinished -> setAiSpeaking(false)
+                    is CallEvent.AiWaitStatusChanged -> setAiResponding(event.active, event.activeUntilMs)
                 }
             }
         }
@@ -224,8 +229,22 @@ class CallViewModel @Inject constructor(
         _uiState.value = _uiState.value.copy(isAiSpeaking = speaking)
     }
 
+    fun setAiResponding(active: Boolean, activeUntilMs: Long?) {
+        _uiState.value = _uiState.value.copy(
+            aiResponding = active,
+            aiRespondingUntilMs = if (active) activeUntilMs else null,
+        )
+    }
+
     fun tick() {
-        val current = _uiState.value
+        var current = _uiState.value
+        // Passive lease expiry — mirrors the backend (no lease survives its
+        // activeUntil), so a missed/delayed WS push can't leave the banner stale.
+        val untilMs = current.aiRespondingUntilMs
+        if (current.aiResponding == true && untilMs != null && System.currentTimeMillis() > untilMs) {
+            current = current.copy(aiResponding = false, aiRespondingUntilMs = null)
+            _uiState.value = current
+        }
         val elapsed = if (callStartTime > 0) ((System.currentTimeMillis() - callStartTime) / 1000).toInt() else current.elapsedSeconds
         val t = elapsed.toFloat()
         val levels = generateWaveform(t, !current.isRecording && !current.isAiSpeaking)
@@ -243,6 +262,8 @@ class CallViewModel @Inject constructor(
             isAiSpeaking = false,
             isRecording = false,
             isProcessing = false,
+            aiResponding = null,
+            aiRespondingUntilMs = null,
         )
     }
 
@@ -260,3 +281,10 @@ class CallViewModel @Inject constructor(
         }
     }
 }
+
+private fun String.toEpochMsOrNull(): Long? =
+    try {
+        if (isBlank()) null else java.time.Instant.parse(this).toEpochMilli()
+    } catch (_: Exception) {
+        null
+    }

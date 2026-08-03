@@ -364,6 +364,12 @@ class CallService : Service() {
                             repository.saveCallEnded(callId, "cancelled")
                             delay(1500); stopSelf()
                         }
+                        is VoiceBridgeEvent.AiWaitStatus -> {
+                            if (event.callId != callId) return@collect
+                            CallEventBus.emit(
+                                CallEvent.AiWaitStatusChanged(event.active, event.activeUntilMs, event.lastActiveAtMs)
+                            )
+                        }
                         // Disconnected is defined but NOT emitted by SignalingClient.
                         // The client handles reconnection internally (onFailure/onClosed).
                         // If ever wired up, should show "Reconnecting..." UI, NOT tear down call.

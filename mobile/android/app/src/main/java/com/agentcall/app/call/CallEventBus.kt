@@ -13,6 +13,11 @@ sealed class CallEvent {
     data object CallEnded : CallEvent()
     data object AiSpeakingStarted : CallEvent()
     data object AiSpeakingFinished : CallEvent()
+    data class AiWaitStatusChanged(
+        val active: Boolean,
+        val activeUntilMs: Long?,
+        val lastActiveAtMs: Long?,
+    ) : CallEvent()
 }
 
 object CallEventBus {
