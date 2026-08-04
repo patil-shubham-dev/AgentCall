@@ -94,6 +94,7 @@ function createMcpSession(voicebridge: VoiceBridgeService): McpSession {
 
 export function registerMcpEndpoint(app: FastifyInstance, voicebridge: VoiceBridgeService): void {
   const sessions = new McpSessionRegistry();
+  app.decorate('mcpSessions', sessions);
 
   app.all('/mcp', {
     config: { rateLimit: { max: 120, timeWindow: '1 minute' } },
@@ -159,6 +160,7 @@ export function registerMcpEndpoint(app: FastifyInstance, voicebridge: VoiceBrid
           server: activeSession.server,
           transport: activeSession.transport,
           lastActivityAt: Date.now(),
+          agentName: identity.agentName,
         });
         activeSession.transport.onclose = () => {
           sessions.delete(generated);

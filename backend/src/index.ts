@@ -42,6 +42,7 @@ import { LifecycleCoordinator } from './voicebridge/lifecycle-coordinator.js';
 import { RecoveryManager } from './voicebridge/recovery-manager.js';
 import { CleanupScheduler } from './common/cleanup-scheduler.js';
 import type { WebSocketServer } from 'ws';
+import { McpSessionRegistry } from './mcp/session-registry.js';
 
 const FORCE_KILL_TIMEOUT_MS = 10_000;
 
@@ -49,6 +50,7 @@ declare module 'fastify' {
   interface FastifyInstance {
     eventBus: EventBus;
     cleanupScheduler: CleanupScheduler;
+    mcpSessions?: McpSessionRegistry;
   }
 }
 

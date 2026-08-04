@@ -188,18 +188,23 @@ export async function deleteAiKey(id: string): Promise<boolean> {
  * - `online`: the key has been used (auth'ed) within ONLINE_WINDOW_MS.
  * - `busy`: an active call is associated with this agent name.
  */
-export async function listAiKeyStatuses(activeAgentNames: Set<string>): Promise<AiKeyStatus[]> {
+export async function listAiKeyStatuses(
+  activeAgentNames: Set<string>,
+  activeMcpSessionAgentNames?: Set<string>,
+): Promise<AiKeyStatus[]> {
   const now = Date.now();
   const keys = await listAiKeys();
   return keys.map((key) => {
     const lastSeenAt = key.lastUsedAt;
     const lastSeenMs = lastSeenAt ? Date.parse(lastSeenAt) : NaN;
+    const recentlyAuthd = Number.isFinite(lastSeenMs) && now - lastSeenMs <= ONLINE_WINDOW_MS;
+    const hasActiveMcpSession = activeMcpSessionAgentNames?.has(key.name) ?? false;
     return {
       id: key.id,
       name: key.name,
       createdAt: key.createdAt,
       lastSeenAt,
-      online: Number.isFinite(lastSeenMs) && now - lastSeenMs <= ONLINE_WINDOW_MS,
+      online: recentlyAuthd || hasActiveMcpSession,
       busy: activeAgentNames.has(key.name),
     };
   });

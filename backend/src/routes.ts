@@ -69,6 +69,38 @@ async function getAuthUser(request: FastifyRequest): Promise<AuthContext> {
   return { userId: 'solo-user', role: 'user', authenticated: false };
 }
 
+function checkCallOwnership(
+  auth: AuthContext,
+  session: { userId: string; agentId: string },
+): { status: number; body: { error: string; message: string } } | null {
+  if (auth.role === 'service') {
+    return null;
+  }
+  if (auth.role === 'agent') {
+    if (session.agentId !== auth.agentName) {
+      return {
+        status: 403,
+        body: {
+          error: 'FORBIDDEN',
+          message: 'Call belongs to a different AI identity',
+        },
+      };
+    }
+  }
+  if (auth.role === 'user') {
+    if (session.userId !== auth.userId) {
+      return {
+        status: 403,
+        body: {
+          error: 'FORBIDDEN',
+          message: 'Call belongs to a different user',
+        },
+      };
+    }
+  }
+  return null;
+}
+
 export function registerRoutes(app: FastifyInstance, opts: RouteOptions): void {
   const { voicebridge, metrics, dbHealth, cleanupScheduler, sessionRepo, callbackRepo } = opts;
 
@@ -215,11 +247,16 @@ export function registerRoutes(app: FastifyInstance, opts: RouteOptions): void {
     });
   });
 
-  app.get('/api/v1/calls/:callId', async (request) => {
+  app.get('/api/v1/calls/:callId', async (request, reply) => {
     const { callId } = request.params as { callId: string };
     const session = await voicebridge.getCall(callId);
     if (!session) {
       return { error: 'NOT_FOUND', message: 'Call not found' };
+    }
+    const auth = (request as FastifyRequest & { auth: AuthContext }).auth;
+    const ownershipError = checkCallOwnership(auth, session);
+    if (ownershipError) {
+      return reply.status(ownershipError.status).send(ownershipError.body);
     }
     return {
       call_id: session.id,
@@ -244,6 +281,16 @@ export function registerRoutes(app: FastifyInstance, opts: RouteOptions): void {
 
     if (!content) {
       return reply.status(400).send({ error: 'VALIDATION_ERROR', message: 'content is required' });
+    }
+
+    const session = await voicebridge.getCall(callId);
+    if (!session) {
+      return reply.status(404).send({ error: 'NOT_FOUND', message: 'Call not found' });
+    }
+    const auth = (request as FastifyRequest & { auth: AuthContext }).auth;
+    const ownershipError = checkCallOwnership(auth, session);
+    if (ownershipError) {
+      return reply.status(ownershipError.status).send(ownershipError.body);
     }
 
     const msg = await voicebridge.addAiMessage(callId, content);
@@ -271,6 +318,16 @@ export function registerRoutes(app: FastifyInstance, opts: RouteOptions): void {
         return reply.status(400).send({ error: 'VALIDATION_ERROR', message: 'text is required' });
       }
 
+      const session = await voicebridge.getCall(callId);
+      if (!session) {
+        return reply.status(404).send({ error: 'NOT_FOUND', message: 'Call not found' });
+      }
+      const auth = (request as FastifyRequest & { auth: AuthContext }).auth;
+      const ownershipError = checkCallOwnership(auth, session);
+      if (ownershipError) {
+        return reply.status(ownershipError.status).send(ownershipError.body);
+      }
+
       logger.debug({ callId, text: text.slice(0, 100) }, '[STT] user-text processing');
       const result = await voicebridge.processTextMessage(callId, text, client_message_id);
       logger.debug({ callId }, '[STT] user-text processed');
@@ -293,8 +350,17 @@ export function registerRoutes(app: FastifyInstance, opts: RouteOptions): void {
     }
   });
 
-  app.get('/api/v1/calls/:callId/transcript', async (request) => {
+  app.get('/api/v1/calls/:callId/transcript', async (request, reply) => {
     const { callId } = request.params as { callId: string };
+    const session = await voicebridge.getCall(callId);
+    if (!session) {
+      return { error: 'NOT_FOUND', message: 'Call not found' };
+    }
+    const auth = (request as FastifyRequest & { auth: AuthContext }).auth;
+    const ownershipError = checkCallOwnership(auth, session);
+    if (ownershipError) {
+      return reply.status(ownershipError.status).send(ownershipError.body);
+    }
     const messages = await voicebridge.getTranscript(callId);
     if (!messages) {
       return { error: 'NOT_FOUND', message: 'Call not found' };
@@ -307,12 +373,17 @@ export function registerRoutes(app: FastifyInstance, opts: RouteOptions): void {
 
   app.get('/api/v1/calls/:callId/pending-reply', {
     config: { rateLimit: { max: 60, timeWindow: '10 seconds' } },
-  }, async (request) => {
+  }, async (request, reply) => {
     const { callId } = request.params as { callId: string };
     const after = (request.query as { after?: string }).after;
     const session = await voicebridge.getCall(callId);
     if (!session) {
       return { error: 'NOT_FOUND', message: 'Call not found' };
+    }
+    const auth = (request as FastifyRequest & { auth: AuthContext }).auth;
+    const ownershipError = checkCallOwnership(auth, session);
+    if (ownershipError) {
+      return reply.status(ownershipError.status).send(ownershipError.body);
     }
 
     if (session.status === 'completed' || session.status === 'cancelled') {
@@ -358,6 +429,14 @@ export function registerRoutes(app: FastifyInstance, opts: RouteOptions): void {
     const { callId } = request.params as { callId: string };
     const { result } = request.body as { result?: Record<string, unknown> };
     const before = await voicebridge.getCall(callId);
+    if (!before) {
+      return reply.status(404).send({ error: 'NOT_FOUND', message: 'Call not found' });
+    }
+    const auth = (request as FastifyRequest & { auth: AuthContext }).auth;
+    const ownershipError = checkCallOwnership(auth, before);
+    if (ownershipError) {
+      return reply.status(ownershipError.status).send(ownershipError.body);
+    }
 
     const session = await voicebridge.completeCall(callId, result as Parameters<typeof voicebridge.completeCall>[1]);
     if (!session) {
@@ -370,11 +449,19 @@ export function registerRoutes(app: FastifyInstance, opts: RouteOptions): void {
     return { status: session.status, call_id: callId };
   });
 
-  app.post('/api/v1/calls/:callId/cancel', async (request) => {
+  app.post('/api/v1/calls/:callId/cancel', async (request, reply) => {
     const { callId } = request.params as { callId: string };
     const body = (request.body ?? {}) as { note?: unknown };
     const note = typeof body.note === 'string' ? body.note : undefined;
     const before = await voicebridge.getCall(callId);
+    if (!before) {
+      return reply.status(404).send({ error: 'NOT_FOUND', message: 'Call not found' });
+    }
+    const auth = (request as FastifyRequest & { auth: AuthContext }).auth;
+    const ownershipError = checkCallOwnership(auth, before);
+    if (ownershipError) {
+      return reply.status(ownershipError.status).send(ownershipError.body);
+    }
     const session = await voicebridge.cancelCall(callId, note);
     if (!session) {
       return { error: 'NOT_FOUND', message: 'Call not found' };
@@ -388,18 +475,32 @@ export function registerRoutes(app: FastifyInstance, opts: RouteOptions): void {
 
   app.post('/api/v1/calls/:callId/answer', async (request, reply) => {
     const { callId } = request.params as { callId: string };
-    const session = await voicebridge.answerCall(callId);
+    const session = await voicebridge.getCall(callId);
     if (!session) {
       return reply.status(404).send({ error: 'NOT_FOUND', message: 'Call not found' });
     }
-    return { status: session.status, call_id: callId };
+    const auth = (request as FastifyRequest & { auth: AuthContext }).auth;
+    const ownershipError = checkCallOwnership(auth, session);
+    if (ownershipError) {
+      return reply.status(ownershipError.status).send(ownershipError.body);
+    }
+    const updatedSession = await voicebridge.answerCall(callId);
+    if (!updatedSession) {
+      return reply.status(404).send({ error: 'NOT_FOUND', message: 'Call not found' });
+    }
+    return { status: updatedSession.status, call_id: callId };
   });
 
-  app.get('/api/v1/users/:userId/active-call', async (request) => {
+  app.get('/api/v1/users/:userId/active-call', async (request, reply) => {
     const { userId } = request.params as { userId: string };
     const session = await voicebridge.getUserActiveCall(userId);
     if (!session) {
       return { active_call: null };
+    }
+    const auth = (request as FastifyRequest & { auth: AuthContext }).auth;
+    const ownershipError = checkCallOwnership(auth, session);
+    if (ownershipError) {
+      return reply.status(ownershipError.status).send(ownershipError.body);
     }
     return {
       active_call: {
@@ -421,6 +522,16 @@ export function registerRoutes(app: FastifyInstance, opts: RouteOptions): void {
     };
     const minutes = typeof delay_minutes === 'number' && delay_minutes > 0 ? delay_minutes : 10;
     const noteText = typeof note === 'string' ? note : undefined;
+
+    const session = await voicebridge.getCall(callId);
+    if (!session) {
+      return reply.status(404).send({ error: 'NOT_FOUND', message: 'Call not found' });
+    }
+    const auth = (request as FastifyRequest & { auth: AuthContext }).auth;
+    const ownershipError = checkCallOwnership(auth, session);
+    if (ownershipError) {
+      return reply.status(ownershipError.status).send(ownershipError.body);
+    }
 
     const ok = await voicebridge.scheduleCallback({
       callId,
@@ -489,7 +600,8 @@ export function registerRoutes(app: FastifyInstance, opts: RouteOptions): void {
         }
       }
     }
-    const keys = await listAiKeyStatuses(activeAgentNames);
+    const activeMcpSessionAgentNames = app.mcpSessions?.getActiveIdentities() ?? new Set<string>();
+    const keys = await listAiKeyStatuses(activeAgentNames, activeMcpSessionAgentNames);
     return {
       keys: keys.map((k) => ({
         key_id: k.id,

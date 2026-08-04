@@ -78,6 +78,24 @@ describe('McpSessionRegistry idle expiry', () => {
     expect(closed).toBe(1);
     expect(registry.get('broken')).toBeUndefined();
   });
+
+  it('getActiveIdentities() returns all active session agent names', () => {
+    const registry = new McpSessionRegistry();
+    const session1 = fakeSession(Date.now());
+    session1.agentName = 'Agent1';
+    const session2 = fakeSession(Date.now());
+    session2.agentName = 'Agent2';
+    const session3 = fakeSession(Date.now());
+
+    registry.set('s1', session1);
+    registry.set('s2', session2);
+    registry.set('s3', session3);
+
+    const active = registry.getActiveIdentities();
+    expect(active.size).toBe(2);
+    expect(active.has('Agent1')).toBe(true);
+    expect(active.has('Agent2')).toBe(true);
+  });
 });
 
 interface JsonRpcResponse {

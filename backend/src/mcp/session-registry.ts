@@ -6,6 +6,7 @@ export interface McpManagedSession {
   server: Server;
   transport: StreamableHTTPServerTransport;
   lastActivityAt: number;
+  agentName?: string;
 }
 
 /**
@@ -35,6 +36,16 @@ export class McpSessionRegistry {
 
   count(): number {
     return this.sessions.size;
+  }
+
+  getActiveIdentities(): Set<string> {
+    const active = new Set<string>();
+    for (const session of this.sessions.values()) {
+      if (session.agentName) {
+        active.add(session.agentName);
+      }
+    }
+    return active;
   }
 
   /**
