@@ -131,8 +131,16 @@ export class VoiceBridgeService {
 
   registerAiWait(callId: string, timeoutMs: number): () => void {
     const startedAt = now();
-    const activeUntil = new Date(Date.now() + Math.max(timeoutMs, 1000)).toISOString();
     const existing = this.aiWaitLeases.get(callId);
+    const candidateUntil = new Date(Date.now() + Math.max(timeoutMs, 1000)).toISOString();
+    // A newer registration must never shorten an in-flight wait: with
+    // overlapping waits the status stays active until the FURTHEST deadline,
+    // otherwise the banner would flip to "not responding" while an older
+    // (longer) wait is still running. ISO strings compare chronologically.
+    const activeUntil =
+      existing && existing.count > 0 && existing.activeUntil > candidateUntil
+        ? existing.activeUntil
+        : candidateUntil;
     this.aiWaitLeases.set(callId, {
       count: (existing?.count ?? 0) + 1,
       activeUntil,
@@ -171,16 +179,22 @@ export class VoiceBridgeService {
   }
 
   private async notifyAiWaitStatus(callId: string): Promise<void> {
-    const session = await this.sessionRepo.findById(callId);
-    if (!session) return;
-    const status = this.getAiWaitStatus(callId);
-    notifyPhone(session.userId, {
-      type: 'ai_wait_status',
-      callId,
-      active: status.active,
-      activeUntil: status.activeUntil,
-      lastActiveAt: status.lastActiveAt,
-    });
+    try {
+      const session = await this.sessionRepo.findById(callId);
+      if (!session) return;
+      const status = this.getAiWaitStatus(callId);
+      notifyPhone(session.userId, {
+        type: 'ai_wait_status',
+        callId,
+        active: status.active,
+        activeUntil: status.activeUntil,
+        lastActiveAt: status.lastActiveAt,
+      });
+    } catch (err) {
+      // Push is best-effort (fire-and-forget); a repo hiccup must not crash
+      // the request path that owns the lease.
+      logger.error({ err, callId }, '[aiWait] status notification failed');
+    }
   }
 
   async createCall(input: CreateCallInput): Promise<VoiceCallSession> {
@@ -419,6 +433,9 @@ export class VoiceBridgeService {
 
       await this.sessionRepo.save(session);
       await this.callbackRepo.delete(session.userId);
+      // Lease map must not outlive the call: entries for terminal sessions
+      // would otherwise accumulate unboundedly for the process lifetime.
+      this.aiWaitLeases.delete(callId);
       publishCallEnded(session.userId, callId);
       this.signalSessionChange(callId);
       notifyPhone(session.userId, { type: 'call_ended', callId });
@@ -462,6 +479,8 @@ export class VoiceBridgeService {
 
       await this.sessionRepo.save(session);
       await this.callbackRepo.delete(session.userId);
+      // Same cleanup as completeCall: a cancelled call needs no lease bookkeeping.
+      this.aiWaitLeases.delete(callId);
       publishCallCancelled(session.userId, callId);
       this.signalSessionChange(callId);
       notifyPhone(session.userId, { type: 'call_cancelled', callId });
@@ -509,7 +528,11 @@ export class VoiceBridgeService {
   }
 
   async deleteSession(callId: string): Promise<VoiceCallSession | undefined> {
-    return this.sessionRepo.delete(callId);
+    const session = await this.sessionRepo.delete(callId);
+    if (session) {
+      this.aiWaitLeases.delete(callId);
+    }
+    return session;
   }
 }
 

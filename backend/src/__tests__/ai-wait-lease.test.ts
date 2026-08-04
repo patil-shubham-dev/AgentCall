@@ -89,4 +89,53 @@ describe('AI wait lease primitive', () => {
     expect(status.activeUntil).toBeNull();
     expect(status.lastActiveAt).toBeTruthy();
   });
+
+  it('keeps the furthest deadline when waits overlap, never regressing an in-flight wait', () => {
+    vi.useFakeTimers();
+    const service = makeService([makeSession()]);
+    const disposeLong = service.registerAiWait('call-lease', 30_000);
+    service.registerAiWait('call-lease', 5_000);
+    vi.advanceTimersByTime(6_000);
+    // The 5s wait has expired, but the 30s wait is still in flight: still active.
+    expect(service.getAiWaitStatus('call-lease').active).toBe(true);
+    vi.advanceTimersByTime(25_000);
+    expect(service.getAiWaitStatus('call-lease').active).toBe(false);
+    disposeLong();
+    expect(service.getAiWaitStatus('call-lease').active).toBe(false);
+  });
+
+  it('a new registration after the old lease expired starts a fresh deadline', () => {
+    vi.useFakeTimers();
+    const service = makeService([makeSession()]);
+    const disposeOld = service.registerAiWait('call-lease', 1_000);
+    vi.advanceTimersByTime(2_000);
+    const disposeNew = service.registerAiWait('call-lease', 10_000);
+    expect(service.getAiWaitStatus('call-lease').active).toBe(true);
+    vi.advanceTimersByTime(5_000);
+    expect(service.getAiWaitStatus('call-lease').active).toBe(true);
+    disposeOld();
+    disposeNew();
+    expect(service.getAiWaitStatus('call-lease').active).toBe(false);
+  });
+
+  it('clears the lease when the call is completed', async () => {
+    const service = makeService([makeSession()]);
+    service.registerAiWait('call-lease', 30_000);
+    expect(service.getAiWaitStatus('call-lease').active).toBe(true);
+    await service.completeCall('call-lease');
+    expect(service.getAiWaitStatus('call-lease')).toEqual({
+      active: false,
+      activeUntil: null,
+      lastActiveAt: null,
+    });
+  });
+
+  it('clears the lease when the call is cancelled', async () => {
+    const service = makeService([makeSession({ id: 'call-cancel' })]);
+    service.registerAiWait('call-cancel', 30_000);
+    expect(service.getAiWaitStatus('call-cancel').active).toBe(true);
+    await service.cancelCall('call-cancel');
+    expect(service.getAiWaitStatus('call-cancel').active).toBe(false);
+    expect(service.getAiWaitStatus('call-cancel').lastActiveAt).toBeNull();
+  });
 });
