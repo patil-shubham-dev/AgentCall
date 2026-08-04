@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
-import { config } from './common/config.js';
+import { config, DEV_SERVICE_TOKEN } from './common/config.js';
 import { logger } from './common/logger.js';
 import type { MetricsCollector } from './common/metrics-collector.js';
 import type { DatabaseHealthMonitor } from './common/db-health-monitor.js';
@@ -80,7 +80,7 @@ export function registerRoutes(app: FastifyInstance, opts: RouteOptions): void {
     if (url.startsWith('/api/v1/health') || url.startsWith('/api/v1/ready') || url.startsWith('/api/v1/metrics') || url === '/api/v1/phone/token' || url.split('?')[0] === '/mcp') {
       return;
     }
-    const isDev = config.serviceToken === 'dev-service-token';
+    const isDev = config.serviceToken === DEV_SERVICE_TOKEN;
     if (isDev) {
       (request as FastifyRequest & { auth: AuthContext }).auth = { userId: 'service', role: 'service', authenticated: true };
       return;

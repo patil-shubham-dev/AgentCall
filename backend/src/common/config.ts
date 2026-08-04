@@ -57,12 +57,31 @@ const VALID_PERSISTENCE_MODES = ['memory', 'dual-write', 'database-read', 'datab
 
 export type PersistenceMode = (typeof VALID_PERSISTENCE_MODES)[number];
 
+/**
+ * Dev-only token that silently grants full service-role access and skips
+ * WebSocket auth. Must never be used in production — see
+ * assertNoDevTokenInProduction.
+ */
+export const DEV_SERVICE_TOKEN = 'dev-service-token';
+
+export function assertNoDevTokenInProduction(nodeEnv: string, serviceToken: string): void {
+  if (nodeEnv === 'production' && serviceToken === DEV_SERVICE_TOKEN) {
+    throw new Error(
+      `Refusing to start: SERVICE_TOKEN="${DEV_SERVICE_TOKEN}" is the dev-only token, but NODE_ENV=production. ` +
+        'It silently grants full service-role access and skips WebSocket auth. ' +
+        'Set a real SERVICE_TOKEN before deploying.',
+    );
+  }
+}
+
 export function validateConfig(): void {
   const required = ['SERVICE_TOKEN'] as const;
   const missing = required.filter((key) => !process.env[key]);
   if (missing.length > 0) {
     throw new Error(`Missing required environment variables: ${missing.join(', ')}`);
   }
+
+  assertNoDevTokenInProduction(config.nodeEnv, config.serviceToken);
 
   const mode = config.database.persistenceMode as string;
   if (!(VALID_PERSISTENCE_MODES as readonly string[]).includes(mode)) {

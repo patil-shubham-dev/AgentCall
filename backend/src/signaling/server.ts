@@ -1,7 +1,7 @@
 import { WebSocketServer, WebSocket } from 'ws';
 import type { Server } from 'node:http';
 import { logger } from '../common/logger.js';
-import { config } from '../common/config.js';
+import { config, DEV_SERVICE_TOKEN } from '../common/config.js';
 import { validatePhoneToken } from '../voicebridge/phone-tokens.js';
 import * as voicebridge from '../voicebridge/service.js';
 import {
@@ -97,7 +97,7 @@ export function createSignalingServer(server: Server): WebSocketServer {
     // Authenticate via token query parameter
     const url = new URL(req.url ?? '/', 'http://localhost');
     const token = url.searchParams.get('token');
-    const isDev = config.serviceToken === 'dev-service-token';
+    const isDev = config.serviceToken === DEV_SERVICE_TOKEN;
     if (!isDev) {
       const phoneUserId = token ? await validatePhoneToken(token) : null;
       if (!token || (token !== config.serviceToken && !phoneUserId)) {
