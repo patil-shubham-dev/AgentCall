@@ -45,6 +45,11 @@ export const config = {
     // delivered by an in-process session-change event (no poll floor); this
     // only fires if a change bypasses the event bus (e.g. multi-instance run).
     replyPollIntervalMs: parseIntSafe('AI_REPLY_POLL_INTERVAL_MS', '500'),
+    // Idle-expiry for MCP sessions: sessions untouched for this long are
+    // closed by the periodic sweep. Clients hitting a closed session get
+    // SESSION_NOT_FOUND and re-initialize, which is MCP's designed recovery.
+    sessionIdleMs: parseIntSafe('MCP_SESSION_IDLE_MS', '1800000'),
+    sessionSweepIntervalMs: parseIntSafe('MCP_SESSION_SWEEP_INTERVAL_MS', '60000'),
   },
 } as const;
 

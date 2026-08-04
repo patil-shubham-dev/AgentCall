@@ -11,6 +11,7 @@ import { logger } from '../common/logger.js';
 import { DEFAULT_AGENT_NAME, resolveAiKey } from '../voicebridge/ai-keys.js';
 import { createTools } from './tools.js';
 import { mcpIdentityStorage, type McpIdentity } from './identity.js';
+import { McpSessionRegistry, type McpManagedSession } from './session-registry.js';
 import type { VoiceBridgeService } from '../voicebridge/service.js';
 
 const ALLOWED_CORS_ORIGINS = [
@@ -92,7 +93,7 @@ function createMcpSession(voicebridge: VoiceBridgeService): McpSession {
 }
 
 export function registerMcpEndpoint(app: FastifyInstance, voicebridge: VoiceBridgeService): void {
-  const sessions = new Map<string, McpSession>();
+  const sessions = new McpSessionRegistry();
 
   app.all('/mcp', {
     config: { rateLimit: { max: 120, timeWindow: '1 minute' } },
@@ -118,19 +119,25 @@ export function registerMcpEndpoint(app: FastifyInstance, voicebridge: VoiceBrid
     }
 
     const sessionId = request.headers['mcp-session-id'] ?? request.headers['Mcp-Session-Id'];
-    let session: McpSession | null = null;
+    let session: McpManagedSession | null = null;
     if (typeof sessionId === 'string' && sessionId.length > 0) {
       const existing = sessions.get(sessionId);
       if (!existing) {
         return reply.status(404).send({ error: 'SESSION_NOT_FOUND', message: 'Unknown or expired Mcp-Session-Id. Re-initialize the session.' });
       }
       session = existing;
+      sessions.touch(sessionId);
     } else {
-      session = createMcpSession(voicebridge);
-      await session.server.connect(session.transport).catch((err) => {
-        session = null;
+      const created = createMcpSession(voicebridge);
+      let connectOk = true;
+      await created.server.connect(created.transport).catch((err) => {
+        connectOk = false;
         logger.error({ err }, '[MCP] connect failed');
       });
+      if (!connectOk) {
+        return reply.status(500).send({ error: 'INTERNAL', message: 'Failed to create MCP session.' });
+      }
+      session = { ...created, lastActivityAt: Date.now() };
     }
 
     if (!session) {
@@ -148,7 +155,11 @@ export function registerMcpEndpoint(app: FastifyInstance, voicebridge: VoiceBrid
     if (typeof sessionId !== 'string' || sessionId.length === 0) {
       const generated = activeSession.transport.sessionId;
       if (generated) {
-        sessions.set(generated, activeSession);
+        sessions.set(generated, {
+          server: activeSession.server,
+          transport: activeSession.transport,
+          lastActivityAt: Date.now(),
+        });
         activeSession.transport.onclose = () => {
           sessions.delete(generated);
           logger.debug({ sessionId: generated }, '[MCP] session closed');
@@ -156,6 +167,17 @@ export function registerMcpEndpoint(app: FastifyInstance, voicebridge: VoiceBrid
       }
     }
   });
+
+  const mcpSweeper = setInterval(() => {
+    void sessions
+      .sweepExpired(config.mcp.sessionIdleMs)
+      .catch((err) => logger.error({ err }, '[MCP] idle session sweep failed'));
+  }, config.mcp.sessionSweepIntervalMs);
+  mcpSweeper.unref();
+  logger.info(
+    { idleMs: config.mcp.sessionIdleMs, intervalMs: config.mcp.sessionSweepIntervalMs },
+    '[MCP] idle session sweeper started',
+  );
 
   logger.info('[MCP] streamable HTTP endpoint registered at /mcp');
 }
