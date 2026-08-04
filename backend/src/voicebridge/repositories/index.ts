@@ -11,4 +11,3 @@ export { PrimaryDatabaseCallbackRepository } from './primary-db-callback-reposit
 export { InstrumentedSessionRepository } from './instrumented-session-repository.js';
 export { InstrumentedCallbackRepository } from './instrumented-callback-repository.js';
 export { PersistenceVerifier } from './verifier.js';
-export { PersistenceBurnIn } from './burn-in.js';
