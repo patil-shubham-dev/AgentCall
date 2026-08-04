@@ -28,11 +28,11 @@
 - [ ] No test depends on test execution order
 
 **Documentation**
-- [ ] API changes reflected in API_SPEC.md
+- [ ] API changes reflected in docs/archive/API_SPEC.md
 - [ ] New env vars added to README.md table
-- [ ] Schema changes added to DATABASE_GUIDE.md
+- [ ] Schema changes added to docs/archive/DATABASE_GUIDE.md
 - [ ] CHANGELOG.md updated with change entry
-- [ ] If breaking change: ARCHITECTURE_BASELINE.md updated
+- [ ] If breaking change: docs/archive/ARCHITECTURE_BASELINE.md updated
 
 **Edge Cases**
 - [ ] Error paths return structured `{ error, code, details }`

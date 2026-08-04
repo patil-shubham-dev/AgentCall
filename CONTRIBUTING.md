@@ -36,7 +36,7 @@ See [DEVELOPMENT_GUIDE.md](./DEVELOPMENT_GUIDE.md) for complete setup instructio
 
 - [PRODUCT_VISION.md](./PRODUCT_VISION.md) — Product philosophy
 - [SYSTEM_ARCHITECTURE.md](./SYSTEM_ARCHITECTURE.md) — Architecture specification
-- [API_SPEC.md](./API_SPEC.md) — API contract
+- [docs/archive/API_SPEC.md](./docs/archive/API_SPEC.md) — API contract
 - [IMPLEMENTATION_RULES.md](./docs/IMPLEMENTATION_RULES.md) — Mandatory implementation rules
 
 ## Review Process

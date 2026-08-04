@@ -46,7 +46,7 @@ Pre-release tags: `v1.1.0-rc.1`, `v1.1.0-beta.1`
 - [ ] All tests pass: `npm test`
 - [ ] Lint and typecheck pass: `npm run lint && npm run typecheck`
 - [ ] Integration tests pass: `npm run test:integration`
-- [ ] Documentation updated (API_SPEC.md, DEPLOYMENT_GUIDE.md, etc.)
+- [ ] Documentation updated (docs/archive/API_SPEC.md, DEPLOYMENT_GUIDE.md, etc.)
 - [ ] Migration scripts reviewed and tested (if applicable)
 - [ ] Security review for new features
 - [ ] Release notes written in RELEASE_NOTES_v<version>.md
@@ -155,6 +155,6 @@ Cross-pod locking, migration tooling, WebSocket drain, session pagination.
 ```
 fix(release): v1.0.1 — Documentation fixes and statement timeout
 
-Fixes API_SPEC.md, DEPLOYMENT_GUIDE.md, ARCHITECTURE.md.
+Fixes docs/archive/API_SPEC.md, DEPLOYMENT_GUIDE.md, ARCHITECTURE.md.
 Adds statement_timeout=5s to PostgreSQL pool.
 ```

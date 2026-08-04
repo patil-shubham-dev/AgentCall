@@ -39,14 +39,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - 48 unit and integration tests across 5 test files
 - Production validation: 10 reports across architecture, reliability, security, performance, deployment, operations, maintainability, scalability, risk, test coverage
 - Documentation: Full documentation migration and synchronisation (18 docs reviewed, 15 modified)
-- Documentation: PRODUCT_VISION.md, SYSTEM_ARCHITECTURE.md, API_SPEC.md as canonical source of truth
+- Documentation: PRODUCT_VISION.md, SYSTEM_ARCHITECTURE.md, docs/archive/API_SPEC.md as canonical source of truth
 - Documentation: 10 Architecture Decision Records (docs/adr/)
 - Documentation: Engineering standards (CODE_STYLE, TESTING_GUIDE, DATABASE_GUIDE, API_GUIDELINES, ERROR_HANDLING, LOGGING_GUIDE, SECURITY_GUIDELINES, PERFORMANCE_GUIDELINES, SCALABILITY_GUIDE, DEPLOYMENT_GUIDE)
 - Documentation: Community files (CONTRIBUTING.md, CODE_OF_CONDUCT.md, SECURITY.md, SUPPORT.md, CHANGELOG.md, COMMUNITY.md)
 - Documentation: GitHub issue templates and PR template
-- Documentation: 14 known limitations documented (KNOWN_LIMITATIONS.md)
+- Documentation: 14 known limitations documented (docs/archive/KNOWN_LIMITATIONS.md)
 - Documentation: Technical debt register (34 items across post-v1.0, v1.1, v2.0, Research, Cleanup)
-- VERSION.md, RELEASE_NOTES_v1.0.md, ARCHITECTURE_BASELINE.md, OPERATIONS_BASELINE.md
+- VERSION.md, docs/archive/RELEASE_NOTES_v1.0.md, docs/archive/ARCHITECTURE_BASELINE.md, docs/archive/OPERATIONS_BASELINE.md
 
 ### Changed
 - Backend Docker image: `node:20-alpine` → `node:20-slim` for onnxruntime glibc compatibility
@@ -68,7 +68,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Deprecated
 - docs/01-architecture-design.md — Superseded by SYSTEM_ARCHITECTURE.md
-- docs/02-api-protocol-specification.md — Superseded by API_SPEC.md
+- docs/02-api-protocol-specification.md — Superseded by docs/archive/API_SPEC.md
 - docs/07-mvp-scope-milestone-plan.md — Superseded by ROADMAP.md
 - docs/09-infrastructure-cicd-plan.md — Superseded by DEPLOYMENT_GUIDE.md
 

@@ -6,7 +6,7 @@
 > Build the universal communication layer that enables any AI to securely communicate with humans from anywhere, allowing autonomous AI systems to continue working even when the user is away from their computer.
 >
 > **System architecture:** See [SYSTEM_ARCHITECTURE.md](./SYSTEM_ARCHITECTURE.md)
-> **API contract:** See [API_SPEC.md](./API_SPEC.md)
+> **API contract:** See [docs/archive/API_SPEC.md](./docs/archive/API_SPEC.md)
 
 ---
 

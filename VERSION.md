@@ -54,7 +54,7 @@ If you were running a pre-release prototype:
 
 ## Known Limitations
 
-See [KNOWN_LIMITATIONS.md](./KNOWN_LIMITATIONS.md) for the complete register.
+See [docs/archive/KNOWN_LIMITATIONS.md](./docs/archive/KNOWN_LIMITATIONS.md) for the complete register.
 
 **Key limitations:**
 - Single-user auth model (SERVICE_TOKEN shared across all clients)

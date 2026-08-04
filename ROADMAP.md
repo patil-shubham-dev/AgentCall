@@ -1,6 +1,6 @@
 # AgentCall — Roadmap
 
-> **Canonical references:** [PRODUCT_VISION.md](./PRODUCT_VISION.md) | [ARCHITECTURE.md](./ARCHITECTURE.md) | [API_SPEC.md](./API_SPEC.md)
+> **Canonical references:** [PRODUCT_VISION.md](./PRODUCT_VISION.md) | [ARCHITECTURE.md](./ARCHITECTURE.md) | [docs/archive/API_SPEC.md](./docs/archive/API_SPEC.md)
 > **Detailed engineering roadmap:** [IMPLEMENTATION_ROADMAP.md](./docs/IMPLEMENTATION_ROADMAP.md)
 
 ---

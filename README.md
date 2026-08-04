@@ -84,7 +84,7 @@ flowchart TB
     Android -->|"WebSocket (phone)"| WS
 ```
 
-> Full architecture: [ARCHITECTURE.md](./ARCHITECTURE.md) · [ARCHITECTURE_BASELINE.md](./ARCHITECTURE_BASELINE.md)
+> Full architecture: [ARCHITECTURE.md](./ARCHITECTURE.md) · [docs/archive/ARCHITECTURE_BASELINE.md](./docs/archive/ARCHITECTURE_BASELINE.md)
 
 ---
 
@@ -234,7 +234,7 @@ curl http://localhost:4000/api/v1/health
 # → {"status":"ok","uptime":1234,"mode":"dual-write"}
 ```
 
-> Full API reference: [API_SPEC.md](./API_SPEC.md)
+> Full API reference: [docs/archive/API_SPEC.md](./docs/archive/API_SPEC.md)
 
 ---
 
@@ -243,11 +243,11 @@ curl http://localhost:4000/api/v1/health
 | Area | Document |
 |------|----------|
 | 📖 **Documentation Hub** | [docs/README.md](./docs/README.md) |
-| 🏗 **Architecture** | [ARCHITECTURE.md](./ARCHITECTURE.md) · [SYSTEM_ARCHITECTURE.md](./SYSTEM_ARCHITECTURE.md) · [ARCHITECTURE_BASELINE.md](./ARCHITECTURE_BASELINE.md) |
-| 📡 **API** | [API_SPEC.md](./API_SPEC.md) · [API_GUIDELINES.md](./docs/API_GUIDELINES.md) |
-| 🚢 **Deployment** | [DEPLOYMENT_GUIDE.md](./DEPLOYMENT_GUIDE.md) · [PRODUCTION_READINESS.md](./PRODUCTION_READINESS.md) |
-| 🗄️ **Database** | [DATABASE_GUIDE.md](./DATABASE_GUIDE.md) |
-| ⚙️ **Operations** | [OPERATIONS_BASELINE.md](./OPERATIONS_BASELINE.md) · [KNOWN_LIMITATIONS.md](./KNOWN_LIMITATIONS.md) |
+| 🏗 **Architecture** | [ARCHITECTURE.md](./ARCHITECTURE.md) · [SYSTEM_ARCHITECTURE.md](./SYSTEM_ARCHITECTURE.md) · [docs/archive/ARCHITECTURE_BASELINE.md](./docs/archive/ARCHITECTURE_BASELINE.md) |
+| 📡 **API** | [docs/archive/API_SPEC.md](./docs/archive/API_SPEC.md) · [API_GUIDELINES.md](./docs/API_GUIDELINES.md) |
+| 🚢 **Deployment** | [DEPLOYMENT_GUIDE.md](./DEPLOYMENT_GUIDE.md) · [docs/archive/PRODUCTION_READINESS.md](./docs/archive/PRODUCTION_READINESS.md) |
+| 🗄️ **Database** | [docs/archive/DATABASE_GUIDE.md](./docs/archive/DATABASE_GUIDE.md) |
+| ⚙️ **Operations** | [docs/archive/OPERATIONS_BASELINE.md](./docs/archive/OPERATIONS_BASELINE.md) · [docs/archive/KNOWN_LIMITATIONS.md](./docs/archive/KNOWN_LIMITATIONS.md) |
 | 🔒 **Security** | [SECURITY.md](./SECURITY.md) · [SECURITY_GUIDELINES.md](./docs/SECURITY_GUIDELINES.md) |
 | 💻 **Development** | [DEVELOPMENT_GUIDE.md](./DEVELOPMENT_GUIDE.md) · [TESTING_GUIDE.md](./docs/TESTING_GUIDE.md) |
 | 🤖 **AI Integration** | [AI_INTEGRATION.md](./docs/AI_INTEGRATION.md) · [MULTI_PROVIDER_PLAN.md](./docs/MULTI_PROVIDER_PLAN.md) |

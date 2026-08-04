@@ -6,7 +6,7 @@ Start with the [README.md](./README.md) for a quick overview, then explore:
 
 - [PRODUCT_VISION.md](./PRODUCT_VISION.md) — What AgentCall is and why it exists
 - [SYSTEM_ARCHITECTURE.md](./SYSTEM_ARCHITECTURE.md) — How the system is designed
-- [API_SPEC.md](./API_SPEC.md) — API contract for integration
+- [docs/archive/API_SPEC.md](./docs/archive/API_SPEC.md) — API contract for integration
 - [DEVELOPMENT_GUIDE.md](./DEVELOPMENT_GUIDE.md) — How to set up and contribute
 - [ROADMAP.md](./ROADMAP.md) — What's coming next
 

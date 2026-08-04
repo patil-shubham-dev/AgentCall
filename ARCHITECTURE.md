@@ -1,7 +1,7 @@
 # VoiceBridge — System Architecture
 
 > **This document describes the current implementation architecture.**
-> For the permanent reference architecture, see [ARCHITECTURE_BASELINE.md](./ARCHITECTURE_BASELINE.md).
+> For the permanent reference architecture, see [docs/archive/ARCHITECTURE_BASELINE.md](./docs/archive/ARCHITECTURE_BASELINE.md).
 
 ---
 
@@ -145,6 +145,6 @@ Kubernetes:      9 manifests (see infra/k8s/)
 
 ## See Also
 
-- [ARCHITECTURE_BASELINE.md](./ARCHITECTURE_BASELINE.md) — permanent reference with startup/shutdown/recovery/request lifecycles
-- [API_SPEC.md](./API_SPEC.md) — REST API + WebSocket protocol
-- [PRODUCTION_READINESS.md](./PRODUCTION_READINESS.md) — startup flow, shutdown flow, persistence modes, health endpoints
+- [docs/archive/ARCHITECTURE_BASELINE.md](./docs/archive/ARCHITECTURE_BASELINE.md) — permanent reference with startup/shutdown/recovery/request lifecycles
+- [docs/archive/API_SPEC.md](./docs/archive/API_SPEC.md) — REST API + WebSocket protocol
+- [docs/archive/PRODUCTION_READINESS.md](./docs/archive/PRODUCTION_READINESS.md) — startup flow, shutdown flow, persistence modes, health endpoints

@@ -1,6 +1,6 @@
 # AgentCall — Development Guide
 
-> **Canonical references:** [IMPLEMENTATION_RULES.md](./docs/IMPLEMENTATION_RULES.md) | [SYSTEM_ARCHITECTURE.md](./SYSTEM_ARCHITECTURE.md) | [API_SPEC.md](./API_SPEC.md)
+> **Canonical references:** [IMPLEMENTATION_RULES.md](./docs/IMPLEMENTATION_RULES.md) | [SYSTEM_ARCHITECTURE.md](./SYSTEM_ARCHITECTURE.md) | [docs/archive/API_SPEC.md](./docs/archive/API_SPEC.md)
 
 ---
 
@@ -37,7 +37,7 @@ AgentCall/
 │   └── adr/                    # Architecture Decision Records
 ├── .github/                    # GitHub templates, workflows
 ├── AGENTS.md
-├── API_SPEC.md
+├── docs/archive/API_SPEC.md
 ├── ARCHITECTURE.md
 ├── CURRENT_STACK.md
 ├── DEVELOPMENT_GUIDE.md
@@ -57,7 +57,7 @@ AgentCall/
 ├── SECURITY.md
 ├── SUPPORT.md
 ├── TESTING_GUIDE.md
-├── DATABASE_GUIDE.md
+├── docs/archive/DATABASE_GUIDE.md
 ├── API_GUIDELINES.md
 ├── ERROR_HANDLING.md
 ├── LOGGING_GUIDE.md
@@ -211,7 +211,7 @@ export class Service {
 
 ## How to Add a Device
 
-1. Implement device registration endpoint per API_SPEC.md
+1. Implement device registration endpoint per docs/archive/API_SPEC.md
 2. Add device type to `devices/types.ts`
 3. Add routing logic to `DeviceRouter`
 4. Add push notification handler if platform-specific
@@ -221,7 +221,7 @@ export class Service {
 
 ## How to Add an API
 
-1. Define endpoint in API_SPEC.md first
+1. Define endpoint in docs/archive/API_SPEC.md first
 2. Create Zod validation schema
 3. Implement route handler
 4. Add auth middleware (JWT or Provider API Key)
@@ -233,7 +233,7 @@ export class Service {
 
 ## How to Add an MCP Tool
 
-1. Define tool in API_SPEC.md first
+1. Define tool in docs/archive/API_SPEC.md first
 2. Add tool definition to `backend/src/mcp/tools.ts`
 3. Implement tool handler
 4. Add Zod validation for tool inputs
