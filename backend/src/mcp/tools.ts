@@ -1,8 +1,10 @@
 import type { VoiceBridgeService } from '../voicebridge/service.js';
+import type { VoiceCallSession } from '../voicebridge/types.js';
 import type { CallReason } from '../common/types.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { getAgentIdentity } from './identity.js';
 import { DEFAULT_AGENT_NAME } from '../voicebridge/ai-keys.js';
+import { logger } from '../common/logger.js';
 import { config } from '../common/config.js';
 
 type ToolResult = CallToolResult;
@@ -13,6 +15,33 @@ function text(content: string): ToolResult {
 
 function error(msg: string): ToolResult {
   return { content: [{ type: 'text', text: msg }], isError: true };
+}
+
+/**
+ * Ownership gate for per-call tools: the authenticated identity must be the
+ * one that created the call (its agentId). Returns the loaded session so
+ * callers avoid a second fetch. Not-found is kept distinct from forbidden so
+ * a missing call still reports "Call not found" rather than revealing or
+ * denying anything.
+ */
+async function authorizeCall(
+  voicebridge: VoiceBridgeService,
+  callId: string,
+): Promise<{ ok: true; session: VoiceCallSession } | { ok: false; result: ToolResult }> {
+  const session = await voicebridge.getCall(callId);
+  if (!session) return { ok: false, result: error(`Error: Call not found: ${callId}`) };
+  const identity = getAgentIdentity();
+  if (session.agentId !== identity.agentName) {
+    logger.warn(
+      { callId, owner: session.agentId, requester: identity.agentName },
+      '[MCP] denied per-call access by non-owner identity',
+    );
+    return {
+      ok: false,
+      result: error(`Error: Forbidden: call ${callId} belongs to a different AI identity`),
+    };
+  }
+  return { ok: true, session };
 }
 
 const VALID_REASONS = ['clarification', 'approval', 'error', 'input_required'];
@@ -92,6 +121,8 @@ export function createTools(voicebridge: VoiceBridgeService): McpTool[] {
       handler: async (args) => {
         const callId = args.call_id as string;
         const content = args.content as string;
+        const auth = await authorizeCall(voicebridge, callId);
+        if (!auth.ok) return auth.result;
         try {
           const msg = await voicebridge.addAiMessage(callId, content);
           if (!msg) return error(`Error: Call not found: ${callId}`);
@@ -119,13 +150,13 @@ export function createTools(voicebridge: VoiceBridgeService): McpTool[] {
       },
       handler: async (args) => {
         const callId = args.call_id as string;
+        const auth = await authorizeCall(voicebridge, callId);
+        if (!auth.ok) return auth.result;
         const messages = await voicebridge.getTranscript(callId);
         if (!messages) {
-          const session = await voicebridge.getCall(callId);
-          if (!session) return error(`Call not found: ${callId}`);
           return text(JSON.stringify({
-            status: session.status,
-            message_count: session.messages.length,
+            status: auth.session.status,
+            message_count: auth.session.messages.length,
             instruction: 'Send a message with send_message, then check transcript again.',
           }, null, 2));
         }
@@ -157,6 +188,8 @@ export function createTools(voicebridge: VoiceBridgeService): McpTool[] {
       handler: async (args) => {
         const callId = args.call_id as string;
         const result = args.result as Record<string, unknown> | undefined;
+        const auth = await authorizeCall(voicebridge, callId);
+        if (!auth.ok) return auth.result;
         try {
           const session = await voicebridge.completeCall(callId, result as never);
           if (!session) return error(`Error: Call not found: ${callId}`);
@@ -183,6 +216,8 @@ export function createTools(voicebridge: VoiceBridgeService): McpTool[] {
       },
       handler: async (args) => {
         const callId = args.call_id as string;
+        const auth = await authorizeCall(voicebridge, callId);
+        if (!auth.ok) return auth.result;
         try {
           const session = await voicebridge.cancelCall(callId);
           if (!session) return error(`Error: Call not found: ${callId}`);
@@ -217,6 +252,8 @@ export function createTools(voicebridge: VoiceBridgeService): McpTool[] {
         const callId = args.call_id as string;
         const content = args.content as string;
         const timeoutSeconds = Math.min(Math.max((args.timeout_seconds as number) ?? 15, 1), 45);
+        const auth = await authorizeCall(voicebridge, callId);
+        if (!auth.ok) return auth.result;
         const disposeAiWait = voicebridge.registerAiWait(callId, timeoutSeconds * 1000);
 
         // Subscribe BEFORE sending so a reply that lands the instant the message
