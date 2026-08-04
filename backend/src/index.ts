@@ -214,10 +214,17 @@ async function main() {
   await app.register(rateLimit, {
     max: 100,
     timeWindow: '1 minute',
-    errorResponseBuilder: (_req, context) => ({
-      error: 'RATE_LIMITED',
-      message: `Too many requests. Rate limit: ${context.max} per ${context.after}`,
-    }),
+    // The plugin throws whatever this builder returns; a plain object without
+    // statusCode would make Fastify reply 500, so build a real 429 error
+    errorResponseBuilder: (_req, context) => {
+      const err = new Error(`Too many requests. Rate limit: ${context.max} per ${context.after}`) as Error & {
+        statusCode: number;
+        code: string;
+      };
+      err.statusCode = 429;
+      err.code = 'RATE_LIMITED';
+      return err;
+    },
   });
 
   app.addHook('onRequest', async (request, reply) => {

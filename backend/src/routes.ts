@@ -440,7 +440,11 @@ export function registerRoutes(app: FastifyInstance, opts: RouteOptions): void {
     };
   });
 
-  app.post('/api/v1/phone/token', async (request) => {
+  app.post('/api/v1/phone/token', {
+    // Tighter than the global limiter: this endpoint is the unauthenticated
+    // entry point for a new phone, so cap token minting per client
+    config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
+  }, async (request) => {
     const { user_id } = request.body as { user_id?: string };
     const userId = user_id ?? 'solo-user';
     const token = await createPhoneToken(userId);
