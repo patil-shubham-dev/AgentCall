@@ -9,6 +9,7 @@ import {
   CALL_RESUMED,
   CALL_DELETED,
   CALL_EXPIRED,
+  CALL_DELAYED,
 } from './events.js';
 import type {
   CallCreatedPayload,
@@ -19,6 +20,7 @@ import type {
   CallResumedPayload,
   CallDeletedPayload,
   CallExpiredPayload,
+  CallDelayedPayload,
 } from './events.js';
 
 const publisher = createEventPublisher('voicebridge.calls', 1);
@@ -70,3 +72,11 @@ export const publishCallExpired = (
   pausedDurationMinutes: number,
 ): void =>
   publisher.publish<CallExpiredPayload>(CALL_EXPIRED, { userId, callId, reason, pausedDurationMinutes });
+
+export const publishCallDelayed = (
+  userId: string,
+  callId: string,
+  reason: CallDelayedPayload['reason'],
+  attemptsLeft: number,
+): void =>
+  publisher.publish<CallDelayedPayload>(CALL_DELAYED, { userId, callId, reason, attemptsLeft });

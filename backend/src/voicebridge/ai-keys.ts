@@ -209,3 +209,17 @@ export async function listAiKeyStatuses(
     };
   });
 }
+
+/**
+ * Readiness signal for the agent-gate status endpoint: an AI key counts as
+ * online when it authenticated within ONLINE_WINDOW_MS. The gate itself uses
+ * the stronger MCP-session presence; this covers agents that are attached to
+ * the backend without a live session (e.g. between MCP reconnects).
+ */
+export async function isAiKeyOnlineByName(name: string): Promise<boolean> {
+  const now = Date.now();
+  const keys = await listAiKeys();
+  const key = keys.find((k) => k.name === name);
+  if (!key?.lastUsedAt) return false;
+  return now - Date.parse(key.lastUsedAt) <= ONLINE_WINDOW_MS;
+}

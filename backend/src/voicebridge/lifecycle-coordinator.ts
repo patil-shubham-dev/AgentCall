@@ -1,6 +1,7 @@
 import type { CleanupScheduler } from '../common/cleanup-scheduler.js';
 import { publishCallResumed, publishCallExpired } from './calls/publisher.js';
 import type { SessionRepository, CallbackRepository } from './repositories/index.js';
+import { CALL_RING_TTL_MS } from './service.js';
 
 export class LifecycleCoordinator {
   constructor(
@@ -8,6 +9,13 @@ export class LifecycleCoordinator {
     private sessionRepo: SessionRepository,
     private callbackRepo: CallbackRepository,
     private notifyPhone: (userId: string, payload: Record<string, unknown>) => boolean,
+    /**
+     * Phase-2 ring gate hook: when injected, resumed callbacks go through
+     * VoiceBridgeService.attemptRing so the ring only fires once the agent is
+     * online/ready. Without it (tests, legacy wiring) the coordinator pushes
+     * directly as before.
+     */
+    private ringCall?: (callId: string) => void | Promise<void>,
   ) {}
 
   resumeCallback(userId: string, callId: string, delayMinutes: number, resumeAt: number | string): void {
@@ -29,19 +37,31 @@ export class LifecycleCoordinator {
     const existing = await this.sessionRepo.findById(callId);
     if (!existing || existing.status !== 'paused') return;
 
+    const resumedAtIso = new Date().toISOString();
     existing.status = 'pending';
-    existing.resumedAt = new Date().toISOString();
+    existing.resumedAt = resumedAtIso;
     publishCallResumed(userId, callId, delayMinutes, new Date(resumeAt).toISOString());
-    this.notifyPhone(userId, {
-      type: 'call_incoming',
-      callId,
-      callerName: existing.agentId,
-      reason: existing.reason,
-      summary: existing.context.summary,
-      options: existing.context.options,
-      priority: existing.priority,
-      isCallback: true,
-    });
+    if (this.ringCall) {
+      // Gated path: rings only when the agent is online/ready (attemptRing
+      // re-checks the ring window and retries while the agent is offline).
+      await this.ringCall(callId);
+    } else {
+      // Legacy path (tests without a gate): push directly.
+      this.notifyPhone(userId, {
+        type: 'call_incoming',
+        callId,
+        callerName: existing.agentId,
+        reason: existing.reason,
+        summary: existing.context.summary,
+        options: existing.context.options,
+        priority: existing.priority,
+        isCallback: true,
+        // The resume re-creates the ring window: the phone must treat this as a
+        // fresh call, not the original (possibly days-old) one.
+        createdAt: resumedAtIso,
+        expiresAt: new Date(Date.now() + CALL_RING_TTL_MS).toISOString(),
+      });
+    }
     await this.callbackRepo.delete(userId);
   }
 

@@ -49,6 +49,21 @@ export class McpSessionRegistry {
   }
 
   /**
+   * Presence snapshot for a single agent: online iff a live session carries
+   * the name, lastSeenAt = most recent activity across those sessions.
+   */
+  getAgentStatus(agentName: string): { online: boolean; lastSeenAt: string | null } {
+    let lastSeenMs = 0;
+    let found = false;
+    for (const session of this.sessions.values()) {
+      if (session.agentName !== agentName) continue;
+      found = true;
+      if (session.lastActivityAt > lastSeenMs) lastSeenMs = session.lastActivityAt;
+    }
+    return { online: found, lastSeenAt: found ? new Date(lastSeenMs).toISOString() : null };
+  }
+
+  /**
    * Closes and removes every session untouched for `idleMs`. A session closed
    * this way is gone for good; the client gets SESSION_NOT_FOUND on its next
    * request and re-initializes, which is MCP's designed recovery path.

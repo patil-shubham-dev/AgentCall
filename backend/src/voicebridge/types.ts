@@ -45,6 +45,8 @@ export interface VoiceCallSession {
   retentionExpiresAt?: string;
 }
 
+export type CallOrigin = 'agent' | 'user';
+
 export interface CreateCallInput {
   userId: string;
   agentId: string;
@@ -53,6 +55,12 @@ export interface CreateCallInput {
   taskId?: string;
   options?: string[];
   priority?: CallPriority;
+  /**
+   * Who initiated the call. 'user' = outbound call from the phone app:
+   * the ring gate is skipped entirely — ringing the calling phone itself
+   * would be wrong — and the call waits for the AI to answer.
+   */
+  origin?: CallOrigin;
 }
 
 

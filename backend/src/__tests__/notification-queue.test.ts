@@ -122,4 +122,44 @@ describe('notification queue', () => {
     // Should NOT re-send the old queued message
     expect(ws2.send).not.toHaveBeenCalled();
   });
+
+  it('drops queued notifications older than the queue TTL at flush', async () => {
+    const userId = 'test-user-ttl';
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-08-11T10:00:00Z'));
+    try {
+      // Phone offline: the agent creates a call while the phone is away.
+      serviceModule.notifyPhone(userId, { type: 'call_incoming', callId: 'call-stale' });
+
+      // 10 minutes later the phone reconnects — a stale ring must NOT fire.
+      vi.setSystemTime(new Date('2026-08-11T10:10:00Z'));
+      serviceModule.registerPhone(userId, phoneWs);
+
+      await Promise.resolve();
+      expect(phoneWs.send).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('prunes expired queued entries as new ones are queued', async () => {
+    const userId = 'test-user-prune';
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-08-11T10:00:00Z'));
+    try {
+      serviceModule.notifyPhone(userId, { type: 'call_incoming', callId: 'call-stale' });
+      vi.setSystemTime(new Date('2026-08-11T10:10:00Z'));
+      serviceModule.notifyPhone(userId, { type: 'call_incoming', callId: 'call-fresh' });
+
+      serviceModule.registerPhone(userId, phoneWs);
+      await Promise.resolve();
+
+      // Only the fresh event survives the prune and reaches the phone.
+      expect(phoneWs.send).toHaveBeenCalledTimes(1);
+      const sent = JSON.parse((phoneWs.send as ReturnType<typeof vi.fn>).mock.calls[0][0]);
+      expect(sent.payload.callId).toBe('call-fresh');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

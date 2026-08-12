@@ -202,16 +202,20 @@ async function main() {
 
   await app.register(compress, { global: true });
 
-  const corsOrigins = config.security.corsAllowedOrigins === '*'
-    ? true
-    : config.security.corsAllowedOrigins.split(',').map((s) => s.trim());
-  await app.register(cors, {
-    origin: corsOrigins,
-    credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Request-Id'],
-    exposedHeaders: ['X-Request-Id'],
-  });
+  const corsOrigins = config.security.corsAllowedOrigins === ''
+    ? []
+    : config.security.corsAllowedOrigins.split(',').map((s) => s.trim()).filter(Boolean);
+  // Fail-closed: without an explicit allowlist no CORS headers are sent, so
+  // browsers deny cross-origin requests by default.
+  if (corsOrigins.length > 0) {
+    await app.register(cors, {
+      origin: corsOrigins,
+      credentials: true,
+      methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+      allowedHeaders: ['Content-Type', 'Authorization', 'X-Request-Id'],
+      exposedHeaders: ['X-Request-Id'],
+    });
+  }
 
   await app.register(rateLimit, {
     max: 100,
@@ -278,6 +282,9 @@ async function main() {
     sessionRepository,
     callbackRepository,
     notifyPhone,
+    // Phase-2 ring gate: resumed callbacks go through the gate (rings only
+    // when the agent is online/ready, retries while offline).
+    (callId) => voiceBridgeService.attemptRing(callId),
   );
   voiceBridgeService.setLifecycleCoordinator(lifecycleCoordinator);
 
@@ -337,7 +344,15 @@ async function main() {
   registerRoutes(app, routeOpts);
 
   // Streamable HTTP MCP endpoint — the AI-facing connector surface (/mcp)
-  registerMcpEndpoint(app, voiceBridgeService);
+  const mcpSessions = registerMcpEndpoint(app, voiceBridgeService);
+
+  // Phase-2 ring gate wiring: agent presence comes from the live MCP session
+  // registry, and deferred-ring retries use the same cleanup scheduler as
+  // callbacks. Must run after registerMcpEndpoint (registry must exist) —
+  // the provider is read lazily on each gate check, so no ordering issue
+  // with callbacks that fire before this line.
+  voiceBridgeService.setAgentPresenceProvider(() => mcpSessions.getActiveIdentities());
+  voiceBridgeService.setRingRetryScheduler(cleanupScheduler);
 
   let signalingServer: WebSocketServer | undefined;
   try {

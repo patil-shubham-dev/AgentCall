@@ -148,7 +148,7 @@ describe('REST Call Ownership and Authorization', () => {
 
   it('denies user A active-call request to view user B active-call', async () => {
     // Create an active call for UserB
-    const call = await service.createCall({
+    await service.createCall({
       userId: 'UserB',
       agentId: 'AgentA',
       reason: 'clarification',
@@ -166,5 +166,32 @@ describe('REST Call Ownership and Authorization', () => {
       headers: { Authorization: `Bearer ${userAToken}` },
     });
     expect(resIntruderActive.status).toBe(403);
+  });
+});
+
+describe('Agent status endpoint', () => {
+  it('reports current_call_id while the agent has an open call', async () => {
+    const call = await service.createCall({
+      userId: 'UserA',
+      agentId: 'AgentStatusX',
+      reason: 'clarification',
+      summary: 'Status test call',
+    });
+
+    const res = await fetch(`${baseUrl}/api/v1/agents/AgentStatusX/status`, {
+      headers: { Authorization: `Bearer ${userAToken}` },
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { current_call_id: string | null };
+    expect(body.current_call_id).toBe(call.id);
+  });
+
+  it('reports null current_call_id when the agent has no open call', async () => {
+    const res = await fetch(`${baseUrl}/api/v1/agents/AgentB/status`, {
+      headers: { Authorization: `Bearer ${userAToken}` },
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { current_call_id: string | null };
+    expect(body.current_call_id).toBeNull();
   });
 });

@@ -14,11 +14,12 @@ import { mcpIdentityStorage, type McpIdentity } from './identity.js';
 import { McpSessionRegistry, type McpManagedSession } from './session-registry.js';
 import type { VoiceBridgeService } from '../voicebridge/service.js';
 
-const ALLOWED_CORS_ORIGINS = [
+const ALLOWED_CORS_ORIGINS = new Set([
   'https://chatgpt.com',
   'https://app.chatgpt.com',
   'https://claude.ai',
-];
+  ...config.security.corsAllowedOrigins.split(',').map((s) => s.trim()).filter(Boolean),
+]);
 
 function extractToken(request: FastifyRequest): string | null {
   const header = request.headers.authorization;
@@ -92,7 +93,7 @@ function createMcpSession(voicebridge: VoiceBridgeService): McpSession {
   return { server, transport };
 }
 
-export function registerMcpEndpoint(app: FastifyInstance, voicebridge: VoiceBridgeService): void {
+export function registerMcpEndpoint(app: FastifyInstance, voicebridge: VoiceBridgeService): McpSessionRegistry {
   const sessions = new McpSessionRegistry();
   app.decorate('mcpSessions', sessions);
 
@@ -100,7 +101,7 @@ export function registerMcpEndpoint(app: FastifyInstance, voicebridge: VoiceBrid
     config: { rateLimit: { max: 120, timeWindow: '1 minute' } },
   }, async (request, reply) => {
     const origin = request.headers.origin;
-    if (origin && ALLOWED_CORS_ORIGINS.includes(origin)) {
+    if (origin && ALLOWED_CORS_ORIGINS.has(origin)) {
       reply.header('Access-Control-Allow-Origin', origin);
       reply.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-api-key, Mcp-Session-Id, mcp-session-id');
       reply.header('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
@@ -182,4 +183,5 @@ export function registerMcpEndpoint(app: FastifyInstance, voicebridge: VoiceBrid
   );
 
   logger.info('[MCP] streamable HTTP endpoint registered at /mcp');
+  return sessions;
 }

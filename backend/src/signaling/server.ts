@@ -94,9 +94,12 @@ export function createSignalingServer(server: Server): WebSocketServer {
       return;
     }
 
-    // Authenticate via token query parameter
+    // Authenticate via Authorization header (preferred) or legacy token query parameter
     const url = new URL(req.url ?? '/', 'http://localhost');
-    const token = url.searchParams.get('token');
+    const authHeader = req.headers['authorization'] ?? '';
+    const headerToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
+    const queryToken = url.searchParams.get('token') ?? '';
+    const token = headerToken || queryToken;
     const isDev = config.serviceToken === DEV_SERVICE_TOKEN;
     if (!isDev) {
       const phoneUserId = token ? await validatePhoneToken(token) : null;

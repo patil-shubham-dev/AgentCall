@@ -13,6 +13,8 @@ import {
   createAiKey,
   deleteAiKey,
   listAiKeyStatuses,
+  isAiKeyOnlineByName,
+  listAiKeys,
   resolveAiKey,
   DEFAULT_AGENT_NAME,
 } from './voicebridge/ai-keys.js';
@@ -219,7 +221,8 @@ export function registerRoutes(app: FastifyInstance, opts: RouteOptions): void {
     const taskId = (body.context as Record<string, unknown> | undefined)?.task_id as string | undefined;
     const options = (body.context as Record<string, unknown> | undefined)?.options as string[] | undefined;
     const priority = body.priority as string ?? 'normal';
-    logger.debug({ userId, agentId, summary, reason, taskId, options, priority, elapsed: Date.now() - start }, '[CALLS] step 2 - parsed fields');
+    const origin = body.origin as string ?? body.caller as string ?? 'agent';
+    logger.debug({ userId, agentId, summary, reason, taskId, options, priority, origin, elapsed: Date.now() - start }, '[CALLS] step 2 - parsed fields');
 
     if (!summary) {
       return reply.status(400).send({ error: 'VALIDATION_ERROR', message: 'summary is required in context' });
@@ -230,10 +233,15 @@ export function registerRoutes(app: FastifyInstance, opts: RouteOptions): void {
       return reply.status(400).send({ error: 'VALIDATION_ERROR', message: `reason must be one of: ${validReasons.join(', ')}` });
     }
 
+    if (origin !== 'agent' && origin !== 'user') {
+      return reply.status(400).send({ error: 'VALIDATION_ERROR', message: 'origin must be "agent" or "user"' });
+    }
+
     logger.debug({ elapsed: Date.now() - start }, '[CALLS] step 3 - before createCall');
     const session = await voicebridge.createCall({
       userId, agentId, reason: reason as CreateCallInput['reason'],
       summary, taskId, options, priority: priority as CreateCallInput['priority'],
+      origin: origin as 'agent' | 'user',
     });
     logger.debug({ callId: session.id, elapsed: Date.now() - start }, '[CALLS] step 4 - after createCall');
 
@@ -612,6 +620,38 @@ export function registerRoutes(app: FastifyInstance, opts: RouteOptions): void {
         online: k.online,
         busy: k.busy,
       })),
+    };
+  });
+
+  // Phase 2: per-agent online/ready status for the Home screen agent chip.
+  // Online = live MCP session OR ai-key authenticated within the online
+  // window. Does not include busy-ness (an agent mid-call is still online).
+  app.get('/api/v1/agents/:agentId/status', async (request, reply) => {
+    const auth = (request as FastifyRequest & { auth: AuthContext }).auth;
+    if (auth.role !== 'service' && auth.role !== 'user') {
+      return reply.status(403).send({ error: 'FORBIDDEN', message: 'Not permitted' });
+    }
+    const { agentId } = request.params as { agentId: string };
+    const activeMcpSessionAgentNames = app.mcpSessions?.getActiveIdentities() ?? new Set<string>();
+    const onlineFromMcp = activeMcpSessionAgentNames.has(agentId);
+    const onlineFromKey = await isAiKeyOnlineByName(agentId);
+    const keys = await listAiKeys();
+    const key = keys.find((k) => k.name === agentId);
+    // An agent mid-call (pending/active/paused) reports its current call id
+    // so clients can deep-link into the call from the status chip.
+    let currentCallId: string | null = null;
+    if (sessionRepo) {
+      const sessions = await sessionRepo.list().catch(() => []);
+      const open = sessions.find(
+        (s) => s.agentId === agentId && (s.status === 'pending' || s.status === 'active' || s.status === 'paused'),
+      );
+      currentCallId = open?.id ?? null;
+    }
+    return {
+      agent_id: agentId,
+      online: onlineFromMcp || onlineFromKey,
+      last_seen_at: key?.lastUsedAt ?? null,
+      current_call_id: currentCallId,
     };
   });
 
