@@ -1,7 +1,9 @@
 package com.agentcall.app.di
 
 import android.app.Application
+import android.content.Context
 import androidx.room.Room
+import com.agentcall.app.BuildConfig
 import com.agentcall.app.call.SignalingClient
 import com.agentcall.app.data.api.ApiClient
 import com.agentcall.app.data.api.ApiService
@@ -28,12 +30,22 @@ object AppModule {
 
     @Provides
     @Singleton
+    fun provideApplicationContext(app: Application): Context = app
+
+    @Provides
+    @Singleton
     fun provideDatabase(app: Application): AgentCallDatabase {
-        return Room.databaseBuilder(
+        val builder = Room.databaseBuilder(
             app,
             AgentCallDatabase::class.java,
             "agentcall.db"
-        ).fallbackToDestructiveMigration().build()
+        )
+        // Destructive migration wipes user data — debug builds only. A real
+        // Room Migration must be written before any future schema bump.
+        if (BuildConfig.DEBUG) {
+            builder.fallbackToDestructiveMigration()
+        }
+        return builder.build()
     }
 
     @Provides
