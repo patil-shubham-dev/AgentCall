@@ -17,14 +17,14 @@ object MessageTemplates {
     private const val KEY_DECLINE = "decline_message"
     private const val KEY_LATER = "later_template"
 
-    val DECLINE_DEFAULT = "The user is currently busy and can't answer right now. " +
-        "If this is important, try calling again shortly. If not, continue working on any " +
-        "other task that doesn't need the user's input, and call again once that's done. " +
-        "If there's nothing else to do, stop here."
+    val DECLINE_DEFAULT = "The user declined this call and is unavailable right now. " +
+        "Please call me back when you're available: finish any task that doesn't need my " +
+        "input first, then call back. If this call was a clarification or was urgent, " +
+        "call back soon."
 
-    val LATER_DEFAULT = "The user wants you to call back in {X} minutes. Until then, " +
-        "continue working on any subtask that doesn't need input - don't try to finish the " +
-        "entire task, just make progress on what you can - and call back when the time is up."
+    val LATER_DEFAULT = "The user wants you to call back in {X} minutes. Please call me " +
+        "back when the time is up: keep making progress on subtasks that don't need my " +
+        "input, then call back and continue."
 
     fun declineMessage(context: Context): String {
         return prefs(context).getString(KEY_DECLINE, DECLINE_DEFAULT) ?: DECLINE_DEFAULT
