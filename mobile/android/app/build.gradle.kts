@@ -85,4 +85,8 @@ dependencies {
     implementation(libs.room.runtime)
     implementation(libs.room.ktx)
     ksp(libs.room.compiler)
+
+    // Unit tests (backlog item 12): the FSM + quiet-hours window math are
+    // pure Kotlin — JUnit4 only, no Android or coroutine test deps needed.
+    testImplementation(libs.junit)
 }

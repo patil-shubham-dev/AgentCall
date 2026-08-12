@@ -4,6 +4,8 @@ import android.content.Context
 import android.content.Intent
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.agentcall.app.call.state.CallMachineEvent
+import com.agentcall.app.call.state.CallStateMachine
 import com.agentcall.app.data.api.ApiClient
 import com.agentcall.app.data.api.ApiService
 import com.agentcall.app.data.repository.CallRepository
@@ -81,6 +83,10 @@ class CallViewModel @Inject constructor(
     private var eventCollectionJob: kotlinx.coroutines.Job? = null
     private var connectionStateJob: kotlinx.coroutines.Job? = null
 
+    // Pure FSM (backlog item 12): phase decisions live here so they are
+    // unit-testable; this ViewModel only applies side effects.
+    private var machine = CallStateMachine()
+
     private val _uiState = MutableStateFlow(ActiveCallUiState())
     val uiState: StateFlow<ActiveCallUiState> = _uiState.asStateFlow()
 
@@ -91,11 +97,13 @@ class CallViewModel @Inject constructor(
         isOutgoing: Boolean = false,
     ) {
         callStartTime = System.currentTimeMillis()
+        machine = CallStateMachine()
+        machine.onEvent(if (isOutgoing) CallMachineEvent.START_OUTGOING else CallMachineEvent.START_INCOMING)
         _uiState.value = _uiState.value.copy(
             callId = callId,
             agentName = agentName,
             isOutgoing = isOutgoing,
-            phase = if (isOutgoing) CallPhase.OUTGOING else CallPhase.CONNECTING,
+            phase = machine.state.phase,
             statusText = if (isOutgoing) "Calling..." else "Connecting...",
         )
 
@@ -109,6 +117,11 @@ class CallViewModel @Inject constructor(
                     ?: call.result?.transcriptSummary
                     ?: "AI needs your input."
                 val terminal = call.status == "ended" || call.status == "cancelled" || call.status == "expired"
+                if (terminal) machine.onEvent(CallMachineEvent.CALL_ENDED)
+                // Backlog item 9: per-agent quick replies override the
+                // server-supplied call options when the profile owns chips.
+                val profile = runCatching { repository.getProfileByName(agentName) }.getOrNull()
+                val profileChips = CallRepository.parseQuickReplies(profile?.quickReplies)
                 _uiState.value = _uiState.value.copy(
                     isConnected = !terminal,
                     statusText = when {
@@ -119,15 +132,11 @@ class CallViewModel @Inject constructor(
                     callContext = CallContextInfo(
                         summary = summary,
                         reason = call.context?.reason ?: "",
-                        options = call.context?.options ?: emptyList(),
+                        options = if (profileChips.isNotEmpty()) profileChips else call.context?.options ?: emptyList(),
                     ),
                     aiResponding = call.aiWait?.active,
                     aiRespondingUntilMs = call.aiWait?.activeUntil?.toEpochMsOrNull(),
-                    phase = when {
-                        terminal -> CallPhase.ENDED
-                        isOutgoing -> CallPhase.OUTGOING
-                        else -> CallPhase.ACTIVE
-                    },
+                    phase = machine.state.phase,
                 )
                 if (isOutgoing && !terminal) {
                     audioManager.requestFocus()
@@ -146,22 +155,22 @@ class CallViewModel @Inject constructor(
             CallEventBus.events.collect { event ->
                 when (event) {
                     is CallEvent.AiMessage -> {
-                        promoteToActive()
+                        applyMachineEvent(CallMachineEvent.FIRST_AI_MESSAGE)
                         addAiMessage(event.text)
                     }
                     is CallEvent.UserMessage -> addUserTranscript(event.messageId, event.text)
                     is CallEvent.UserTextSent -> markUserTextSent(event.messageId)
                     is CallEvent.UserTextFailed -> markUserTextFailed(event.messageId)
                     is CallEvent.CallAnswered -> {
-                        promoteToActive()
+                        applyMachineEvent(CallMachineEvent.CALL_ANSWERED)
                         _uiState.value = _uiState.value.copy(
                             isConnected = true,
                             statusText = "Connected",
                         )
                     }
                     is CallEvent.CallEnded -> {
+                        applyMachineEvent(CallMachineEvent.CALL_ENDED)
                         _uiState.value = _uiState.value.copy(
-                            phase = CallPhase.ENDED,
                             isConnected = false,
                             statusText = "Call ended",
                         )
@@ -183,15 +192,16 @@ class CallViewModel @Inject constructor(
                 val current = _uiState.value
                 when (state) {
                     SignalingClient.ConnectionState.RECONNECTING -> {
-                        if (current.phase == CallPhase.ACTIVE) {
-                            _uiState.value = current.copy(
-                                phase = CallPhase.RECONNECTING,
+                        applyMachineEvent(CallMachineEvent.SOCKET_RECONNECTING)
+                        if (_uiState.value.phase == CallPhase.RECONNECTING) {
+                            _uiState.value = _uiState.value.copy(
                                 statusText = "Reconnecting — call stays live",
                             )
                         }
                     }
                     SignalingClient.ConnectionState.CONNECTED -> {
                         if (current.phase == CallPhase.RECONNECTING) {
+                            applyMachineEvent(CallMachineEvent.SOCKET_CONNECTED)
                             reSyncCall(current.callId)
                         }
                     }
@@ -201,15 +211,22 @@ class CallViewModel @Inject constructor(
         }
     }
 
-    /** Outgoing dial completes on the first backend confirmation. */
-    private fun promoteToActive() {
-        val current = _uiState.value
-        if (current.phase != CallPhase.OUTGOING) return
-        callStartTime = System.currentTimeMillis()
-        _uiState.value = current.copy(
-            phase = CallPhase.ACTIVE,
-            isConnected = true,
-            statusText = "Connected",
+    /**
+     * Feed an event into the pure FSM and apply the resulting phase/connect
+     * state. Side-effect strings (statusText) stay in the callers.
+     */
+    private fun applyMachineEvent(event: CallMachineEvent) {
+        val before = machine.state
+        val after = machine.onEvent(event)
+        if (after == before) return
+        // The first ACTIVE entry (outgoing pick-up or reconnect resume)
+        // restarts the in-call timer.
+        if (after.phase == CallPhase.ACTIVE && before.phase != CallPhase.ACTIVE) {
+            callStartTime = System.currentTimeMillis()
+        }
+        _uiState.value = _uiState.value.copy(
+            phase = after.phase,
+            isConnected = after.phase != CallPhase.ENDED,
         )
     }
 
@@ -222,8 +239,10 @@ class CallViewModel @Inject constructor(
             } catch (_: Exception) {
                 false
             }
+            // Keep the FSM as the phase source of truth.
+            machine.onEvent(if (terminal) CallMachineEvent.CALL_ENDED else CallMachineEvent.SOCKET_CONNECTED)
             _uiState.value = _uiState.value.copy(
-                phase = if (terminal) CallPhase.ENDED else CallPhase.ACTIVE,
+                phase = machine.state.phase,
                 isConnected = !terminal,
                 statusText = if (terminal) "Call ended" else "Connected",
             )
@@ -374,9 +393,8 @@ class CallViewModel @Inject constructor(
     }
 
     fun disconnect() {
+        applyMachineEvent(CallMachineEvent.HARD_DISCONNECT)
         _uiState.value = _uiState.value.copy(
-            phase = CallPhase.ENDED,
-            isConnected = false,
             statusText = "Disconnected",
             isAiSpeaking = false,
             isRecording = false,
