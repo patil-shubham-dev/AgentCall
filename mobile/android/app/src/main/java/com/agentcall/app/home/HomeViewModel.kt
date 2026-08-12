@@ -90,16 +90,23 @@ class HomeViewModel @Inject constructor(
         }
 
         viewModelScope.launch {
+            // Availability poll with exponential backoff on failure so a flaky
+            // network never turns into a fixed 15s hammering loop.
+            val backoffMs = longArrayOf(15_000, 30_000, 60_000, 120_000)
+            var failureStreak = 0
             while (true) {
                 if (_uiState.value.isConnected) {
-                    runCatching {
+                    val ok = runCatching {
                         ApiClient.ensurePhoneToken()
                         ApiClient.create<ApiService>().listAiKeys()
                     }.onSuccess { response ->
                         _aiStatus.value = response.keys.associateBy { it.name }
-                    }
+                    }.isSuccess
+                    failureStreak = if (ok) 0 else failureStreak + 1
+                    delay(backoffMs[failureStreak.coerceIn(0, backoffMs.lastIndex)])
+                } else {
+                    delay(15_000)
                 }
-                delay(15_000)
             }
         }
     }

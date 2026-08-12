@@ -33,6 +33,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.agentcall.app.BuildConfig
 import com.agentcall.app.settings.CallerTuneManager
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -316,7 +317,7 @@ fun SettingsScreen(
                             onValueChange = { viewModel.updateServerHost(it) },
                             modifier = Modifier.fillMaxWidth(),
                             singleLine = true,
-                            placeholder = { Text("dydcghsn0my6-production-qgbb8wql.australia-southeast1.suga.run", color = MaterialTheme.colorScheme.onSurfaceVariant) },
+                            placeholder = { Text(BuildConfig.DEFAULT_HOST, color = MaterialTheme.colorScheme.onSurfaceVariant) },
                             leadingIcon = {
                                 Icon(Icons.Default.Computer, "Server address", tint = Indigo400, modifier = Modifier.size(20.dp))
                             },
