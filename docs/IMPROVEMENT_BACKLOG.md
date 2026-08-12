@@ -54,7 +54,7 @@ external resource (networked machine, device).
 
 ### Item 1 — Missed-call history + "Call back" action
 
-**Status:** `[NEW]` · **Why:** users currently get zero feedback when an AI call expires
+**Status:** `[DONE]` (2026-08-12 session 2; manual E2E on device pending) · **Why:** users currently get zero feedback when an AI call expires
 unanswered; history shows a raw "expired" status with no way to return the call.
 
 **Current state (verified):**
@@ -83,7 +83,7 @@ unanswered; history shows a raw "expired" status with no way to return the call.
 
 ### Item 2 — Home agent online/offline chip
 
-**Status:** `[NEW]` (backend half DONE) · **Why:** users need to know *why* an agent didn't
+**Status:** `[DONE]` (mobile half completed 2026-08-12 session 2; manual E2E pending) · **Why:** users need to know *why* an agent didn't
 pick up; the chip is the passive answer.
 
 **Current state (verified):**
@@ -110,8 +110,8 @@ pick up; the chip is the passive answer.
 
 ### Item 3 — Surface call summaries in history
 
-**Status:** `[NEW]` · **Why:** `CallRecordEntity.summary` is written but never rendered;
-history shows raw transcripts instead of the useful AI-generated recap.
+**Status:** `[DONE]` (2026-08-12 session 2) · **Why:** `CallRecordEntity.summary` was written but never rendered;
+history showed raw transcripts instead of the useful AI-generated recap.
 
 **Current state (verified):** `CallRecordEntity.kt:24` `summary: String`. **Writer of `summary`
 is unverified** — `[VERIFY]` whether backend `COMPLETE` response includes a summary and whether
@@ -166,7 +166,7 @@ review is easy. Do NOT run `lintDebug` on this offline machine (it fails at
 
 ### Item 5 — Voicemail on decline
 
-**Status:** `[NEW]` · **Why:** declining is the worst outcome for the caller — the agent never
+**Status:** `[DONE]` (2026-08-12 session 2; manual E2E pending) · **Why:** declining is the worst outcome for the caller — the agent never
 learns why; a voicemail lets the user leave intent and the agent acts on it next time.
 
 **Current state (verified):**
@@ -193,8 +193,20 @@ learns why; a voicemail lets the user leave intent and the agent acts on it next
 
 ### Item 6 — Quiet hours / per-agent DND
 
-**Status:** `[NEW]` · **Why:** the biggest trust feature for a calling app — the product must
+**Status:** `[DONE]` (2026-08-12 session 2 — mobile-side per user decision; manual E2E pending) · **Why:** the biggest trust feature for a calling app — the product must
 never ring the user at 3 AM.
+
+> **Design deviation (user decision, 2026-08-12):** the original design assumed a
+> `user_preferences` table, but the backend is 100% in-memory ("No DB, no Redis" —
+> there is no database or migration story at all). Per the user, quiet hours are
+> **mobile-only**: stored in SharedPreferences (survives app + server restarts), no
+> backend changes. When a call rings during the window: the ring is silent (dedicated
+> quiet channel, full-screen UI still shows so an important call can be answered), and
+> the calling AI receives the window via the existing decline/cancel note
+> ("the user's phone is in quiet hours today (HH:MM–HH:MM)…"). The AI never assumes
+> quiet hours and is never told outside an actual call. Per-agent ranges are supported
+> in `QuietHoursManager` but not yet exposed in the UI (Settings exposes the global
+> window). DST caveat documented: rules are wall-clock local minutes.
 
 **Current state (verified):**
 - Agent-initiated calls flow: `createCall` → gated by `isAgentReadyForCall` → `attemptRing(callId, RING_RETRY_INTERVAL_MS=15s × 12)` → push → phone rings.
@@ -220,7 +232,7 @@ never ring the user at 3 AM.
 
 ### Item 7 — Per-agent ringtones
 
-**Status:** `[NEW]` · **Why:** agents should be distinguishable like real contacts.
+**Status:** `[DONE]` (2026-08-12 session 2; migration test + device E2E pending) · **Why:** agents should be distinguishable like real contacts.
 
 **Current state (verified):**
 - `CallerTuneManager.setUri(uri, label)` / `resetToDefault()` — global single tune, SharedPreferences-backed (`settings/CallerTuneManager.kt:29-36`); used by `IncomingCallActivity` at ring.
@@ -284,7 +296,7 @@ trade-off. Keep wording imperative and specific so any LLM agent follows it.
 
 ### Item 9 — Quick replies per agent
 
-**Status:** `[NEW]` · **Why:** quick-reply chips are global today; each agent persona should
+**Status:** `[DONE]` (2026-08-12 session 2; manual E2E pending) · **Why:** quick-reply chips were global today; each agent persona should
 own its chips.
 
 **Current state (verified):**
@@ -357,7 +369,8 @@ own its chips.
 
 ### Item 12 — Unit tests for `CallViewModel` FSM
 
-**Status:** `[NEW]` · **Why:** phase bugs (e.g., ringback never stopping, stuck RECONNECTING) are the highest-risk part of the call UX and are currently only testable on device.
+**Status:** `[DONE]` (2026-08-12 session 2 — pure `CallStateMachine` extracted + JUnit matrix written;
+`testDebugUnitTest` needs a networked machine for the new `junit` dep) · **Why:** phase bugs (e.g., ringback never stopping, stuck RECONNECTING) are the highest-risk part of the call UX and are currently only testable on device.
 
 **Current state (verified):** `CallViewModel` mixes state transitions with Android side-effects (`Log`, `SignalingClient`, services) — not directly unit-testable. Android module has **no unit tests** (`src/test` absent).
 
@@ -387,7 +400,7 @@ own its chips.
 
 ### Item 13 — Battery audit
 
-**Status:** `[NEW]` · **Why:** no evidence the app holds resources after a call ends.
+**Status:** `[DONE]` (code 2026-08-12 session 2; `dumpsys` verification on device pending) · **Why:** no evidence the app holds resources after a call ends.
 
 **Current state (verified):**
 - Wake lock acquired in `ACTION_START_CALL` (`CallService.kt:156` `acquireWakeLock()`), released in `endCall()`.
@@ -413,7 +426,7 @@ own its chips.
 
 ### Item 15 — Realtime duplex audio (v2 M2/M4)
 
-**Status:** `[NEW]` (roadmap-defined: `docs/v2/10-roadmap.md` M2/M4) · **Why:** the single
+**Status:** `[DEFERRED]` (user decision 2026-08-12 session 2 — defer to roadmap) · **Why:** the single
 biggest perceived-quality jump — replaces record-clip-then-reply with a conversation.
 
 **Design decisions (from the v2 docs — do not re-derive):**
@@ -434,7 +447,7 @@ biggest perceived-quality jump — replaces record-clip-then-reply with a conver
 
 ### Item 16 — No-45s-cap engine (v2 M1)
 
-**Status:** `[NEW]` (roadmap M1) · **Why:** the documented 45-second reply window is user-facing
+**Status:** `[DEFERRED]` (user decision 2026-08-12 session 2 — defer to roadmap) · **Why:** the documented 45-second reply window is user-facing
 and wrong for long agent turns.
 
 **Current state (verified):** **No `MESSAGE_WINDOW_MS`/45s constant exists in the tree**
@@ -456,7 +469,9 @@ reply-poll cadence, `AI_REPLY_POLL_INTERVAL_MS=500` in `config.ts:49`).
 
 ### Item 17 — Privacy as marketing (on-device STT/TTS)
 
-**Status:** `[NEW]` · **Why:** "your voice stays on your device" is a defensible differentiator —
+**Status:** `[DONE]` Phase A (audit → `docs/SECURITY_GUIDELINES.md` §Privacy data-flow audit)
++ Phase B (Settings → Privacy & Data section) + Phase C copy (gated on the audit),
+2026-08-12 session 2 · **Why:** "your voice stays on your device" is a defensible differentiator —
 but **only if true**. Honesty gate: audit the data flow before writing any claim.
 
 **Current state:** `[VERIFY]` — where does audio go today? (a) Does the Android recorder upload
@@ -508,6 +523,33 @@ not a nice-to-have.
 ---
 
 ## 4. Session log
+
+- **2026-08-12 (session 2)** — Backlog wave 2 executed (user scope: Items 1–13 + 17;
+v2 engine items 15/16 deferred to roadmap). **Item 6 design deviation:** backend verified
+100% in-memory (no DB/migrations); per user decision quiet hours are mobile-only
+(`QuietHoursManager`, SharedPreferences) with a silent-ring channel and the window told to
+the calling AI via the decline/cancel note — no backend changes. **Item 1:** `expired` →
+"Missed" + red-amber + Call-back (reuses outgoing flow with `callbackPrompt`), silent
+missed-call notification when backgrounded → deep link to profile. **Item 2 (mobile half):**
+`ApiService.getAgentStatus` + `HomeViewModel.agentStatus` + "Last seen" chip. **Item 3:**
+summary derived from last AI message, sent with COMPLETE, persisted + rendered in history.
+**Item 5:** voicemail template + 4th ring button + local transcript write via the cancel path.
+**Item 7/9:** Room `Migration(1,2)` (`ringtoneUri`, `ringtoneLabel`, `quickReplies` — schema v2
+exported), per-agent tune resolution at ring time, ringtone picker + quick-replies editor on
+the profile screen, `CallViewModel` merges profile chips over server options. **Item 12:**
+pure `CallStateMachine` extracted (`call/state/`), ViewModel delegates, JUnit matrix written
+(deps added; run on a networked machine). **Item 13:** release-once guard in
+`releaseCallResources()` + TTS idle shutdown (60 s, re-init on demand) + `callId` reset on
+end. **Item 17:** Phase A audit documented, Settings Privacy & Data section added. Verified:
+backend typecheck + lint + 164 tests green; `assembleDebug` green offline. **Review fix
+(Item 1 + 5 correctness):** the reviewer caught that unanswered rings created no
+`call_records` row — `saveCallEnded("expired")` no-oped, the missed notification was
+silently dropped, and decline/voicemail note inserts hit the transcript FK. Fixed by
+`CallRepository.markCallRinging` (row created when the ring starts) + handling
+`CallExpired`/`CallEnded`/`CallCancelled` in `SignalingForegroundService`, plus the
+`AgentStatus` chip now mints its phone token first and `onNewIntent` re-evaluates quiet
+hours. **Remaining on a networked/device machine:** `lintDebug`, `testDebugUnitTest`,
+Room migration test (`MigrationTestHelper`), Item 10 device pass, `dumpsys` battery checks.
 
 - **2026-08-12 (later session)** — Backlog executed in two waves. (a) **Item 4:**
   full change set committed as 8 atomic commits on `feat/outgoing-call-voice-first`

@@ -74,3 +74,38 @@ The following security features from the original design are NOT implemented in 
 - Refresh token rotation
 - Structured audit log table
 - Incident response plan
+
+---
+
+## Privacy data-flow audit (2026-08-12) — VoiceBridge + AgentCall Android
+
+> Backlog item 17 (Phase A — truth audit). Written from the code, not from
+> intent. Every claim below is tied to a file.
+
+### Where does audio go?
+
+| Stage | Mechanism | Where it goes |
+|-------|-----------|---------------|
+| Capture | `CallService.startRecording()` → `SpeechRecognizer` (Android system speech service) | **Never to the AgentCall backend.** Only the recognized text is POSTed to `/api/v1/calls/:id/user-text` (`CallService.enqueueUserText` → `ApiService.sendUserText`).
+| Recognition | Device speech service (per Android) | Provider-dependent: on-device or the vendor's cloud (e.g. Google recognizer) per device settings. The app has no say and no visibility.
+| Reply | `TextToSpeech` (Android TTS engine) | On-device engine; voice data may come from the vendor's network voices per device settings. No audio leaves through AgentCall.
+| Backend storage | In-memory session messages (text only) | `completed` calls: 60 min retention (`COMPLETED_RETENTION_MS`, `service.ts`); `cancelled`: 5 min. `sweepStaleSessions` expires them. Process restart clears all.
+| Local storage | Room DB (`call_records`, `transcript_messages`) | On the phone; survives app restarts; wiped on uninstall. No encryption at rest.
+
+### Honest claim check
+
+- "Your voice stays on your device" — **true with respect to AgentCall**: no
+  audio bytes ever reach the backend. Caveat: the device speech/TTS engines
+  may use their own cloud services per device settings; the app cannot
+  guarantee offline recognition.
+- "Encrypted in transit, deleted after N days" — transcripts travel over
+  HTTPS/WSS in production; server-side retention is ~1 h (completed) in
+  memory, not days.
+- No right-to-erasure endpoint exists; deleting a call's local data requires
+  uninstalling the app (or a future Settings "delete my data" action).
+
+### What the Settings copy says (added this session)
+
+Settings → Privacy & Data states: voice stays on device, backend receives only
+text, transcripts are in-memory for ~1 h, and the device-speech-engine caveat.
+Copy matches this audit.
