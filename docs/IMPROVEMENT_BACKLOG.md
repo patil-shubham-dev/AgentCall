@@ -134,7 +134,8 @@ is unverified** — `[VERIFY]` whether backend `COMPLETE` response includes a su
 
 ### Item 4 — Commit the outgoing-call change set + green lint
 
-**Status:** `[NEW]` (work done, uncommitted) · **Why:** the outgoing-call work
+**Status:** `[DONE]` (8 commits on `feat/outgoing-call-voice-first`; lint/CI still
+pending on a networked machine) · **Why:** the outgoing-call work
 (Items-of-today: CallActivity/ViewModel/ProfileDetailScreen/AppModule + docs) is a large
 uncommitted change set; Android lint cannot run on this machine (offline, `dl.google.com` unreachable).
 
@@ -245,7 +246,10 @@ never ring the user at 3 AM.
 
 ### Item 8 — Call-back & decline via preformatted agent prompts (user-scoped)
 
-**Status:** `[NEW]` · **Why (user decision):** no scheduling engine/UI. Decline and call-back
+**Status:** `[DONE]` (defaults rewritten; payload chain verified — `[VERIFY]` #3 resolved:
+`attemptCancel` sends `CancelRequest(note)`; backend `cancelCall(callId, note)`
+records the note as a user message in the agent's session — `service.ts:621-629`) ·
+**Why (user decision):** no scheduling engine/UI. Decline and call-back
 are just **prompts to the agent** so it knows to call afterwards. Accepted trade-off: there is
 no guarantee the AI is active on the phone — the existing agent-ready gate + ring retry
 (`attemptRing`, 3-min window) and persisted callbacks (`savePendingCallback`) are the only
@@ -331,7 +335,8 @@ own its chips.
 
 ### Item 11 — Migrate `isSpeakerphoneOn` → `setCommunicationDevice`
 
-**Status:** `[NEW]` · **Why:** `AudioManager.isSpeakerphoneOn` is deprecated.
+**Status:** `[DONE]` (compile-verified; manual E2E step 6 pending on device) ·
+**Why:** `AudioManager.isSpeakerphoneOn` is deprecated.
 
 **Current state (verified):** `CallAudioManager.kt:78,86` and `CallActivity.kt:492` use `isSpeakerphoneOn`.
 
@@ -503,6 +508,18 @@ not a nice-to-have.
 ---
 
 ## 4. Session log
+
+- **2026-08-12 (later session)** — Backlog executed in two waves. (a) **Item 4:**
+  full change set committed as 8 atomic commits on `feat/outgoing-call-voice-first`
+  (ci/infra, backend config consolidation, agent-ready gate + presence + TTL +
+  Bearer WS auth, android toolchain bump, TokenManager removal + poll backoff,
+  DI context fix, outgoing call flow, docs); backend lint + 164 tests green,
+  `assembleDebug` green at each stage; `lintDebug` still blocked offline.
+  (b) **Item 8:** decline/callback defaults rewritten as imperative call-back
+  prompts; `[VERIFY]` resolved — the cancel note reaches the agent as a user
+  message in its session. (c) **Item 11:** speaker routing migrated to
+  `setCommunicationDevice` (API 31+) with earpiece/headset fallback and
+  `clearCommunicationDevice()`; `CallActivity` delegates to `CallViewModel`.
 
 - **2026-08-12** — Backlog created. Outgoing-call + voice-first shipped this session
   (ringback, cancel, mute, reconnect banner, profile Call button; Dagger Context fix;
