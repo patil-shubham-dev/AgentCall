@@ -1,0 +1,511 @@
+# AgentCall — Improvement Backlog & Implementation Guide
+
+> **Purpose:** Session-memory + work order for future agent sessions. This document captures
+> (a) the exact state of the codebase as of 2026-08-12, (b) 15 approved improvement items with
+> design decisions, verified file references, implementation steps, verification plans, and
+> known risks, and (c) the cross-cutting gates that apply to every item.
+>
+> **Freshness rule:** every fact below was verified against the tree on 2026-08-12. Before
+> implementing an item, re-verify the cited files/lines — the tree will have moved. Anything
+> marked `[VERIFY]` was NOT confirmed at write time and must be checked first.
+>
+> **Companion docs:** `REAL_CALL_IMPROVEMENTS.md` (Phases 1–3), `docs/v2/*` (engine v2 design),
+> `AGENTS.md` (conventions), `docs/TECHNICAL_DEBT_REGISTER_v1.md`.
+
+---
+
+## 0. Context-restoration protocol (read this first, every session)
+
+1. Read this document in full.
+2. Read `REAL_CALL_IMPROVEMENTS.md` §6–§7 and the session log (what shipped before this backlog).
+3. If an item touches the engine: read `docs/v2/README.md` + `10-roadmap.md` §2 (milestones M0–M6).
+4. Never start an item without re-verifying its "Current state" references.
+5. Every change ends with the Section 3 gates green, or a written reason they're not.
+
+---
+
+## 1. State of the world (2026-08-12) — do not redo
+
+**What works today (shipped before this backlog):**
+
+| Area | Status |
+|------|--------|
+| Backend signaling + voicebridge | Ring/answer/complete/cancel/callback; pending-session TTL sweep; single delivery path with dedupe deque; agent-ready gate (`attemptRing` 15s × 12 retries); missed-call semantics (`call_expired {reason}`); `GET /api/v1/agents/:agentId/status` endpoint. **21 test files / 159 tests green, lint clean** |
+| Android incoming call | `IncomingCallActivity` (accept/decline/call-back-later, 60 s ring timeout, caller tune), FGS notification, ring-open/resolved bookkeeping |
+| Android active call | `CallActivity` + `CallViewModel` (`CallPhase` enum: CONNECTING/OUTGOING/RINGING/ACTIVE/RECONNECTING/ENDED), waveform, transcript, quick replies, mute (`ACTION_SET_MUTED`), speaker, reconnect banner |
+| Android outgoing call (new today) | Profile "Call" button → `CallActivity(call_id=UUID, caller_name, outgoing=true)` → OUTGOING phase + looping ringback → first `call_answered`/`ai_message` → ACTIVE → `ACTION_START_CALL` (service: `markCallAnswered` upserts the record, voice session, POST ANSWER) → cancel-while-ringing sends `ACTION_CANCEL_CALL`. **Compiled: `assembleDebug` green. Lint unverifiable on this machine (offline). Uncommitted.** |
+| DI | `AppModule` now provides raw `Context` (`provideApplicationContext`) — required by `CallAudioManager`'s `@Inject constructor(context: Context)` |
+
+**Key file map (mobile):** `call/CallService.kt` (FGS, actions, TTS/record, event collect),
+`call/CallViewModel.kt` (FSM + UI state), `call/CallActivity.kt` (in-call UI),
+`call/IncomingCallActivity.kt` (ring UI), `call/SignalingClient.kt` (WS client),
+`call/CallAudioManager.kt`, `call/CallerTuneManager.kt` + `settings/MessageTemplates.kt`,
+`profile/ProfileDetailScreen.kt` (history UI), `data/database/*` (Room, version = 1),
+`home/HomeViewModel.kt` (already consumes `/api/v1/ai/keys`).
+
+---
+
+## 2. Approved improvement items
+
+Legend: `[NEW]` = not started · `[VERIFY]` = fact unconfirmed, check first · `[BLOCKED]` = needs
+external resource (networked machine, device).
+
+---
+
+### Item 1 — Missed-call history + "Call back" action
+
+**Status:** `[NEW]` · **Why:** users currently get zero feedback when an AI call expires
+unanswered; history shows a raw "expired" status with no way to return the call.
+
+**Current state (verified):**
+- WS `call_expired` → `VoiceBridgeEvent.CallExpired(callId, reason)` — `SignalingClient.kt:298-302`.
+- `CallService.kt:418-425` handles it: emits `CallEnded`, `saveCallEnded(callId, "expired")`, then `stopSelf()`. **Silent — no notification today.**
+- `ProfileDetailScreen.kt` `statusLabel` maps only `ended/cancelled/started`; "expired" renders raw.
+- Drawable `ic_missed_call` already exists (`CallService.kt:667`, used as the ongoing-notification "End" action icon — reuse carefully).
+- `CallRecordEntity` carries `agentId`, `callerName`, `startedAt`, `status` — enough to render "Missed".
+
+**Design decisions:**
+- "Missed" = `status == "expired"`. Do NOT reuse `ic_missed_call` semantics: the notification icon and the history icon may diverge; use the same asset but different tinting/context.
+- **Call back** on a missed row reuses the *outgoing-call flow* (Item 8's prompt mechanism): launch `CallActivity` with fresh UUID + `caller_name` + `outgoing=true` + `EXTRA_CONTEXT_SUMMARY` = the preformatted callback prompt. One code path, no new call engine.
+- Missed-call notification is **silent** (importance LOW, no sound/vibration), fired only when the app/activity is not foreground (check `CallService` foreground state; reuse existing channel pattern from the ring notification).
+
+**Implementation steps:**
+1. `ProfileDetailScreen.statusLabel`: add `"expired" -> "Missed"`; tint red-amber.
+2. `CallHistoryItem`: add a "Call back" affordance on `expired` rows → outgoing `CallActivity` (same intent builder as the profile Call button; reuse via a small shared `OutgoingCallLauncher` or inline builder).
+3. `CallService` `CallExpired` branch: if app not foregrounded, post silent notification (channel `missed_calls`) with tap → deep link `profile/{agentId}` (add route in `MainActivity` NavHost if missing — `profile/{profileId}` exists).
+4. Confirm the record's `agentId` is populated for agent-initiated calls (it is for outgoing; `[VERIFY]` for ring-expired agent calls — `markCallAnswered` runs only after answer, so `saveCallEnded` on expired may see a record created by the backend sync path).
+
+**Verification:** unit — `statusLabel` mapping; manual — run backend locally, let a call expire, check history row shows "Missed" + Call back launches ringback; check silent notification appears when app backgrounded and tap opens the profile.
+
+**Risks:** expired-call records may have empty `agentId` if the call record was never upserted locally (see step 4 `[VERIFY]`) — fall back to the profile of the caller name or skip the Call-back action.
+
+---
+
+### Item 2 — Home agent online/offline chip
+
+**Status:** `[NEW]` (backend half DONE) · **Why:** users need to know *why* an agent didn't
+pick up; the chip is the passive answer.
+
+**Current state (verified):**
+- `GET /api/v1/agents/:agentId/status` exists — `backend/src/routes.ts:629`.
+- `McpSessionRegistry.getAgentStatus(agentName)` → `{ online: boolean, lastSeenAt: string|null }` — `session-registry.ts:55`.
+- Online = live MCP session OR ai-key auth within `ONLINE_WINDOW_MS = 5 min` — `ai-keys.ts:44`.
+- Mobile: `ApiService` has **no** status method; `HomeViewModel` already loads `/api/v1/ai/keys` (used by Settings + home feed).
+
+**Design decisions:**
+- Add `ApiService.getAgentStatus(agentId): AgentStatusResponse` (`[VERIFY]` response body shape from `routes.ts:629` — expect `{ online, lastSeenAt }`).
+- Fetch once per agent row in `HomeViewModel` (refresh on home resume + pull-to-refresh), not per frame. Chip states: online (green) / offline (slate, with "Last seen Xm ago" tooltip text if `lastSeenAt` present).
+- The chip is informational only — no behavior change to ring flow.
+
+**Implementation steps:**
+1. `ApiService`: status method + response model (`data/model/Models.kt`).
+2. `HomeViewModel`: per-agent status map, `refreshAgentStatuses()`, error-tolerant (offline → chips hidden, never crash).
+3. `HomeScreen` row: small dot + text chip next to agent name.
+
+**Verification:** backend tests exist for `getAgentStatus` (`agent-ready-gate.test.ts:289`); mobile: manual — start backend, add ai-key, see chip flip green while key active, slate after 5 min; offline server → no chips, no crash.
+
+**Risks:** rate — one GET per agent per resume is fine; don't poll.
+
+---
+
+### Item 3 — Surface call summaries in history
+
+**Status:** `[NEW]` · **Why:** `CallRecordEntity.summary` is written but never rendered;
+history shows raw transcripts instead of the useful AI-generated recap.
+
+**Current state (verified):** `CallRecordEntity.kt:24` `summary: String`. **Writer of `summary`
+is unverified** — `[VERIFY]` whether backend `COMPLETE` response includes a summary and whether
+`CallService.attemptComplete` stores it; today most records likely hold `""`.
+
+**Design decisions:**
+- Make summary truth: populate it at call end (from the last `ai_message` or the COMPLETE response summary field if present — `[VERIFY]`), store via repository.
+- History item renders: summary line (bold, 2-line max) → expandable transcript (existing behavior stays). Blank summary → fall back to current transcript-only view.
+
+**Implementation steps:**
+1. `[VERIFY]` backend COMPLETE payload for a summary field (`voicebridge/service.ts`, `attemptComplete`); if absent, derive client-side from the final `ai_message` (first 140 chars, no trailing punctuation).
+2. `CallRepository`: persist summary in `saveCallEnded` (or a new `saveCallSummary`).
+3. `ProfileDetailScreen` `CallHistoryItem`: summary block above the transcript.
+
+**Verification:** backend `[VERIFY]` + unit for truncation; manual — end a call, reopen profile, summary visible.
+
+**Risks:** none material; keep summary field sync in the existing end-call write (avoid a second write path).
+
+---
+
+### Item 4 — Commit the outgoing-call change set + green lint
+
+**Status:** `[NEW]` (work done, uncommitted) · **Why:** the outgoing-call work
+(Items-of-today: CallActivity/ViewModel/ProfileDetailScreen/AppModule + docs) is a large
+uncommitted change set; Android lint cannot run on this machine (offline, `dl.google.com` unreachable).
+
+**Current state:** `git status` shows the session's 48-file change set uncommitted.
+
+**Design decisions (commit plan, per `commit-hygiene` + AGENTS.md):**
+- Never commit to `main` — use a feature branch (e.g. `feat/outgoing-call-voice-first`).
+- Conventional commits, scoped, atomic — suggested order:
+  1. `feat(call): outgoing call flow with ringback + cancel (CallViewModel OUTGOING phase, CallActivity, ProfileDetailScreen entry)`
+  2. `fix(di): provide application Context for CallAudioManager (Dagger MissingBinding)`
+  3. `docs(call): mark REAL_CALL_IMPROVEMENTS §6.3/§6.4 + task table items 3.1–3.4 done; add IMPROVEMENT_BACKLOG.md`
+- Backend changes already in the set: keep them as their own commits if their tests/lint pass (`npm run lint`, `npm test` — 21 files / 159 tests).
+
+**Implementation steps (on a networked machine):**
+1. `git checkout -b feat/outgoing-call-voice-first`
+2. Stage in the order above; verify each commit builds (`:app:compileDebugKotlin`, `:app:assembleDebug`).
+3. Run `./gradlew :app:lintDebug`; fix findings (expected: unused-import level or style; no known blockers).
+4. Run `npm run lint && npm test` in `backend/` for the backend portions.
+5. Open PR against `develop` per CONTRIBUTING.md.
+
+**Verification:** CI green (lint, typecheck, tests) on the PR; on-device smoke of outgoing call.
+
+**Risks:** the change set touches docs + backend + mobile; keep commit boundaries clean so
+review is easy. Do NOT run `lintDebug` on this offline machine (it fails at
+`lintAnalyzeDebug` on a network fetch, not on code).
+
+---
+
+### Item 5 — Voicemail on decline
+
+**Status:** `[NEW]` · **Why:** declining is the worst outcome for the caller — the agent never
+learns why; a voicemail lets the user leave intent and the agent acts on it next time.
+
+**Current state (verified):**
+- Decline (IncomingCallActivity.kt:225-231) sends `ACTION_CANCEL_CALL` + `EXTRA_TEXT = MessageTemplates.declineMessage(this)`.
+- `MessageTemplates.kt` exposes `declineMessage/laterMessage/laterTemplateRaw` + setters, SharedPreferences-backed (`settings/MessageTemplates.kt:29-59`).
+- Local message persistence + retry channels already exist (`KEY_PENDING_CANCELS`, `enqueueUserText`).
+
+**Design decisions:**
+- Add a third decline variant: **"Leave voicemail"** → new `MessageTemplates.voicemailMessage(context)` (default: "I missed your call — please call me back when you're available."), delivered through the **same cancel path** (`ACTION_CANCEL_CALL` + `EXTRA_TEXT`), so the existing `attemptCancel` + `savePendingNote` machinery carries it — no new transport.
+- Store the voicemail locally as a user message in the call's transcript (`saveUserTextMessage`-style) so it appears in history even before the agent syncs. `[VERIFY]` `CallRepository` has a suitable method (`saveUserTextMessage` exists per CallViewModel usage).
+- UX: voicemail button only while ringing (same row as decline), mic icon.
+
+**Implementation steps:**
+1. `MessageTemplates`: add `voicemailMessage` + persistence key + reset.
+2. `IncomingCallActivity`: third button (mic badge), wires `ACTION_CANCEL_CALL` + voicemail text; keep decline/later untouched.
+3. `CallRepository`: persist voicemail text into the call's transcript (guard against duplicate writes — voicemail is written once at cancel).
+4. Settings → templates: expose voicemail editing (matches existing template editors).
+
+**Verification:** unit — template default + edit round-trip; manual — decline with voicemail, check history transcript shows the message and backend receives `CANCEL` with the text.
+
+**Risks:** duplicate delivery if cancel retries — idempotency note: text arrives once per call id (existing retry uses `attemptCancel` which is idempotent; store-once flag keyed by callId).
+
+---
+
+### Item 6 — Quiet hours / per-agent DND
+
+**Status:** `[NEW]` · **Why:** the biggest trust feature for a calling app — the product must
+never ring the user at 3 AM.
+
+**Current state (verified):**
+- Agent-initiated calls flow: `createCall` → gated by `isAgentReadyForCall` → `attemptRing(callId, RING_RETRY_INTERVAL_MS=15s × 12)` → push → phone rings.
+- No user-side time preference exists anywhere (`[VERIFY]` DB schema for a preferences/settings table — v2 schema docs may define one).
+
+**Design decisions:**
+- **Authoritative gate is server-side**: `attemptRing` (and the initial `createCall` push) checks a quiet-hours rule before ringing; enforcement window is configurable per agent + a global default.
+- Storage: `user_preferences` key-value (JSONB) — `GET/PUT /api/v1/preferences/quiet-hours` (`{ enabled, perAgent: { agentId: {startMin, endMin} }, global: {...} }`). Reuse existing DB pool + repository pattern. `[VERIFY]` whether a migrations story exists for the new table (backend uses Knex per AGENTS.md — write a new migration).
+- Phone-side: during quiet hours the ring may still arrive for calls created before the window started; mobile suppresses the ring **sound** (reuse ringtone plumbing: play silent) but still records the call as missed. Ring-suppression is secondary; server gate is primary.
+- No end-user visibility of ring retries — quiet-hour hits simply don't ring and the call becomes `call_expired` (existing TTL path).
+
+**Implementation steps:**
+1. Backend: migration for `user_preferences`; route `GET/PUT /api/v1/preferences/quiet-hours` with Zod validation.
+2. `service.ts`: in the ring path, `isWithinQuietHours(callId, now)` check (per-agent then global); when blocked, let the pending-TTL sweep expire the call (no ring).
+3. Mobile `SettingsScreen`: per-agent + global quiet-hours editor (time pickers, Material3 `TimePicker`).
+4. Mobile `IncomingCallActivity`/`CallerTuneManager`: if quiet hours active → silent ring variant (still vibrate? no — fully silent by default; make it a toggle "Allow vibrations").
+
+**Verification:** backend unit tests — gate blocks inside window, allows outside, per-agent overrides global; manual — set quiet hours, trigger agent call, expect no ring + missed record.
+
+**Risks:** timezone semantics — store **local device timezone offset** with each rule or normalize to UTC at write time; document which. DST edge cases are a known trap; prefer "minutes since local midnight" per profile.
+
+---
+
+### Item 7 — Per-agent ringtones
+
+**Status:** `[NEW]` · **Why:** agents should be distinguishable like real contacts.
+
+**Current state (verified):**
+- `CallerTuneManager.setUri(uri, label)` / `resetToDefault()` — global single tune, SharedPreferences-backed (`settings/CallerTuneManager.kt:29-36`); used by `IncomingCallActivity` at ring.
+- Room DB version = 1 (`AgentCallDatabase.kt:14`); `fallbackToDestructiveMigration()` in DEBUG only (`AppModule.kt:38-42`) — **a real Migration is mandatory for any schema change**.
+
+**Design decisions:**
+- Store per-agent tone **in `AiProfileEntity`** (new columns: `ringtoneUri TEXT`, `ringtoneLabel TEXT`) — ties tone to agent, survives reinstall via existing profile rows. Shared with Item 9 (quick replies) in **one additive migration 1 → 2**.
+- `CallerTuneManager` gains per-agent API (`getUriForAgent(agentId)`, fall back to global tune, then system default) while keeping the global path for backwards compat.
+- `IncomingCallActivity` picks tune by the ringing agent's id.
+- Ringtone picking reuses `ACTION_RINGTONE_PICKER` (or `RingtoneManager.ACTION_RINGTONE_PICKER`) — no new picker UI.
+
+**Implementation steps:**
+1. Write `Migration(1, 2)` adding the two columns (+ `quickReplies TEXT` JSON for Item 9) — **never** rely on destructive fallback outside DEBUG; remove the DEBUG-only fallback after migration exists (keep for dev only).
+2. `AiProfileEntity` + DAO: expose `getProfile(agentId)` fields.
+3. `CallerTuneManager`: per-agent storage; `ProfileDetailScreen`: "Ringtone" row → picker → save.
+4. `IncomingCallActivity`: resolve tune per agent.
+
+**Verification:** migration test (open DB v1 fixture, assert v2 data + columns); manual — set tone for agent A only, ring A vs B, hear different tones.
+
+**Risks:** Room migration must be tested before removing the destructive fallback; picker returns `URI|null` (null = system default) — treat null explicitly.
+
+---
+
+### Item 8 — Call-back & decline via preformatted agent prompts (user-scoped)
+
+**Status:** `[NEW]` · **Why (user decision):** no scheduling engine/UI. Decline and call-back
+are just **prompts to the agent** so it knows to call afterwards. Accepted trade-off: there is
+no guarantee the AI is active on the phone — the existing agent-ready gate + ring retry
+(`attemptRing`, 3-min window) and persisted callbacks (`savePendingCallback`) are the only
+delivery assurances. **Scope limit: do not build more than prompts unless a strictly better
+option exists and is agreed.**
+
+**Current state (verified):**
+- Decline/later already send `MessageTemplates.declineMessage/laterMessage` via `ACTION_CANCEL_CALL`/`ACTION_SCHEDULE_CALLBACK` with `EXTRA_NOTE` (`IncomingCallActivity.kt:225-244, 313-316`).
+- `MessageTemplates.kt` defaults are editable in Settings.
+
+**Design decisions:**
+- The prompt is the mechanism. Default texts must state intent explicitly:
+  - Decline: "...Please call me back when you're available."
+  - Call back later (N min): "...Please call me back in about N minutes."
+  - Missed-call Call-back action: the outgoing call's `EXTRA_CONTEXT_SUMMARY` carries the same
+    call-back prompt (Item 1 reuses this).
+- Keep existing transport (`ACTION_CANCEL_CALL` + `EXTRA_TEXT`; `ACTION_SCHEDULE_CALLBACK` +
+  `EXTRA_NOTE` untouched — it already persists + retries).
+- No new backend endpoint, no new UI surface beyond template defaults.
+
+**Implementation steps:**
+1. Rewrite `MessageTemplates` defaults to the prompt style above (English defaults; keep editability).
+2. Missed-call "Call back" (Item 1) reuses the prompt as `EXTRA_CONTEXT_SUMMARY`.
+3. `[VERIFY]` the agent (MCP side) actually receives the cancel `note`/text so the prompt reaches it — check `attemptCancel` payload.
+
+**Verification:** manual — decline a call, confirm the agent-side message contains the call-back intent; verify no regressions in cancel/retry tests.
+
+**Risks:** prompts are soft guidance — an offline agent can't act; that is the accepted
+trade-off. Keep wording imperative and specific so any LLM agent follows it.
+
+---
+
+### Item 9 — Quick replies per agent
+
+**Status:** `[NEW]` · **Why:** quick-reply chips are global today; each agent persona should
+own its chips.
+
+**Current state (verified):**
+- Chips render from `state.callContext.options` (`CallActivity.kt`, `QuickReplyChips`) — server-supplied at call creation.
+- `MessageTemplates` (Settings) is global, SharedPreferences-backed.
+- No per-agent message/template storage.
+
+**Design decisions:**
+- Per-agent quick replies live **on-device** in `AiProfileEntity.quickReplies` (JSON string array, max 4 chips) — same migration as Item 7.
+- Precedence: profile chips (if set) → server `callContext.options` → fallback empty.
+- Settings → profile page: "Quick replies" editor (add/remove/reorder ≤ 4).
+
+**Implementation steps:**
+1. Migration 1→2 adds `quickReplies TEXT` (with Item 7).
+2. `ProfileDetailViewModel`/`ProfileDetailScreen`: editor + save.
+3. `CallViewModel` `connect`: merge profile chips into `callContext.options` when set.
+4. `MessageTemplates`: keep global as the base layer (used when a profile has none).
+
+**Verification:** unit — precedence logic; manual — set chips for agent A, start call, only A's chips appear; B shows server options.
+
+**Risks:** JSON parse failures must degrade to no-chips (never crash); cap length at write time.
+
+---
+
+### Item 10 — On-device E2E pass
+
+**Status:** `[BLOCKED]` (needs networked machine + device + running backend/coturn) · **Why:** ringback, cancel-while-ringing, mute, reconnect banner, and the outgoing handoff are all untested on hardware.
+
+**Design decisions:** the pass is a scripted manual run, not automation (no instrumented device farm on this machine). Sequence below is the canonical order.
+
+**Test script (run top-to-bottom):**
+1. **Baseline**: `docker compose up` (backend + coturn), install debug APK, grant notifications + mic, set server host in Settings, add an ai-key.
+2. **Incoming**: trigger agent call (MCP/tool or scripted `createCall`) → ring UI ≤ 60 s → accept → voice session starts, transcript scrolls.
+3. **Outgoing**: Profile → Call → ringback audible → agent answers → ringback **stops**, timer starts at ACTIVE, greeting plays.
+4. **Cancel while ringing**: start outgoing, press Cancel within the ringing window → `ACTION_CANCEL_CALL` delivered, activity closes, history shows "Cancelled".
+5. **Mute**: toggle mute mid-call → agent TTS suppressed + notification reads "Muted"; unmute restores.
+6. **Speaker**: toggle → audio routes to speaker (verify via `setCommunicationDevice` after Item 11).
+7. **Reconnect**: airplane mode 10 s mid-call → banner "Reconnecting — the call stays live" → disable airplane mode → call resumes; if link stays dead → ENDED.
+8. **Decline paths**: decline / call-back-later / voicemail (Item 5) — each ends the ring and records correctly.
+9. **Missed**: let ring TTL expire → silent missed notification (backgrounded) → history "Missed" → Call back works.
+10. **Battery**: end a call, wait 2 min, verify no wake lock / no TTS engine held (Item 13 checklist).
+
+**Verification:** every step above passes; record device logs (`adb logcat -s CallService CallViewModel IncomingCallActivity`) for the repo if anything fails.
+
+**Risks:** backend must be reachable from the phone (same LAN or port-forward); coturn for NAT'd networks.
+
+---
+
+### Item 11 — Migrate `isSpeakerphoneOn` → `setCommunicationDevice`
+
+**Status:** `[NEW]` · **Why:** `AudioManager.isSpeakerphoneOn` is deprecated.
+
+**Current state (verified):** `CallAudioManager.kt:78,86` and `CallActivity.kt:492` use `isSpeakerphoneOn`.
+
+**Design decisions:**
+- API 31+: `audioManager.getDevices(GET_DEVICES_OUTPUTS).firstOrNull { it.type == TYPE_BUILTIN_SPEAKER }` → `setCommunicationDevice(device)`; toggle back to the earpiece/wired device on unmute. API 30−: keep `isSpeakerphoneOn` (not deprecated there — safe).
+- Centralize in `CallAudioManager` (`fun setSpeakerphone(on: Boolean)`); `CallActivity`'s local `isSpeakerOn` remember-state delegates to it (remove the duplicated AudioManager block at CallActivity.kt:492).
+
+**Implementation steps:**
+1. `CallAudioManager.setSpeakerphone(on)`: SDK gate (31+) + fallback.
+2. `CallActivity` speaker control → `audioManager` (injected VM-level, already in CallViewModel) instead of raw `context.getSystemService`.
+3. Delete the inline deprecated block.
+
+**Verification:** compile; manual E2E step 6; `adb shell dumpsys audio` to confirm routing change.
+
+**Risks:** `setCommunicationDevice` needs `MODIFY_AUDIO_SETTINGS` (already granted for calls); device null on some hardware → fallback to legacy path.
+
+---
+
+### Item 12 — Unit tests for `CallViewModel` FSM
+
+**Status:** `[NEW]` · **Why:** phase bugs (e.g., ringback never stopping, stuck RECONNECTING) are the highest-risk part of the call UX and are currently only testable on device.
+
+**Current state (verified):** `CallViewModel` mixes state transitions with Android side-effects (`Log`, `SignalingClient`, services) — not directly unit-testable. Android module has **no unit tests** (`src/test` absent).
+
+**Design decisions:**
+- Extract a **pure** `CallStateMachine` (no Android deps): inputs `PhaseEvent` (`CallAnswered`, `AiMessage`, `ReconnectStateChanged`, `Tick`, `Ended`, ...), outputs new `CallPhase` + flags (e.g., `ringbackShouldStop`, `timerRunning`). `CallViewModel` delegates and applies side effects.
+- Keep the machine in `call/state/CallStateMachine.kt`; `CallPhase` moves with it (keep a typealias at the old location for the UI).
+- Test source set: `src/test/java` with JUnit4 + `kotlinx-coroutines-test` (`[VERIFY]` build.gradle.kts `testImplementation` — likely needs adding `junit:junit` + `org.jetbrains.kotlinx:kotlinx-coroutines-test`; check `libs.versions.toml` before adding — non-negotiable #2).
+
+**Test cases (minimum):**
+- OUTGOING → ACTIVE on `call_answered` (assert `ringbackShouldStop=true`).
+- OUTGOING → stays until first `ai_message` if no `call_answered`.
+- CONNECTING → RECONNECTING → ACTIVE on reconnect success (timer paused then resumed).
+- RECONNECTING → ENDED when reconnect exceeds the tolerance.
+- Terminal: ENDED ignores all later events.
+- Cancel-from-OUTGOING transitions cleanly.
+
+**Implementation steps:**
+1. Extract machine + move `CallPhase`.
+2. Wire `CallViewModel` to it; verify app still compiles (`assembleDebug`).
+3. Add test deps; write the matrix; `./gradlew :app:testDebugUnitTest`.
+
+**Verification:** unit suite green; no behavior change in manual smoke.
+
+**Risks:** the refactor must not change runtime behavior — run the Item 10 smoke before/after. If the ViewModel is too entangled, extract incrementally (machine first, side effects later).
+
+---
+
+### Item 13 — Battery audit
+
+**Status:** `[NEW]` · **Why:** no evidence the app holds resources after a call ends.
+
+**Current state (verified):**
+- Wake lock acquired in `ACTION_START_CALL` (`CallService.kt:156` `acquireWakeLock()`), released in `endCall()`.
+- TTS init: `initTts()` on `ACTION_PREWARM_TTS` or lazily; `textToSpeech` is a service field — engine stays alive app-wide.
+- FGS: `startForeground(NOTIFICATION_ID_ONGOING, ...)` at START_CALL; `endCall()` should `stopForeground(STOP_FOREGROUND_REMOVE)` — `[VERIFY]` it does.
+- Recording: `startRecording/stopRecording` (`ACTION_START/STOP_RECORDING`).
+
+**Design decisions (audit → fix):**
+1. Prove the happy path: after ENDED, assert — no wake lock (`adb shell dumpsys power | grep -i wakelock`), no FGS notification, audio focus abandoned, recorder closed.
+2. Fix gaps found; the two known candidates: (a) TTS engine retained indefinitely — add `textToSpeech?.shutdown()` after an idle timeout (e.g., 60 s post-ENDED) while keeping PREWARM working; (b) `stopSelf()` paths that skip `endCall()` — enumerate all `stopSelf` call sites (`CallService.kt:194, 410, 416, 424`) and ensure each releases resources once.
+3. Add a release-once guard (`released` flag) so double-calls can't throw.
+
+**Implementation steps:**
+1. Walk every terminal path (END_CALL, CallCancelled, CallExpired, disconnect) — single `releaseCallResources()`.
+2. TTS idle shutdown with restart-on-demand (`initTts()` already re-inits; make it lazy-safe).
+3. `adb` battery checks after a 5-min-call scenario.
+
+**Verification:** dumpsys checks above; `adb shell dumpsys batterystats --reset` before, discharge deltas after 30 min idle with one call.
+
+**Risks:** TTS shutdown/restart can add startup latency — measure and keep the idle window conservative.
+
+---
+
+### Item 15 — Realtime duplex audio (v2 M2/M4)
+
+**Status:** `[NEW]` (roadmap-defined: `docs/v2/10-roadmap.md` M2/M4) · **Why:** the single
+biggest perceived-quality jump — replaces record-clip-then-reply with a conversation.
+
+**Design decisions (from the v2 docs — do not re-derive):**
+- M2 (realtime conversation): streaming STT partials + final, streaming TTS (token→audio), barge-in ≤ 50 ms, silence events (`silence.detected`, `call.noactivity`), turn leases + `turn.ended`.
+- M4 (tools & media): `ToolInvoker` + `invoke_tool`; scope-filtered subscriptions; media channel (WS `v2/media`) + WebRTC/coturn attach via a `TransportProvider` seam (never bind core to one engine; `wrtc`/`mediasoup`/LiveKit are adapter options; coturn stays).
+- Keep the $0 constraint: on-device STT/TTS remains the default; providers are optional adapters (`@agentcall/*-provider-*`).
+
+**Implementation steps (phased):**
+1. M2: `EventPlane` in-process + outbox write path; `POST /api/v2/*` (create/message/utterance/hangup); SSE `events`; MCP `send_message_and_wait` lease semantics. 45s cap behind flag (see Item 16).
+2. Streaming adapters: STT partials first (Android `SpeechRecognizer` partial results on-device, then provider adapters); streaming TTS queue with barge-in cut.
+3. M4: `TransportProvider` + WebRTC attach; measure barge-in p95 ≤ 50 ms; E2E Playwright call test.
+
+**Verification:** per-roadmap exit criteria — scripted-provider determinism, barge-in budget measured, WebRTC E2E call green, v1 suite still green behind façade.
+
+**Risks:** M2–M4 is the critical path; schedule as a separate work stream from Items 1–13 (different code paths, same repo — merge discipline per item 4).
+
+---
+
+### Item 16 — No-45s-cap engine (v2 M1)
+
+**Status:** `[NEW]` (roadmap M1) · **Why:** the documented 45-second reply window is user-facing
+and wrong for long agent turns.
+
+**Current state (verified):** **No `MESSAGE_WINDOW_MS`/45s constant exists in the tree**
+(searched `backend/src` + mobile). The cap is a *behavioral* constraint of the current
+async flow (`[VERIFY]` against live behavior — likely the ai-wait lease `activeUntil` /
+reply-poll cadence, `AI_REPLY_POLL_INTERVAL_MS=500` in `config.ts:49`).
+
+**Design decisions:**
+- Do not bolt on a timeout flag in the current engine. Implement the M1 engine core (EventPlane + event log + tolerance events) and remove the cap **behind a flag** (`PERSISTENCE_MODE`/`ENGINE_V2`-style), per roadmap M1 exit criteria: v1 suite green, v2 contract tests green, cap gone behind flag.
+- Replace user-facing timeouts with `silence.detected` / `call.noactivity` escalation events so AI clients never wait forever (roadmap risk R7).
+
+**Implementation steps:** follow `docs/v2/10-roadmap.md` M1 (3–5 wk estimate) — milestones and exit criteria are the source of truth; this item is the roadmap, not a new design.
+
+**Verification:** roadmap M1 gate: v1 suite green; v2 contract tests green; cap removed only when flag on.
+
+**Risks:** engine work must not destabilize the shipped async flow — façade keeps v1 shapes (roadmap R5).
+
+---
+
+### Item 17 — Privacy as marketing (on-device STT/TTS)
+
+**Status:** `[NEW]` · **Why:** "your voice stays on your device" is a defensible differentiator —
+but **only if true**. Honesty gate: audit the data flow before writing any claim.
+
+**Current state:** `[VERIFY]` — where does audio go today? (a) Does the Android recorder upload
+audio to the backend, or is transcription on-device? (b) Is TTS on-device (Android engine) or
+server-side? (c) What does the backend retain (transcripts, recordings, retention)? The
+answer determines every word of the copy.
+
+**Design decisions:**
+- **Phase A — truth audit**: trace `CallService.startRecording` → transport → backend storage;
+  document the flow in `docs/SECURITY_GUIDELINES.md`; identify retention (roadmap R9 default:
+  30 d, configurable, encrypted, deletable).
+- **Phase B — in-app surface**: Settings → "Privacy & data" section with a plain-language flow
+  diagram; per-call privacy note in the in-call screen; one-tap "delete my data" if the backend
+  supports it (right-to-erasure — R9).
+- **Phase C — claims**: only after A. If on-device STT/TTS is the default, badge it
+  ("Voice stays on-device"); if transcription is server-side, say "encrypted in transit,
+  deleted after N days" — never claim on-device falsely.
+
+**Implementation steps:**
+1. `[VERIFY]` audio/transcript flow (A). Record findings in the doc above.
+2. Add the Privacy section (B) — new `PrivacyScreen` or a section in `SettingsScreen`.
+3. Add claims (C) gated on A.
+
+**Verification:** copy matches the audit; a fresh-install user can find the privacy info in ≤ 2 taps.
+
+**Risks:** regulatory exposure if claims overstate — the audit (A) is a hard prerequisite,
+not a nice-to-have.
+
+---
+
+## 3. Cross-cutting gates (apply to every item)
+
+1. **No destructive ops.** No `git reset --hard`, no deleting files/branches, no DB drops on
+   non-local. Room migrations: **write real `Migration(1, 2)`**; the DEBUG-only destructive
+   fallback (`AppModule.kt:38-42`) is dev comfort, not a release strategy.
+2. **New dependencies.** Verify existence on the registry before adding (`pre-flight-check`).
+   For tests: confirm `junit`/`kotlinx-coroutines-test` availability in `libs.versions.toml`
+   before referencing (Item 12).
+3. **Commits.** Conventional (`feat|fix|docs|refactor(scope): ...`), scoped, atomic; feature
+   branch; never `main` (Item 4 ordering).
+4. **Verification.** Every item ends with its listed verification run — build
+   (`./gradlew :app:assembleDebug`), tests, and (on a networked machine) `lintDebug` +
+   `npm run lint && npm test` for backend.
+5. **This machine is offline.** Lint/CI/device work (`Item 4`, `Item 10`) is
+   `[BLOCKED]` here — plan around it, never fake it.
+6. **Suggestion vs. instruction.** Items are the user-approved backlog; if a cheaper/better
+   path appears, propose it and get explicit sign-off before deviating (Items 8's scope note).
+
+---
+
+## 4. Session log
+
+- **2026-08-12** — Backlog created. Outgoing-call + voice-first shipped this session
+  (ringback, cancel, mute, reconnect banner, profile Call button; Dagger Context fix;
+  `assembleDebug` green; lint blocked offline; uncommitted — see Item 4).
+  Backlog items 1–13, 15–17 defined with verified file references; item 14 (iOS) excluded by
+  user decision; item 8 scoped to prompts-only per user decision.
