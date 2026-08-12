@@ -12,7 +12,7 @@ import com.agentcall.app.data.database.entity.TranscriptMessageEntity
 @Database(
     entities = [AiProfileEntity::class, CallRecordEntity::class, TranscriptMessageEntity::class],
     version = 1,
-    exportSchema = false,
+    exportSchema = true,
 )
 abstract class AgentCallDatabase : RoomDatabase() {
     abstract fun aiProfileDao(): AiProfileDao

@@ -1,7 +1,7 @@
 package com.agentcall.app.data.api
 
 import com.agentcall.app.BuildConfig
-import com.jakewharton.retrofit2.converter.kotlinx.serialization.asConverterFactory
+import retrofit2.converter.kotlinx.serialization.asConverterFactory
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -48,8 +48,7 @@ object ApiClient {
     fun getWsUrl(userId: String): String {
         val scheme = if (isDomainHost()) "wss" else "ws"
         val port = if (isDomainHost()) "" else ":$API_PORT"
-        val token = phoneToken ?: return "$scheme://$serverHost$port/phone?user_id=$userId"
-        return "$scheme://$serverHost$port/phone?token=$token&user_id=$userId"
+        return "$scheme://$serverHost$port/phone?user_id=$userId"
     }
 
     fun setServerHost(host: String) {
@@ -78,7 +77,7 @@ object ApiClient {
     }
 
     private val loggingInterceptor = HttpLoggingInterceptor().apply {
-        level = if (BuildConfig.DEBUG) HttpLoggingInterceptor.Level.HEADERS else HttpLoggingInterceptor.Level.NONE
+        level = if (BuildConfig.DEBUG) HttpLoggingInterceptor.Level.BASIC else HttpLoggingInterceptor.Level.NONE
     }
 
     private val httpClient: OkHttpClient = OkHttpClient.Builder()
