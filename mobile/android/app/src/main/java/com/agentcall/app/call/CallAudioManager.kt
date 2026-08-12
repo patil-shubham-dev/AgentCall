@@ -2,6 +2,7 @@ package com.agentcall.app.call
 
 import android.content.Context
 import android.media.AudioAttributes
+import android.media.AudioDeviceInfo
 import android.media.AudioFocusRequest
 import android.media.AudioManager
 import android.os.Build
@@ -75,22 +76,57 @@ class CallAudioManager @Inject constructor(context: Context) {
 
     val isSpeakerOn: Boolean
         get() = try {
-            audioManager.isSpeakerphoneOn
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                communicationOutputs()
+                    .firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER }
+                    ?.let { it == audioManager.communicationDevice }
+                    ?: false
+            } else {
+                @Suppress("DEPRECATION")
+                audioManager.isSpeakerphoneOn
+            }
         } catch (_: Exception) {
             false
         }
 
-    fun toggleSpeaker(): Boolean {
-        val next = !isSpeakerOn
+    fun setSpeakerphone(on: Boolean): Boolean {
         try {
-            audioManager.isSpeakerphoneOn = next
-            Log.d(TAG, "[AUDIO] speaker=$next")
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                if (on) {
+                    val speaker = communicationOutputs()
+                        .firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER }
+                    if (speaker == null) return isSpeakerOn
+                    audioManager.setCommunicationDevice(speaker)
+                } else {
+                    val fallback = communicationOutputs().firstOrNull {
+                        it.type == AudioDeviceInfo.TYPE_BUILTIN_EARPIECE ||
+                            it.type == AudioDeviceInfo.TYPE_WIRED_HEADSET ||
+                            it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO
+                    }
+                    if (fallback != null) {
+                        audioManager.setCommunicationDevice(fallback)
+                    } else {
+                        audioManager.clearCommunicationDevice()
+                    }
+                }
+                Log.d(TAG, "[AUDIO] speaker=$on")
+            } else {
+                @Suppress("DEPRECATION")
+                audioManager.isSpeakerphoneOn = on
+                Log.d(TAG, "[AUDIO] speaker=$on")
+            }
         } catch (e: Exception) {
-            Log.w(TAG, "[AUDIO] speaker toggle failed", e)
-            return isSpeakerOn
+            Log.w(TAG, "[AUDIO] speaker set failed", e)
         }
-        return next
+        return isSpeakerOn
     }
+
+    fun toggleSpeaker(): Boolean {
+        return setSpeakerphone(!isSpeakerOn)
+    }
+
+    private fun communicationOutputs(): Array<AudioDeviceInfo> =
+        audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
 
     companion object {
         private const val TAG = "AgentCall"

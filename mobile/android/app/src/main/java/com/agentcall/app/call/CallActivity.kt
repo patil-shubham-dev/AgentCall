@@ -481,17 +481,12 @@ fun ActiveCallScreen(
                             bgColor = if (state.isMuted) GlassIndigo else GlassWhite,
                             onClick = { viewModel.setMuted(context, !state.isMuted) })
 
-                        var isSpeakerOn by remember { mutableStateOf(false) }
                         CallControl(
-                            icon = if (isSpeakerOn) Icons.AutoMirrored.Filled.VolumeUp else Icons.AutoMirrored.Filled.VolumeDown,
-                            label = if (isSpeakerOn) "Speaker" else "Speaker",
-                            tint = if (isSpeakerOn) Indigo400 else Slate50,
-                            bgColor = if (isSpeakerOn) GlassIndigo else GlassWhite,
-                            onClick = {
-                                val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as android.media.AudioManager
-                                audioManager.isSpeakerphoneOn = !audioManager.isSpeakerphoneOn
-                                isSpeakerOn = !isSpeakerOn
-                            })
+                            icon = if (state.isSpeakerOn) Icons.AutoMirrored.Filled.VolumeUp else Icons.AutoMirrored.Filled.VolumeDown,
+                            label = "Speaker",
+                            tint = if (state.isSpeakerOn) Indigo400 else Slate50,
+                            bgColor = if (state.isSpeakerOn) GlassIndigo else GlassWhite,
+                            onClick = { viewModel.toggleSpeaker() })
 
                         CallControl(
                             icon = Icons.Default.Replay, label = "Repeat",
