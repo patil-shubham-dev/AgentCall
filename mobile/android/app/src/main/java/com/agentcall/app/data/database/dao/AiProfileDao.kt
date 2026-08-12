@@ -27,4 +27,10 @@ interface AiProfileDao {
 
     @Query("UPDATE ai_profiles SET callCount = callCount + 1, lastCalledAt = :lastCalledAt WHERE id = :id")
     suspend fun incrementCallCount(id: String, lastCalledAt: Long)
+
+    @Query("UPDATE ai_profiles SET ringtoneUri = :uri, ringtoneLabel = :label, updatedAt = :updatedAt WHERE id = :id")
+    suspend fun updateRingtone(id: String, uri: String?, label: String?, updatedAt: Long = System.currentTimeMillis())
+
+    @Query("UPDATE ai_profiles SET quickReplies = :json, updatedAt = :updatedAt WHERE id = :id")
+    suspend fun updateQuickReplies(id: String, json: String?, updatedAt: Long = System.currentTimeMillis())
 }

@@ -11,4 +11,11 @@ data class AiProfileEntity(
     val updatedAt: Long = System.currentTimeMillis(),
     val callCount: Int = 0,
     val lastCalledAt: Long? = null,
+    // Migration 1 -> 2 (backlog items 7 & 9): per-agent ringtone and
+    // quick-reply chips live on the profile row. quickReplies is a JSON
+    // string array (max 4 chips); parse defensively — bad JSON must degrade
+    // to no chips, never crash.
+    val ringtoneUri: String? = null,
+    val ringtoneLabel: String? = null,
+    val quickReplies: String? = null,
 )

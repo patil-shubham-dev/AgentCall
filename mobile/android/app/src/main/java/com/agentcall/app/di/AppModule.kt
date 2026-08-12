@@ -40,8 +40,11 @@ object AppModule {
             AgentCallDatabase::class.java,
             "agentcall.db"
         )
-        // Destructive migration wipes user data — debug builds only. A real
-        // Room Migration must be written before any future schema bump.
+        // Real migration for the schema bump to v2 (per-agent ringtone +
+        // quick replies). The destructive fallback stays DEBUG-only as a dev
+        // convenience for mid-development schema changes — never a release
+        // strategy.
+        builder.addMigrations(AgentCallDatabase.MIGRATION_1_2)
         if (BuildConfig.DEBUG) {
             builder.fallbackToDestructiveMigration()
         }
