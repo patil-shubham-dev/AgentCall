@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.agentcall.app.call.SignalingClient
 import com.agentcall.app.call.VoiceBridgeEvent
+import com.agentcall.app.data.api.AgentStatusResponse
 import com.agentcall.app.data.api.ApiClient
 import com.agentcall.app.data.api.ApiService
 import com.agentcall.app.data.api.AiKeyItem
@@ -58,6 +59,14 @@ class HomeViewModel @Inject constructor(
     private val _aiStatus = MutableStateFlow<Map<String, AiKeyItem>>(emptyMap())
     val aiStatus: StateFlow<Map<String, AiKeyItem>> = _aiStatus.asStateFlow()
 
+    /**
+     * Per-agent online status + last-seen (backlog item 2), keyed by agent
+     * name. Fetched from GET /agents/:id/status on connect — never polled.
+     * Errors degrade to an empty map (chips simply don't show).
+     */
+    private val _agentStatus = MutableStateFlow<Map<String, AgentStatusResponse>>(emptyMap())
+    val agentStatus: StateFlow<Map<String, AgentStatusResponse>> = _agentStatus.asStateFlow()
+
     private val _snackbarEvents = MutableSharedFlow<String>(extraBufferCapacity = 4)
     val snackbarEvents: SharedFlow<String> = _snackbarEvents.asSharedFlow()
 
@@ -87,6 +96,11 @@ class HomeViewModel @Inject constructor(
                     reconnect()
                 }
             }
+        }
+
+        // A new agent profile (or a first sync) refreshes its status chip.
+        viewModelScope.launch {
+            profiles.collect { refreshAgentStatuses() }
         }
 
         viewModelScope.launch {
@@ -124,6 +138,7 @@ class HomeViewModel @Inject constructor(
                             statusText = "Ready",
                             isLoading = false,
                         )
+                        refreshAgentStatuses()
                     }
                     is VoiceBridgeEvent.CallEnded -> {
                         repository.saveCallEnded(event.callId, "ended")
@@ -154,6 +169,31 @@ class HomeViewModel @Inject constructor(
         viewModelScope.launch {
             delay(300)
             connect()
+        }
+    }
+
+    /**
+     * One status GET per agent, error-tolerant: any failure leaves the
+     * existing map (or an empty map) — never a crash, never a spinner.
+     */
+    fun refreshAgentStatuses() {
+        viewModelScope.launch {
+            val agents = profiles.value
+            if (agents.isEmpty()) return@launch
+            // The status route requires a phone token; mint it first (the poll
+            // loop does the same) or every GET would 401 and the chip would
+            // never populate.
+            runCatching { ApiClient.ensurePhoneToken() }
+            val results = mutableMapOf<String, AgentStatusResponse>()
+            for (profile in agents) {
+                val status = runCatching {
+                    ApiClient.create<ApiService>().getAgentStatus(profile.name)
+                }.getOrNull()
+                if (status != null) results[profile.name] = status
+            }
+            if (results.isNotEmpty()) {
+                _agentStatus.value = _agentStatus.value + results
+            }
         }
     }
 }

@@ -47,6 +47,7 @@ fun HomeScreen(
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val profiles by viewModel.profiles.collectAsStateWithLifecycle()
     val aiStatus by viewModel.aiStatus.collectAsStateWithLifecycle()
+    val agentStatus by viewModel.agentStatus.collectAsStateWithLifecycle()
 
     val snackbarHostState = remember { SnackbarHostState() }
 
@@ -166,6 +167,7 @@ fun HomeScreen(
                     else -> AiProfileGrid(
                         profiles = profiles,
                         aiStatus = aiStatus,
+                        agentStatus = agentStatus,
                         waitingScale = waitingScale,
                         waitingPulse = waitingPulse,
                         onProfileClicked = onProfileClicked,
@@ -180,6 +182,7 @@ fun HomeScreen(
 private fun AiProfileGrid(
     profiles: List<AiProfileEntity>,
     aiStatus: Map<String, AiKeyItem>,
+    agentStatus: Map<String, com.agentcall.app.data.api.AgentStatusResponse>,
     waitingScale: Float,
     waitingPulse: Float,
     onProfileClicked: (String) -> Unit,
@@ -216,6 +219,7 @@ private fun AiProfileGrid(
                     AiProfileCard(
                         profile = profile,
                         aiKey = aiStatus[profile.name],
+                        lastSeenText = formatLastSeen(agentStatus[profile.name]?.lastSeenAt),
                         onClick = { onProfileClicked(profile.id) },
                     )
                 }
@@ -225,7 +229,12 @@ private fun AiProfileGrid(
 }
 
 @Composable
-private fun AiProfileCard(profile: AiProfileEntity, aiKey: AiKeyItem?, onClick: () -> Unit) {
+private fun AiProfileCard(
+    profile: AiProfileEntity,
+    aiKey: AiKeyItem?,
+    onClick: () -> Unit,
+    lastSeenText: String? = null,
+) {
     val interactionSource = remember { MutableInteractionSource() }
     val isPressed by interactionSource.collectIsPressedAsState()
     val pressScale by animateFloatAsState(
@@ -271,7 +280,28 @@ private fun AiProfileCard(profile: AiProfileEntity, aiKey: AiKeyItem?, onClick: 
                 Text(statusText, style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
+            // Backlog item 2: an offline agent shows its last-seen time so the
+            // user knows WHY it didn't pick up.
+            if (presence == AiPresence.OFFLINE && lastSeenText != null) {
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(lastSeenText, style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f))
+            }
         }
+    }
+}
+
+private fun formatLastSeen(iso: String?): String? {
+    if (iso.isNullOrBlank()) return null
+    val ts = try { java.time.Instant.parse(iso).toEpochMilli() } catch (_: Exception) { return null }
+    val diff = System.currentTimeMillis() - ts
+    val minutes = diff / 60000
+    val hours = minutes / 60
+    return when {
+        minutes < 1 -> "Last seen just now"
+        minutes < 60 -> "Last seen ${minutes}m ago"
+        hours < 24 -> "Last seen ${hours}h ago"
+        else -> "Last seen ${hours / 24}d ago"
     }
 }
 
