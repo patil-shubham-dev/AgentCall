@@ -15,10 +15,12 @@ import android.os.PowerManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
+import com.agentcall.app.ForegroundTracker
 import com.agentcall.app.MainActivity
 import com.agentcall.app.R
 import com.agentcall.app.data.repository.CallRepository
 import com.agentcall.app.settings.MessageTemplates
+import com.agentcall.app.settings.QuietHoursManager
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -43,6 +45,7 @@ class SignalingForegroundService : Service() {
 
     @Inject lateinit var signalingClient: SignalingClient
     @Inject lateinit var callRepository: CallRepository
+    @Inject lateinit var quietHoursManager: QuietHoursManager
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var eventsJob: Job? = null
@@ -50,6 +53,9 @@ class SignalingForegroundService : Service() {
     private var ringTimeoutJob: Job? = null
     private var ringingCallId: String? = null
     private val recentlyRung = ArrayDeque<Pair<String, Long>>()
+    // Ring metadata by callId (callerName to summary) — needed when the ring
+    // later expires/cancels and the phone must record the outcome.
+    private val ringCallers = mutableMapOf<String, Pair<String, String>>()
     @Volatile private var foregroundStarted = false
 
     private val disconnectReceiver = object : BroadcastReceiver() {
@@ -101,8 +107,32 @@ class SignalingForegroundService : Service() {
                 // 60s auto-decline can never fire on a live call.
                 clearRing()
             }
-            is VoiceBridgeEvent.CallEnded, is VoiceBridgeEvent.CallCancelled -> {
+            is VoiceBridgeEvent.CallEnded -> {
                 clearRing()
+                // Finalize the ring-time record (the answering path upserts its
+                // own "started" row; this covers rings that ended without an
+                // answer). Idempotent — no-op when no row exists.
+                callRepository.saveCallEnded(event.callId, "ended")
+            }
+            is VoiceBridgeEvent.CallCancelled -> {
+                clearRing()
+                callRepository.saveCallEnded(event.callId, "cancelled")
+            }
+            is VoiceBridgeEvent.CallExpired -> {
+                // Backlog item 1: the ring window closed unanswered. Record the
+                // miss and — when the app is backgrounded — post the silent
+                // missed-call notification that deep-links to the profile.
+                clearRing()
+                val meta = ringCallers.remove(event.callId)
+                callRepository.saveCallEnded(event.callId, "expired")
+                if (!ForegroundTracker.isForeground && meta != null) {
+                    CallService.showMissedCallNotification(
+                        this@SignalingForegroundService,
+                        event.callId,
+                        meta.first,
+                        meta.first.agentSlug(),
+                    )
+                }
             }
             else -> {}
         }
@@ -142,6 +172,9 @@ class SignalingForegroundService : Service() {
         if (session != null && (session == "pending" || session == "active")) {
             val agentId = event.callerName.lowercase().replace("\\s+".toRegex(), "-")
             callRepository.ensureProfileExists(agentId, event.callerName)
+            // A ring is a call: create the history row now so decline notes,
+            // expiry and answer all have a record to update (backlog item 1).
+            callRepository.markCallRinging(event.callId, agentId, event.callerName, event.createdAtMs ?: System.currentTimeMillis())
             ring(event.callId, event.callerName, event.summary)
         }
     }
@@ -155,8 +188,14 @@ class SignalingForegroundService : Service() {
         rememberRung(callId)
         Log.i(TAG, "[RING] ringing callId=$callId caller=$callerName")
         logRingDiagnostics()
+        ringCallers[callId] = callerName to summary
         ringingCallId = callId
-        CallService.showIncomingCallNotification(this, callId, callerName, summary)
+        // Backlog item 6: during quiet hours the ring is silent (dedicated
+        // channel) but the full-screen UI still shows, so the user can answer
+        // an important call. The AI learns about the window through the
+        // auto-decline note below — never by assuming, never without a call.
+        val quiet = quietHoursManager.isQuietNow(callerName)
+        CallService.showIncomingCallNotification(this, callId, callerName, summary, quiet = quiet)
         // Pre-bind and warm the TTS engine now so the first spoken word after
         // the user answers never pays the engine bind/voice-load cost.
         try {
@@ -172,10 +211,20 @@ class SignalingForegroundService : Service() {
             if (ringingCallId == callId) {
                 Log.i(TAG, "[RING] timeout for $callId — auto-declining")
                 clearRing()
+                val note = if (quiet) {
+                    val (start, end) = quietHoursManager.activeRange(callerName) ?: (0 to 0)
+                    MessageTemplates.quietHoursMessage(
+                        this@SignalingForegroundService,
+                        QuietHoursManager.minutesToLabel(start),
+                        QuietHoursManager.minutesToLabel(end),
+                    )
+                } else {
+                    MessageTemplates.declineMessage(this@SignalingForegroundService)
+                }
                 startService(Intent(this@SignalingForegroundService, CallService::class.java).apply {
                     action = CallService.ACTION_CANCEL_CALL
                     putExtra(CallService.EXTRA_CALL_ID, callId)
-                    putExtra(CallService.EXTRA_TEXT, MessageTemplates.declineMessage(this@SignalingForegroundService))
+                    putExtra(CallService.EXTRA_TEXT, note)
                 })
             }
         }

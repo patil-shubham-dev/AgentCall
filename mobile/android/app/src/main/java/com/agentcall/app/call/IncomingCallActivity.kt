@@ -52,6 +52,7 @@ import com.agentcall.app.data.api.ApiClient
 import com.agentcall.app.data.api.ApiService
 import com.agentcall.app.settings.CallerTuneManager
 import com.agentcall.app.settings.MessageTemplates
+import com.agentcall.app.settings.QuietHoursManager
 import com.agentcall.app.ui.composables.AmbientBackground
 import com.agentcall.app.ui.theme.*
 import dagger.hilt.android.AndroidEntryPoint
@@ -66,11 +67,13 @@ import javax.inject.Inject
 class IncomingCallActivity : ComponentActivity() {
 
     @Inject lateinit var callerTuneManager: CallerTuneManager
+    @Inject lateinit var quietHoursManager: QuietHoursManager
     private var mediaPlayer: MediaPlayer? = null
     private var ringtoneFallback: Ringtone? = null
     @Volatile private var isPlayerValid = false
 
     private var showCall by mutableStateOf(false)
+    private var quietRing by mutableStateOf(false)
     private var showMicPermissionDenied by mutableStateOf(false)
     private var pendingCallIntent: Intent? = null
     private var currentCallId by mutableStateOf("")
@@ -109,8 +112,19 @@ class IncomingCallActivity : ComponentActivity() {
         }
 
     private fun startRinger() {
+        // Backlog item 6: during quiet hours the ring is fully silent (the
+        // notification used the quiet channel too). The UI still shows so an
+        // important call can be answered.
+        if (quietHoursManager.isQuietNow(currentCallerName)) {
+            Log.i(TAG, "[RING] quiet hours active — silent ring for $currentCallerName")
+            isPlayerValid = false
+            return
+        }
         try {
-            val uri: Uri = callerTuneManager.uri
+            // Backlog item 7: per-agent tune (keyed by the slugged agent id,
+            // matching the profile rows), falling back to the global tune and
+            // then the system default.
+            val uri: Uri = callerTuneManager.getUriForAgent(currentCallerName.agentSlug())
             val mp = MediaPlayer().apply {
                 setDataSource(this@IncomingCallActivity, uri)
                 isLooping = true
@@ -170,7 +184,8 @@ class IncomingCallActivity : ComponentActivity() {
         currentCallId = intent.getStringExtra("call_id") ?: run { isProcessing.set(false); finish(); return }
         currentCallerName = intent.getStringExtra("caller_name") ?: "AI Agent"
         currentContextSummary = intent.getStringExtra("context_summary") ?: ""
-        Log.i(TAG, "[LAUNCH] IncomingCallActivity created callId=$currentCallId via=$launchSource")
+        quietRing = quietHoursManager.isQuietNow(currentCallerName)
+        Log.i(TAG, "[LAUNCH] IncomingCallActivity created callId=$currentCallId via=$launchSource quiet=$quietRing")
 
         startRinger()
 
@@ -199,6 +214,7 @@ class IncomingCallActivity : ComponentActivity() {
                     IncomingCallScreen(
                         callerName = currentCallerName,
                         contextSummary = currentContextSummary,
+                        quiet = quietRing,
                         onAnswer = {
                             stopRinger()
                             SignalingForegroundService.notifyRingResolved(this@IncomingCallActivity)
@@ -227,7 +243,23 @@ class IncomingCallActivity : ComponentActivity() {
                             startService(Intent(this@IncomingCallActivity, CallService::class.java).apply {
                                 action = CallService.ACTION_CANCEL_CALL
                                 putExtra(CallService.EXTRA_CALL_ID, currentCallId)
-                                putExtra(CallService.EXTRA_TEXT, MessageTemplates.declineMessage(this@IncomingCallActivity))
+                                putExtra(CallService.EXTRA_TEXT, quietDeclineNote())
+                            })
+                            isProcessing.set(false)
+                            finish()
+                        },
+                        onVoicemail = {
+                            // Backlog item 5: same cancel transport as decline,
+                            // but the note is the user's voicemail — the AI
+                            // reads it as a user message in its session.
+                            stopRinger()
+                            ringResolved = true
+                            SignalingForegroundService.notifyRingResolved(this@IncomingCallActivity)
+                            CallService.cancelIncomingNotification(this@IncomingCallActivity)
+                            startService(Intent(this@IncomingCallActivity, CallService::class.java).apply {
+                                action = CallService.ACTION_CANCEL_CALL
+                                putExtra(CallService.EXTRA_CALL_ID, currentCallId)
+                                putExtra(CallService.EXTRA_TEXT, MessageTemplates.voicemailMessage(this@IncomingCallActivity))
                             })
                             isProcessing.set(false)
                             finish()
@@ -270,6 +302,9 @@ class IncomingCallActivity : ComponentActivity() {
         currentCallId = callId
         currentCallerName = intent.getStringExtra("caller_name") ?: "AI Agent"
         currentContextSummary = intent.getStringExtra("context_summary") ?: ""
+        // Re-evaluate DND state for the new call (a second call can arrive
+        // while the activity is alive).
+        quietRing = quietHoursManager.isQuietNow(currentCallerName)
         showCall = false
         showMicPermissionDenied = false
         pendingCallIntent = null
@@ -313,12 +348,23 @@ class IncomingCallActivity : ComponentActivity() {
                 startService(Intent(this@IncomingCallActivity, CallService::class.java).apply {
                     action = CallService.ACTION_CANCEL_CALL
                     putExtra(CallService.EXTRA_CALL_ID, callIdToCancel)
-                    putExtra(CallService.EXTRA_TEXT, MessageTemplates.declineMessage(this@IncomingCallActivity))
+                    putExtra(CallService.EXTRA_TEXT, quietDeclineNote())
                 })
             }
         }
         super.onDestroy()
         isProcessing.set(false)
+    }
+
+    /** Decline note: quiet-hours window info when DND is active, else the default. */
+    private fun quietDeclineNote(): String {
+        if (!quietRing) return MessageTemplates.declineMessage(this)
+        val (start, end) = quietHoursManager.activeRange(currentCallerName) ?: (0 to 0)
+        return MessageTemplates.quietHoursMessage(
+            this,
+            QuietHoursManager.minutesToLabel(start),
+            QuietHoursManager.minutesToLabel(end),
+        )
     }
 }
 
@@ -330,6 +376,8 @@ fun IncomingCallScreen(
     onAnswer: () -> Unit,
     onDecline: () -> Unit,
     onLater: (Int) -> Unit,
+    onVoicemail: () -> Unit = {},
+    quiet: Boolean = false,
 ) {
     var showLaterPicker by remember { mutableStateOf(false) }
     var selectedMinutes by remember { mutableIntStateOf(10) }
@@ -388,6 +436,28 @@ fun IncomingCallScreen(
             }
 
             Spacer(modifier = Modifier.weight(0.08f))
+
+            if (quiet) {
+                Surface(
+                    shape = RoundedCornerShape(100.dp),
+                    color = Amber400.copy(alpha = 0.12f),
+                    modifier = Modifier.padding(bottom = 8.dp),
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(Icons.Default.DoNotDisturbOn, "Quiet hours", tint = Amber400, modifier = Modifier.size(14.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            "Quiet hours — ringing silently",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Amber300,
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+            }
 
             Box(
                 modifier = Modifier.size(170.dp),
@@ -531,11 +601,11 @@ fun IncomingCallScreen(
                     }
                 }
             } else {
-                Row(horizontalArrangement = Arrangement.spacedBy(32.dp), verticalAlignment = Alignment.CenterVertically) {
+                Row(horizontalArrangement = Arrangement.spacedBy(18.dp), verticalAlignment = Alignment.CenterVertically) {
                     ActionButton(
                         icon = Icons.AutoMirrored.Filled.PhoneForwarded,
                         label = "Decline", iconTint = Red400, labelColor = Red400,
-                        bgColor = GlassRed, size = 64.dp, onClick = onDecline,
+                        bgColor = GlassRed, size = 60.dp, onClick = onDecline,
                     )
 
                     ActionButton(
@@ -546,9 +616,15 @@ fun IncomingCallScreen(
                     )
 
                     ActionButton(
+                        icon = Icons.Default.RecordVoiceOver, label = "Voicemail",
+                        iconTint = Indigo300, labelColor = Indigo300,
+                        bgColor = GlassWhite, size = 60.dp, onClick = onVoicemail,
+                    )
+
+                    ActionButton(
                         icon = Icons.Default.Schedule, label = "Later",
                         iconTint = Indigo300, labelColor = Indigo300,
-                        bgColor = GlassWhite, size = 64.dp,
+                        bgColor = GlassWhite, size = 60.dp,
                         onClick = { showLaterPicker = true },
                     )
                 }

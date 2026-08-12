@@ -23,6 +23,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
+import android.app.TimePickerDialog
 import android.net.Uri
 import android.provider.OpenableColumns
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -65,6 +66,7 @@ enum class ConnectionTestStatus {
 class SettingsViewModel @Inject constructor(
     private val signalingClient: SignalingClient,
     val callerTuneManager: CallerTuneManager,
+    val quietHoursManager: QuietHoursManager,
 ) : ViewModel() {
     private val _serverHost = MutableStateFlow(ApiClient.serverHost)
     val serverHost: StateFlow<String> = _serverHost.asStateFlow()
@@ -223,6 +225,7 @@ fun SettingsScreen(
     val context = LocalContext.current
     var declineTemplate by remember { mutableStateOf(MessageTemplates.declineMessage(context)) }
     var laterTemplate by remember { mutableStateOf(MessageTemplates.laterTemplateRaw(context)) }
+    var voicemailTemplate by remember { mutableStateOf(MessageTemplates.voicemailMessage(context)) }
 
     var showAddAiDialog by remember { mutableStateOf(false) }
     var keyToDelete by remember { mutableStateOf<AiKeyItem?>(null) }
@@ -569,8 +572,36 @@ fun SettingsScreen(
                                 laterSaved = false
                             }
                         }
+                        Spacer(modifier = Modifier.height(16.dp))
+                        var voicemailSaved by remember { mutableStateOf(false) }
+                        TemplateEditor(
+                            title = "Voicemail message",
+                            subtitle = "Sent to the AI when you leave a voicemail instead of declining",
+                            value = voicemailTemplate,
+                            onValueChange = { voicemailTemplate = it },
+                            onSave = {
+                                MessageTemplates.setVoicemailMessage(context, voicemailTemplate)
+                                voicemailSaved = true
+                            },
+                            onReset = {
+                                voicemailTemplate = MessageTemplates.VOICEMAIL_DEFAULT
+                                MessageTemplates.resetVoicemail(context)
+                            },
+                            saved = voicemailSaved,
+                        )
+                        LaunchedEffect(voicemailSaved) {
+                            if (voicemailSaved) {
+                                delay(2000)
+                                voicemailSaved = false
+                            }
+                        }
                     }
                 }
+            }
+
+            // ── Quiet Hours (backlog item 6) ────────────────────
+            SettingsSection(title = "QUIET HOURS") {
+                QuietHoursCard(manager = viewModel.quietHoursManager)
             }
 
             // ── AI Connections ────────────────────────────
@@ -707,6 +738,40 @@ fun SettingsScreen(
                             icon = Icons.Default.Cloud,
                             title = "Connection Type",
                             subtitle = if (Regex("^[\\d.]+$").matches(serverHost)) "Local Network ($serverHost)" else "Production ($serverHost)",
+                        )
+                    }
+                }
+            }
+
+            // ── Privacy & Data (backlog item 17) ───────────────
+            SettingsSection(title = "PRIVACY & DATA") {
+                GlassCard {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text(
+                            text = "Your voice stays on your device.",
+                            style = MaterialTheme.typography.titleSmall,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            fontWeight = FontWeight.Medium,
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = "Speech recognition and spoken replies use your phone's built-in " +
+                                "speech services. The AgentCall backend never receives audio — only " +
+                                "the text transcript. Transcripts are kept in memory on the server " +
+                                "for a short window (about an hour after a call) and are never sold " +
+                                "or shared.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            lineHeight = 18.sp,
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = "Note: some device speech engines may process audio through their own " +
+                                "cloud services (e.g. Google's on-device/online recognizer). To keep " +
+                                "voice fully on-device, set your device's speech service to offline mode.",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
+                            lineHeight = 16.sp,
                         )
                     }
                 }
@@ -985,6 +1050,89 @@ private fun SettingsDivider() {
         color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
         modifier = Modifier.padding(start = 66.dp, end = 16.dp),
     )
+}
+
+/**
+ * Global quiet hours editor (backlog item 6). Stored in SharedPreferences via
+ * QuietHoursManager — survives app restarts; the backend is never touched.
+ */
+@Composable
+private fun QuietHoursCard(manager: QuietHoursManager) {
+    val context = LocalContext.current
+    var enabled by remember { mutableStateOf(manager.globalEnabled) }
+    var startMin by remember { mutableIntStateOf(manager.globalStartMinutes) }
+    var endMin by remember { mutableIntStateOf(manager.globalEndMinutes) }
+
+    fun openPicker(initial: Int, onPicked: (Int) -> Unit) {
+        TimePickerDialog(
+            context,
+            { _, hour, minute -> onPicked(hour * 60 + minute) },
+            initial / 60,
+            initial % 60,
+            true,
+        ).show()
+    }
+
+    GlassCard {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.Nightlight, "Quiet hours", tint = Indigo400, modifier = Modifier.size(20.dp))
+                Spacer(modifier = Modifier.width(10.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Quiet hours",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        fontWeight = FontWeight.Medium,
+                    )
+                    Text(
+                        text = "Calls ring silently in this window, and the calling AI is told the window.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Switch(
+                    checked = enabled,
+                    onCheckedChange = { on -> enabled = on; manager.globalEnabled = on },
+                )
+            }
+
+            if (enabled) {
+                Spacer(modifier = Modifier.height(12.dp))
+                InfoRow(
+                    icon = Icons.Default.Schedule,
+                    title = "Start",
+                    subtitle = QuietHoursManager.minutesToLabel(startMin),
+                    onClick = { openPicker(startMin) { startMin = it; manager.setGlobalRange(it, endMin) } },
+                )
+                InfoRow(
+                    icon = Icons.Default.Schedule,
+                    title = "End",
+                    subtitle = QuietHoursManager.minutesToLabel(endMin),
+                    onClick = { openPicker(endMin) { endMin = it; manager.setGlobalRange(startMin, it) } },
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+
+                val nowMinutes = java.time.LocalTime.now().toSecondOfDay() / 60
+                val isActiveNow = QuietHoursManager.isMinutesInRange(nowMinutes, startMin, endMin)
+                val wrap = if (startMin > endMin) " (overnight)" else ""
+                Text(
+                    text = if (isActiveNow) {
+                        "Quiet hours are ACTIVE now — incoming rings are silent."
+                    } else {
+                        "Quiet hours apply ${
+                            QuietHoursManager.minutesToLabel(startMin)
+                        } → ${
+                            QuietHoursManager.minutesToLabel(endMin)
+                        }$wrap. You can still answer an important call."
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (isActiveNow) Amber400 else MaterialTheme.colorScheme.onSurfaceVariant,
+                    lineHeight = 16.sp,
+                )
+            }
+        }
+    }
 }
 
 @Composable
