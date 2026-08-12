@@ -14,11 +14,15 @@ import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import com.agentcall.app.ForegroundTracker
+import com.agentcall.app.MainActivity
 import com.agentcall.app.R
 import com.agentcall.app.data.api.ApiClient
 import com.agentcall.app.data.api.ApiService
 import com.agentcall.app.data.api.CallbackRequest
 import com.agentcall.app.data.api.CancelRequest
+import com.agentcall.app.data.api.CompleteRequest
+import com.agentcall.app.data.api.CompleteResultPayload
 import com.agentcall.app.data.database.dao.TranscriptMessageDao
 import com.agentcall.app.data.repository.CallRepository
 import dagger.hilt.android.AndroidEntryPoint
@@ -42,6 +46,10 @@ class CallService : Service() {
     // on this scope so a service teardown can never cancel a pending delivery.
     private val retryScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var wakeLock: PowerManager.WakeLock? = null
+    // Backlog item 13: one-shot resource-release guard — every terminal path
+    // funnels through releaseCallResources(), and double-releases are no-ops.
+    private var resourcesReleased = false
+    private var ttsIdleJob: kotlinx.coroutines.Job? = null
 
     var callId: String? = null
     var textToSpeech: TextToSpeech? = null
@@ -146,6 +154,10 @@ class CallService : Service() {
             ACTION_START_CALL -> {
                 val id = intent.getStringExtra(EXTRA_CALL_ID) ?: return START_NOT_STICKY
                 val callerName = intent.getStringExtra(EXTRA_CALLER_NAME) ?: "AI Agent"
+                // A fresh call owns fresh resources (the service instance may
+                // have survived an earlier call's endCall + idle TTS shutdown).
+                resourcesReleased = false
+                ttsIdleJob?.cancel()
                 callId = id
                 callStartMs = System.currentTimeMillis()
                 firstWordLogged = false
@@ -185,7 +197,10 @@ class CallService : Service() {
             ACTION_END_CALL -> {
                 val cid = intent.getStringExtra(EXTRA_CALL_ID) ?: callId
                 if (cid != null) {
-                    scope.launch { repository.saveCallEnded(cid, "ended") }
+                    scope.launch {
+                        repository.saveCallEnded(cid, "ended")
+                        deriveSummary()?.let { repository.saveCallSummary(cid, it) }
+                    }
                     retryWithBackoff(cid, KEY_PENDING_COMPLETES, "COMPLETE") { attemptComplete(it) }
                 }
                 CallEventBus.emit(CallEvent.CallEnded)
@@ -195,7 +210,15 @@ class CallService : Service() {
             ACTION_CANCEL_CALL -> {
                 val id = intent.getStringExtra(EXTRA_CALL_ID) ?: return START_NOT_STICKY
                 val note = intent.getStringExtra(EXTRA_TEXT)?.takeIf { it.isNotBlank() }
-                if (note != null) savePendingNote(id, note)
+                if (note != null) {
+                    savePendingNote(id, note)
+                    // Local transcript: the decline/voicemail note shows in
+                    // history before the backend syncs it (backlog item 5).
+                    // Written once per action; saveTranscriptLocally later
+                    // replaces the local copy with server truth, so a retried
+                    // backend POST can never duplicate the row.
+                    scope.launch { repository.saveUserTextMessage(id, note) }
+                }
                 retryWithBackoff(id, KEY_PENDING_CANCELS, "CANCEL") { attemptCancel(it) }
             }
             ACTION_SCHEDULE_CALLBACK -> {
@@ -242,13 +265,37 @@ class CallService : Service() {
 
     private suspend fun attemptComplete(callId: String): Boolean {
         return try {
-            api.completeCall(callId)
+            // Backlog item 3: surface the call summary. The client-derived
+            // recap (last AI message) travels with the COMPLETE request so the
+            // backend result carries it even when the AI never sent one.
+            api.completeCall(
+                callId,
+                CompleteRequest(result = CompleteResultPayload(transcriptSummary = deriveSummary())),
+            )
+            // Then persist the authoritative recap — the backend's computed
+            // transcriptSummary when present, else what we derived.
+            runCatching {
+                val call = api.getCall(callId)
+                (call.result?.transcriptSummary ?: deriveSummary())?.let {
+                    repository.saveCallSummary(callId, it)
+                }
+            }
             Log.i(TAG, "[COMPLETE] backend confirmed completion for $callId")
             true
         } catch (e: Exception) {
             Log.w(TAG, "[COMPLETE] complete $callId failed, will retry", e)
             false
         }
+    }
+
+    /**
+     * Backlog item 3: the recap shown in history = the last AI message,
+     * truncated to a readable one-liner (140 chars, no trailing punctuation).
+     */
+    private fun deriveSummary(): String? {
+        val text = lastAiMessage.trim()
+        if (text.isBlank()) return null
+        return text.take(140).trimEnd('.', '!', '?', ' ', ',', ':', ';')
     }
 
     private suspend fun attemptAnswer(callId: String): Boolean {
@@ -406,6 +453,7 @@ class CallService : Service() {
                             CallEventBus.emit(CallEvent.CallEnded)
                             speakTextOnMain("Call ended.")
                             repository.saveCallEnded(callId, "ended")
+                            deriveSummary()?.let { repository.saveCallSummary(callId, it) }
                             delay(1500); stopSelf()
                         }
                         is VoiceBridgeEvent.CallCancelled -> {
@@ -413,6 +461,7 @@ class CallService : Service() {
                             CallEventBus.emit(CallEvent.CallEnded)
                             speakTextOnMain("Call was cancelled.")
                             repository.saveCallEnded(callId, "cancelled")
+                            deriveSummary()?.let { repository.saveCallSummary(callId, it) }
                             delay(1500); stopSelf()
                         }
                         is VoiceBridgeEvent.CallExpired -> {
@@ -421,6 +470,25 @@ class CallService : Service() {
                             // anyone answered (agent offline / no answer).
                             CallEventBus.emit(CallEvent.CallEnded)
                             repository.saveCallEnded(callId, "expired")
+                            deriveSummary()?.let { repository.saveCallSummary(callId, it) }
+                            // Backlog item 1: when the app is backgrounded the
+                            // miss must still surface — a silent notification
+                            // that deep-links into the agent's profile. (The
+                            // SignalingForegroundService is the primary path
+                            // for unanswered rings; this covers the edge where
+                            // the service was bound to the call.)
+                            if (!ForegroundTracker.isForeground) {
+                                scope.launch {
+                                    repository.getCallRecord(callId)?.let { record ->
+                                        showMissedCallNotification(
+                                            this@CallService,
+                                            callId,
+                                            record.callerName,
+                                            record.agentId,
+                                        )
+                                    }
+                                }
+                            }
                             delay(1500); stopSelf()
                         }
                         is VoiceBridgeEvent.AiWaitStatus -> {
@@ -623,6 +691,19 @@ class CallService : Service() {
     }
 
     private fun endCall() {
+        releaseCallResources()
+        scheduleTtsIdleShutdown()
+        callId = null
+    }
+
+    /**
+     * Backlog item 13: every terminal path (END_CALL, CallCancelled,
+     * CallExpired, disconnect, onDestroy) funnels here exactly once. The
+     * guard makes double-releases harmless.
+     */
+    private fun releaseCallResources() {
+        if (resourcesReleased) return
+        resourcesReleased = true
         textToSpeech?.stop()
         speechRecognizer?.destroy()
         speechRecognizer = null
@@ -632,6 +713,23 @@ class CallService : Service() {
         audioManager.abandonFocus()
         releaseWakeLock()
         stopForeground(STOP_FOREGROUND_REMOVE)
+    }
+
+    /**
+     * Backlog item 13: the TTS engine must not stay alive app-wide after a
+     * call. Shut it down after an idle window; initTts() recreates on demand
+     * (ttsInitialized is reset so the re-init path is not short-circuited).
+     */
+    private fun scheduleTtsIdleShutdown() {
+        ttsIdleJob?.cancel()
+        ttsIdleJob = retryScope.launch {
+            delay(TTS_IDLE_SHUTDOWN_MS)
+            if (callId == null && !isRecording && !isAiSpeaking) {
+                runCatching { textToSpeech?.shutdown() }
+                textToSpeech = null
+                ttsInitialized = false
+            }
+        }
     }
 
     private fun acquireWakeLock() {
@@ -698,6 +796,11 @@ class CallService : Service() {
         // v2: old "incoming_call" channel had no ringtone/vibration and ColorOS drops
         // channel updates/delete, so an in-place upgrade is impossible — version the ID.
         const val CHANNEL_INCOMING_CALL = "incoming_call_v2"
+        // Quiet-hours variant (backlog item 6): silent ring channel so DND
+        // never makes noise while the call still reaches the screen.
+        const val CHANNEL_INCOMING_CALL_QUIET = "incoming_call_quiet_v1"
+        // Missed-call channel (backlog item 1): silent, informational only.
+        const val CHANNEL_MISSED_CALLS = "missed_calls"
         const val EXTRA_CALLER_NAME = "caller_name"
         const val EXTRA_CONTEXT_SUMMARY = "context_summary"
         const val EXTRA_PRIORITY = "priority"
@@ -709,11 +812,24 @@ class CallService : Service() {
         private const val KEY_PENDING_USER_TEXTS = "pending_user_texts"
         private const val NOTIFICATION_ID_ONGOING = 1001
         private const val NOTIFICATION_ID_INCOMING = 1002
+        private const val NOTIFICATION_ID_MISSED = 1005
+        private const val TTS_IDLE_SHUTDOWN_MS = 60_000L
         private const val WARMUP_UTTERANCE_ID = "tts-warmup"
         private const val WARMUP_TEXT = "ok"
         private const val WARMUP_FILE = "tts-warmup.wav"
 
-        fun showIncomingCallNotification(context: Context, callId: String, callerName: String, summary: String) {
+        /**
+         * [quiet] (backlog item 6): post to the silent quiet-hours channel.
+         * The full-screen intent still launches the ring UI — DND silences
+         * the phone, it never hides the call.
+         */
+        fun showIncomingCallNotification(
+            context: Context,
+            callId: String,
+            callerName: String,
+            summary: String,
+            quiet: Boolean = false,
+        ) {
             val mgr = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             val canUseFullScreen = Build.VERSION.SDK_INT < 34 || mgr.canUseFullScreenIntent()
 
@@ -731,12 +847,13 @@ class CallService : Service() {
             val pi = PendingIntent.getActivity(context, callId.hashCode(), intent,
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
 
-            val notification = NotificationCompat.Builder(context, CHANNEL_INCOMING_CALL)
-                .setContentTitle("Incoming AI Call")
+            val channel = if (quiet) CHANNEL_INCOMING_CALL_QUIET else CHANNEL_INCOMING_CALL
+            val notification = NotificationCompat.Builder(context, channel)
+                .setContentTitle(if (quiet) "Incoming AI Call (quiet)" else "Incoming AI Call")
                 .setContentText(summary.ifBlank { "$callerName is calling..." })
                 .setSmallIcon(R.drawable.ic_agent)
                 .setColor(android.graphics.Color.parseColor("#6366F1"))
-                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setPriority(if (quiet) NotificationCompat.PRIORITY_LOW else NotificationCompat.PRIORITY_HIGH)
                 .setCategory(NotificationCompat.CATEGORY_CALL)
                 .setFullScreenIntent(pi, true)
                 // Without a contentIntent the notification is inert when the
@@ -783,6 +900,34 @@ class CallService : Service() {
         fun cancelIncomingNotification(context: Context) {
             val mgr = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             mgr.cancel(NOTIFICATION_ID_INCOMING)
+        }
+
+        /**
+         * Silent missed-call notification (backlog item 1): only posted when
+         * the app is backgrounded; tap opens the agent's profile via the
+         * MainActivity extra. Shared by the foreground service (primary path)
+         * and the in-call service (edge case).
+         */
+        fun showMissedCallNotification(context: Context, callId: String, callerName: String, agentId: String) {
+            val mgr = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            val intent = Intent(context, MainActivity::class.java).apply {
+                putExtra("profile_id", agentId)
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+            }
+            val pi = PendingIntent.getActivity(
+                context, callId.hashCode(), intent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
+            val notification = NotificationCompat.Builder(context, CHANNEL_MISSED_CALLS)
+                .setContentTitle("Missed call from $callerName")
+                .setContentText("The AI tried to call you but no one answered. Tap to call back.")
+                .setSmallIcon(R.drawable.ic_missed_call)
+                .setColor(android.graphics.Color.parseColor("#F59E0B"))
+                .setPriority(NotificationCompat.PRIORITY_LOW)
+                .setAutoCancel(true)
+                .setContentIntent(pi)
+                .build()
+            mgr.notify(NOTIFICATION_ID_MISSED, notification)
         }
     }
 }

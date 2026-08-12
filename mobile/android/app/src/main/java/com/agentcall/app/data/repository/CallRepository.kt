@@ -7,11 +7,15 @@ import com.agentcall.app.data.database.dao.TranscriptMessageDao
 import com.agentcall.app.data.database.entity.AiProfileEntity
 import com.agentcall.app.data.database.entity.CallRecordEntity
 import com.agentcall.app.data.database.entity.TranscriptMessageEntity
+import com.agentcall.app.call.agentSlug
 import com.agentcall.app.data.model.ActiveCall
 import com.agentcall.app.data.model.TranscriptMessage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.builtins.serializer
+import kotlinx.serialization.json.Json
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -45,6 +49,27 @@ class CallRepository @Inject constructor(
         getOrCreateProfile(agentId, name)
     }
 
+    /**
+     * Backlog item 1: create the history row the moment a ring starts, so a
+     * decline note, an expiry, or an answer all have a record to update.
+     * Without this, unanswered rings would never appear in history at all
+     * (saveCallEnded no-ops on a missing row) and the transcript FK would
+     * reject the decline/voicemail note insert.
+     */
+    suspend fun markCallRinging(callId: String, agentId: String, callerName: String, startedAt: Long) {
+        callDao.upsert(
+            CallRecordEntity(
+                callId = callId,
+                agentId = agentId,
+                callerName = callerName,
+                status = "ringing",
+                reason = "",
+                summary = "",
+                startedAt = startedAt,
+            )
+        )
+    }
+
     suspend fun markCallAnswered(callId: String, agentId: String, callerName: String) {
         val now = System.currentTimeMillis()
         callDao.upsert(
@@ -67,6 +92,26 @@ class CallRepository @Inject constructor(
         val duration = ((now - call.startedAt) / 1000).toInt()
         callDao.endCall(callId, status, now, duration)
         saveTranscriptLocally(callId)
+    }
+
+    /** Backlog item 3: the AI-generated recap, written once at call end. */
+    suspend fun saveCallSummary(callId: String, summary: String) {
+        if (summary.isBlank()) return
+        callDao.updateSummary(callId, summary.trim())
+    }
+
+    /** Raw record lookup (missed-call notification needs agentId + name). */
+    suspend fun getCallRecord(callId: String): CallRecordEntity? = callDao.getCall(callId)
+
+    suspend fun getProfile(id: String): AiProfileEntity? = profileDao.getProfile(id)
+
+    /**
+     * Resolve a profile by its display name: profiles are keyed by the
+     * slugified name, but some call sites only have the display name.
+     */
+    suspend fun getProfileByName(name: String): AiProfileEntity? {
+        profileDao.getProfile(name)?.let { return it }
+        return profileDao.getProfile(name.agentSlug())
     }
 
     suspend fun saveUserTextMessage(callId: String, text: String) {
@@ -129,6 +174,30 @@ class CallRepository @Inject constructor(
             withContext(Dispatchers.IO) { api.getCall(callId) }.status
         } catch (_: Exception) {
             null
+        }
+    }
+
+    // ── Per-agent ringtone + quick replies (backlog items 7 & 9) ──────────
+
+    suspend fun setProfileRingtone(agentId: String, uri: String?, label: String?) {
+        profileDao.updateRingtone(agentId, uri, label)
+    }
+
+    suspend fun setProfileQuickReplies(agentId: String, chips: List<String>) {
+        val clean = chips.map { it.trim() }.filter { it.isNotBlank() }.distinct().take(MAX_QUICK_REPLIES)
+        profileDao.updateQuickReplies(agentId, if (clean.isEmpty()) null else json.encodeToString(ListSerializer(String.serializer()), clean))
+    }
+
+    companion object {
+        const val MAX_QUICK_REPLIES = 4
+        private val json = Json { ignoreUnknownKeys = true }
+
+        /** Parse stored JSON chips; bad data degrades to an empty list. */
+        fun parseQuickReplies(raw: String?): List<String> {
+            if (raw.isNullOrBlank()) return emptyList()
+            return runCatching {
+                json.decodeFromString(ListSerializer(String.serializer()), raw)
+            }.getOrDefault(emptyList())
         }
     }
 }

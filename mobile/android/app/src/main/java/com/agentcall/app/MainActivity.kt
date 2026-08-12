@@ -55,9 +55,12 @@ class MainActivity : ComponentActivity() {
 
         requestNotificationPermission()
 
+        pendingProfileId = intent.getStringExtra("profile_id")
+
         setContent {
             AgentCallTheme {
                 MainApp(
+                    initialProfileId = pendingProfileId,
                     onCallClicked = { callId ->
                         val intent = Intent(this@MainActivity, CallActivity::class.java).apply {
                             putExtra("call_id", callId)
@@ -68,6 +71,15 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        // Missed-call notifications deep-link into a profile (backlog item 1).
+        intent.getStringExtra("profile_id")?.let { pendingProfileId = it }
+    }
+
+    private var pendingProfileId: String? by mutableStateOf(null)
 }
 
 private data class NavItem(
@@ -82,12 +94,24 @@ private val navItems = listOf(
 )
 
 @Composable
-fun MainApp(onCallClicked: (String) -> Unit = {}) {
+fun MainApp(
+    initialProfileId: String? = null,
+    onCallClicked: (String) -> Unit = {},
+) {
     val navController = rememberNavController()
     var selectedIndex by remember { mutableIntStateOf(0) }
 
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = navBackStackEntry?.destination?.route
+
+    // Missed-call notification deep link: open the agent's profile once the
+    // NavHost is ready (backlog item 1).
+    LaunchedEffect(initialProfileId) {
+        val id = initialProfileId
+        if (id != null) {
+            navController.navigate("profile/$id")
+        }
+    }
 
     val showBottomBar = currentRoute in listOf("home", "settings")
 

@@ -24,6 +24,9 @@ interface CallRecordDao {
     @Query("UPDATE call_records SET status = :status, endedAt = :endedAt, durationSeconds = :durationSeconds WHERE callId = :callId")
     suspend fun endCall(callId: String, status: String, endedAt: Long, durationSeconds: Int)
 
+    @Query("UPDATE call_records SET summary = :summary WHERE callId = :callId")
+    suspend fun updateSummary(callId: String, summary: String)
+
     @Query("UPDATE call_records SET transcriptFetched = 1 WHERE callId = :callId")
     suspend fun markTranscriptFetched(callId: String)
 }

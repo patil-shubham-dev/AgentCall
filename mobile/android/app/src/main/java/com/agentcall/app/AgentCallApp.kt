@@ -17,6 +17,7 @@ class AgentCallApp : Application() {
         super.onCreate()
         createNotificationChannels()
         checkFullScreenIntentPermission()
+        ForegroundTracker.register(this)
     }
 
     private fun checkFullScreenIntentPermission() {
@@ -62,6 +63,36 @@ class AgentCallApp : Application() {
             vibrationPattern = longArrayOf(0, 1000, 500, 1000)
         }
         manager.createNotificationChannel(incomingCall)
+
+        // Quiet-hours variant of the incoming ring (backlog item 6): same
+        // full-screen behavior, but IMPORTANCE_LOW with no sound and no
+        // vibration, so DND never rings the user at 3 AM while still letting
+        // them answer an important call.
+        val quietIncoming = NotificationChannel(
+            CallService.CHANNEL_INCOMING_CALL_QUIET,
+            "Incoming Calls (Quiet Hours)",
+            NotificationManager.IMPORTANCE_LOW,
+        ).apply {
+            description = "Silent incoming-call notification during quiet hours"
+            setShowBadge(false)
+            setSound(null, null)
+            enableVibration(false)
+        }
+        manager.createNotificationChannel(quietIncoming)
+
+        // Missed-call notification (backlog item 1): silent, informational
+        // only — fired when a ring expires while the app is backgrounded.
+        val missedCalls = NotificationChannel(
+            CallService.CHANNEL_MISSED_CALLS,
+            "Missed Calls",
+            NotificationManager.IMPORTANCE_LOW,
+        ).apply {
+            description = "Quiet notification when a call rings unanswered"
+            setShowBadge(true)
+            setSound(null, null)
+            enableVibration(false)
+        }
+        manager.createNotificationChannel(missedCalls)
 
         // Legacy "incoming_call" channel predates ringtone/vibration. ColorOS ignores
         // channel updates AND deleteNotificationChannel, so the versioned ID above is

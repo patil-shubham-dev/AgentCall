@@ -7,7 +7,12 @@ import retrofit2.http.*
 
 @Serializable
 data class CompleteRequest(
-    @SerialName("result") val result: String? = null,
+    @SerialName("result") val result: CompleteResultPayload? = null,
+)
+
+@Serializable
+data class CompleteResultPayload(
+    @SerialName("transcript_summary") val transcriptSummary: String? = null,
 )
 
 @Serializable
@@ -78,6 +83,14 @@ data class AiKeyDeleteResponse(
     @SerialName("key_id") val keyId: String = "",
 )
 
+@Serializable
+data class AgentStatusResponse(
+    @SerialName("agent_id") val agentId: String = "",
+    val online: Boolean = false,
+    @SerialName("last_seen_at") val lastSeenAt: String? = null,
+    @SerialName("current_call_id") val currentCallId: String? = null,
+)
+
 interface ApiService {
 
     @POST("calls")
@@ -136,4 +149,7 @@ interface ApiService {
 
     @DELETE("ai/keys/{keyId}")
     suspend fun deleteAiKey(@Path("keyId") keyId: String): AiKeyDeleteResponse
+
+    @GET("agents/{agentId}/status")
+    suspend fun getAgentStatus(@Path("agentId") agentId: String): AgentStatusResponse
 }
