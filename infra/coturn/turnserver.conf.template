@@ -1,0 +1,26 @@
+# coturn configuration template.
+# The entrypoint (entrypoint.sh) substitutes ${COTURN_SECRET} and
+# ${COTURN_REALM} at container start — never run turnserver with this file
+# directly, or the literal placeholder becomes the shared secret.
+listening-port=3478
+tls-listening-port=5349
+listening-ip=0.0.0.0
+relay-ip=0.0.0.0
+fingerprint
+lt-cred-mech
+use-auth-secret
+static-auth-secret=${COTURN_SECRET}
+realm=${COTURN_REALM}
+max-bps=1024000
+user-quota=100
+total-quota=1000
+# Block relaying into private/link-local ranges (SSRF protection)
+denied-peer-ip=10.0.0.0-10.255.255.255
+denied-peer-ip=172.16.0.0-172.31.255.255
+denied-peer-ip=192.168.0.0-192.168.255.255
+denied-peer-ip=100.64.0.0-100.127.255.255
+denied-peer-ip=169.254.0.0-169.254.255.255
+denied-peer-ip=127.0.0.0-127.255.255.255
+# Log to stdout so container logs capture it
+log-file=stdout
+simple-log

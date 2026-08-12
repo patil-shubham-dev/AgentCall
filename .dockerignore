@@ -1,0 +1,11 @@
+**/node_modules/
+**/dist/
+**/build/
+**/coverage/
+**/*.log
+**/.env
+**/.env.*
+!**/.env.example
+**/.gradle/
+infra/caddy_data/
+infra/caddy_config/

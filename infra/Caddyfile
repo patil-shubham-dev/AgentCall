@@ -1,5 +1,6 @@
 {$CADDY_DOMAIN:localhost} {
-    tls internal
+    # No explicit tls directive: Caddy automatically issues a Let's Encrypt
+    # certificate for public domains, and uses its internal CA for localhost.
 
     @api {
         path /api/*

@@ -6,12 +6,12 @@ permissions:
 
 on:
   push:
-    branches: [main]
+    branches: [develop, staging, main]
     paths:
       - 'backend/**'
       - 'infra/**'
   pull_request:
-    branches: [main]
+    branches: [develop, main]
     paths:
       - 'backend/**'
 
@@ -51,7 +51,8 @@ jobs:
           cache-dependency-path: backend/package-lock.json
       - run: npm ci
       - run: npm test
-      - run: npm run test:load
+        env:
+          SERVICE_TOKEN: test
 
   security-scan:
     name: Security Audit & Dependency Scan

@@ -1,0 +1,10 @@
+node_modules/
+dist/
+coverage/
+logs/
+*.log
+.env
+.env.*
+!.env.example
+startup_test*.log
+backend.log

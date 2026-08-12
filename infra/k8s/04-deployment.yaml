@@ -29,8 +29,9 @@ spec:
         fsGroup: 1001
       containers:
         - name: backend
-          image: voicebridge-backend:latest
-          imagePullPolicy: IfNotPresent
+          # Image pushed by .github/workflows/ci-cd.yml (ghcr.io/<owner>/<repo>/voicebridge-backend)
+          image: ghcr.io/patil-shubham-dev/agentcall/voicebridge-backend:latest
+          imagePullPolicy: Always
           ports:
             - containerPort: 4000
               protocol: TCP
