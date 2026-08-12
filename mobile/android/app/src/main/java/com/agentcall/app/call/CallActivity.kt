@@ -45,6 +45,7 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -63,6 +64,10 @@ class CallActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val callId = intent.getStringExtra("call_id") ?: run { finish(); return }
+        val isOutgoing = intent.getBooleanExtra("outgoing", false)
+        val callerName = intent.getStringExtra("caller_name") ?: "AI Agent"
+        // Voice-first: keep the screen lit for the duration of the call.
+        window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
             != PackageManager.PERMISSION_GRANTED) {
@@ -71,11 +76,21 @@ class CallActivity : ComponentActivity() {
 
         setContent {
             AgentCallTheme(darkTheme = true) {
-                ActiveCallScreen(callId = callId, context = this@CallActivity,
+                ActiveCallScreen(
+                    callId = callId,
+                    context = this@CallActivity,
                     contextSummary = intent.getStringExtra(CallService.EXTRA_CONTEXT_SUMMARY),
+                    agentName = callerName,
+                    isOutgoing = isOutgoing,
                     onEndCall = {
                         startService(Intent(this@CallActivity, CallService::class.java).apply {
                             action = CallService.ACTION_END_CALL
+                        })
+                        finish()
+                    },
+                    onCancelCall = {
+                        startService(Intent(this@CallActivity, CallService::class.java).apply {
+                            action = CallService.ACTION_CANCEL_CALL
                         })
                         finish()
                     })
@@ -89,7 +104,10 @@ fun ActiveCallScreen(
     callId: String,
     context: Context,
     onEndCall: () -> Unit,
+    onCancelCall: () -> Unit = onEndCall,
     contextSummary: String? = null,
+    agentName: String = "AI Agent",
+    isOutgoing: Boolean = false,
     viewModel: CallViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -100,8 +118,72 @@ fun ActiveCallScreen(
     val focusManager = LocalFocusManager.current
 
     LaunchedEffect(callId) {
-        viewModel.connect(callId, contextSummary)
+        viewModel.connect(callId, contextSummary, agentName, isOutgoing)
         while (true) { delay(250); viewModel.tick() }
+    }
+
+    // Outgoing: ringback until the first confirmation (call_answered /
+    // ai_message), then hand off to the real voice session.
+    var ringbackPlayer by remember { mutableStateOf<android.media.MediaPlayer?>(null) }
+    var ringbackStarted by remember { mutableStateOf(false) }
+
+    fun startRingback() {
+        if (ringbackStarted) return
+        ringbackStarted = true
+        val player = try {
+            android.media.MediaPlayer().apply {
+                setAudioAttributes(
+                    android.media.AudioAttributes.Builder()
+                        .setUsage(android.media.AudioAttributes.USAGE_VOICE_COMMUNICATION)
+                        .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                        .build()
+                )
+                setDataSource(context, android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_RINGTONE))
+                isLooping = true
+                setOnErrorListener { _, _, _ -> true }
+            }
+        } catch (e: Exception) {
+            null
+        }
+        ringbackPlayer = player
+        if (player != null) {
+            try {
+                player.prepare()
+                player.start()
+            } catch (_: Exception) {
+                player.release()
+                ringbackPlayer = null
+            }
+        }
+    }
+
+    fun stopRingback(ringback: android.media.MediaPlayer?) {
+        try {
+            ringback?.stop()
+            ringback?.release()
+        } catch (_: Exception) {
+        }
+        ringbackPlayer = null
+        ringbackStarted = false
+    }
+
+    LaunchedEffect(state.phase) {
+        if (state.phase == CallPhase.OUTGOING) {
+            startRingback()
+        } else if (state.phase == CallPhase.ACTIVE && isOutgoing) {
+            stopRingback(ringbackPlayer)
+            // The agent picked up: start the real session (ANSWER + greeting).
+            context.startService(Intent(context, CallService::class.java).apply {
+                action = CallService.ACTION_START_CALL
+                putExtra(CallService.EXTRA_CALL_ID, state.callId)
+                putExtra(CallService.EXTRA_CALLER_NAME, state.agentName)
+                putExtra(CallService.EXTRA_CONTEXT_SUMMARY, state.callContext.summary)
+            })
+        }
+    }
+
+    DisposableEffect(Unit) {
+        onDispose { stopRingback(ringbackPlayer) }
     }
 
     LaunchedEffect(state.messages.size) {
@@ -141,11 +223,44 @@ fun ActiveCallScreen(
                 Box(modifier = Modifier.size(8.dp).clip(CircleShape)
                     .background(if (state.isConnected) Green500.copy(alpha = 0.5f + dotAnim * 0.5f) else Amber400))
                 Spacer(modifier = Modifier.width(8.dp))
-                Text(state.statusText, style = MaterialTheme.typography.labelSmall,
-                    color = if (state.isConnected) Green500 else Amber400,
-                    modifier = Modifier.weight(1f))
-                Text(timerText, fontSize = 18.sp, fontFamily = FontFamily.Monospace,
+                Column(modifier = Modifier.weight(1f)) {
+                    // Voice-first: the agent's name is the identity on screen.
+                    Text(agentName, style = MaterialTheme.typography.titleMedium, color = Slate50,
+                        fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(state.statusText, style = MaterialTheme.typography.labelSmall,
+                        color = if (state.isConnected) Green500 else Amber400)
+                }
+                Text(
+                    if (state.phase == CallPhase.ACTIVE) {
+                        timerText
+                    } else {
+                        when (state.phase) {
+                            CallPhase.OUTGOING -> "Ringing…"
+                            CallPhase.CONNECTING -> "Connecting…"
+                            else -> timerText
+                        }
+                    },
+                    fontSize = 18.sp, fontFamily = FontFamily.Monospace,
                     fontWeight = FontWeight.Light, color = Slate50, letterSpacing = 1.sp)
+            }
+
+            // Reconnecting banner: the session stays live while the link heals.
+            AnimatedVisibility(visible = state.phase == CallPhase.RECONNECTING,
+                enter = slideInVertically(animationSpec = spring(dampingRatio = 0.8f)) + fadeIn(),
+                exit = slideOutVertically() + fadeOut()) {
+                Surface(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                    shape = RoundedCornerShape(12.dp), color = Amber400.copy(alpha = 0.12f),
+                ) {
+                    Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Box(modifier = Modifier.size(8.dp).clip(CircleShape).background(Amber400))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            "Reconnecting — the call stays live",
+                            style = MaterialTheme.typography.labelMedium, color = Amber300,
+                        )
+                    }
+                }
             }
 
             AnimatedVisibility(visible = state.aiResponding == false,
@@ -158,8 +273,14 @@ fun ActiveCallScreen(
                     Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                         Box(modifier = Modifier.size(8.dp).clip(CircleShape).background(Amber400))
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text("AI is not currently responding — your reply will be saved",
-                            style = MaterialTheme.typography.labelMedium, color = Amber300)
+                        Text(
+                            if (state.agentOnline == false) {
+                                "Agent is offline — your reply will be saved when they reconnect"
+                            } else {
+                                "AI is not currently responding — your reply will be saved"
+                            },
+                            style = MaterialTheme.typography.labelMedium, color = Amber300,
+                        )
                     }
                 }
             }
@@ -353,6 +474,13 @@ fun ActiveCallScreen(
                                 viewModel.setRecording(!state.isRecording)
                             })
 
+                        CallControl(
+                            icon = if (state.isMuted) Icons.Default.MicOff else Icons.Default.Mic,
+                            label = if (state.isMuted) "Unmute" else "Mute",
+                            tint = if (state.isMuted) Indigo400 else Slate50,
+                            bgColor = if (state.isMuted) GlassIndigo else GlassWhite,
+                            onClick = { viewModel.setMuted(context, !state.isMuted) })
+
                         var isSpeakerOn by remember { mutableStateOf(false) }
                         CallControl(
                             icon = if (isSpeakerOn) Icons.AutoMirrored.Filled.VolumeUp else Icons.AutoMirrored.Filled.VolumeDown,
@@ -384,16 +512,32 @@ fun ActiveCallScreen(
                             animationSpec = spring(dampingRatio = 0.5f, stiffness = 800f), label = "endCallPress"
                         )
                         Button(
-                            onClick = onEndCall,
+                            onClick = {
+                                if (isOutgoing && state.phase != CallPhase.ACTIVE) {
+                                    // Outgoing calls can be cancelled while ringing.
+                                    onCancelCall()
+                                } else {
+                                    onEndCall()
+                                }
+                            },
                             modifier = Modifier.size(56.dp).scale(pressScale), shape = CircleShape,
                             colors = ButtonDefaults.buttonColors(containerColor = Red500),
                             contentPadding = PaddingValues(0.dp),
                             interactionSource = remember { MutableInteractionSource() },
                         ) {
-                            Icon(Icons.AutoMirrored.Filled.PhoneForwarded, "End", modifier = Modifier.size(24.dp), tint = Slate50)
+                            Icon(
+                                if (isOutgoing && state.phase != CallPhase.ACTIVE)
+                                    Icons.Default.PhoneDisabled
+                                else Icons.AutoMirrored.Filled.PhoneForwarded,
+                                if (isOutgoing && state.phase != CallPhase.ACTIVE) "Cancel" else "End",
+                                modifier = Modifier.size(24.dp), tint = Slate50,
+                            )
                         }
                         Spacer(modifier = Modifier.height(2.dp))
-                        Text("End", style = MaterialTheme.typography.labelSmall, color = Red400, fontWeight = FontWeight.Medium)
+                        Text(
+                            if (isOutgoing && state.phase != CallPhase.ACTIVE) "Cancel" else "End",
+                            style = MaterialTheme.typography.labelSmall, color = Red400, fontWeight = FontWeight.Medium,
+                        )
                     }
                 }
             }

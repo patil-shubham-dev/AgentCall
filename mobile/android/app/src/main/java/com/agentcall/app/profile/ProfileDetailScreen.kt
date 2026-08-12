@@ -1,5 +1,6 @@
 package com.agentcall.app.profile
 
+import android.content.Intent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
@@ -7,6 +8,7 @@ import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -25,6 +27,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.Cancel
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Edit
@@ -51,11 +54,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.agentcall.app.call.CallActivity
 import com.agentcall.app.data.database.entity.CallRecordEntity
 import com.agentcall.app.ui.composables.AmbientBackground
 import com.agentcall.app.ui.composables.GradientAvatar
@@ -75,6 +80,7 @@ import com.agentcall.app.ui.theme.Slate900
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.UUID
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -86,6 +92,7 @@ fun ProfileDetailScreen(
     val profile by viewModel.profile.collectAsStateWithLifecycle()
     val calls by viewModel.calls.collectAsStateWithLifecycle()
     var showEditSheet by remember { mutableStateOf(false) }
+    val context = LocalContext.current
 
     Scaffold(
         containerColor = Color.Transparent,
@@ -127,6 +134,14 @@ fun ProfileDetailScreen(
                             name = p.name,
                             callCount = p.callCount,
                             lastCalledAt = p.lastCalledAt,
+                            onCall = {
+                                // Outgoing call: fresh call id, ringback until the agent picks up.
+                                context.startActivity(Intent(context, CallActivity::class.java).apply {
+                                    putExtra("call_id", UUID.randomUUID().toString())
+                                    putExtra("caller_name", p.name)
+                                    putExtra("outgoing", true)
+                                })
+                            },
                         )
                         Spacer(modifier = Modifier.height(16.dp))
                         Text(
@@ -177,7 +192,7 @@ fun ProfileDetailScreen(
 }
 
 @Composable
-private fun ProfileDetailHeader(name: String, callCount: Int, lastCalledAt: Long?) {
+private fun ProfileDetailHeader(name: String, callCount: Int, lastCalledAt: Long?, onCall: () -> Unit) {
     Column(
         modifier = Modifier.fillMaxWidth(),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -192,6 +207,35 @@ private fun ProfileDetailHeader(name: String, callCount: Int, lastCalledAt: Long
             style = MaterialTheme.typography.bodyMedium,
             color = Slate400,
         )
+        Spacer(modifier = Modifier.height(16.dp))
+        // Primary call entry: outgoing call with ringback + cancel.
+        Surface(
+            onClick = onCall,
+            shape = RoundedCornerShape(28.dp),
+            color = Color.Transparent,
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(28.dp))
+                    .background(Brush.horizontalGradient(listOf(GradientBrandStart, GradientBrandEnd)))
+                    .padding(horizontal = 28.dp, vertical = 12.dp),
+            ) {
+                Icon(
+                    Icons.Default.Call,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp),
+                    tint = Slate50,
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    "Call",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = Slate50,
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
+        }
     }
 }
 

@@ -6,7 +6,6 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.agentcall.app.data.api.ApiClient
 import com.agentcall.app.data.api.ApiService
-import com.agentcall.app.data.database.dao.TranscriptMessageDao
 import com.agentcall.app.data.repository.CallRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.delay
@@ -33,12 +32,30 @@ data class CallContextInfo(
     val options: List<String> = emptyList(),
 )
 
+/**
+ * Explicit call-phase machine (doc REAL_CALL_IMPROVEMENTS §6.2):
+ * - OUTGOING: user dialed; waiting for the AI to pick up (ringback plays).
+ * - RINGING: AI called the phone; waiting for the user to answer (not used
+ *   by CallActivity — IncomingCallActivity owns the pre-answer surface —
+ *   kept for parity with the enum).
+ * - ACTIVE: answered; transcript + timer live.
+ * - RECONNECTING: the signaling socket dropped mid-call; the call is still
+ *   alive server-side and resumes on reconnect.
+ * - ENDED: terminal; UI shows the final state.
+ */
+enum class CallPhase { CONNECTING, OUTGOING, RINGING, ACTIVE, RECONNECTING, ENDED }
+
 data class ActiveCallUiState(
+    val phase: CallPhase = CallPhase.CONNECTING,
     val isConnected: Boolean = false,
+    val isOutgoing: Boolean = false,
+    val agentName: String = "AI Agent",
     val isRecording: Boolean = false,
     val isProcessing: Boolean = false,
     val isAiSpeaking: Boolean = false,
     val isPaused: Boolean = false,
+    val isMuted: Boolean = false,
+    val isSpeakerOn: Boolean = false,
     val elapsedSeconds: Int = 0,
     val callContext: CallContextInfo = CallContextInfo(),
     val messages: List<ChatBubble> = emptyList(),
@@ -48,24 +65,39 @@ data class ActiveCallUiState(
     val callId: String = "",
     val aiResponding: Boolean? = null,
     val aiRespondingUntilMs: Long? = null,
+    val agentOnline: Boolean = true,
 )
 
 @HiltViewModel
 class CallViewModel @Inject constructor(
     private val repository: CallRepository,
+    private val signalingClient: SignalingClient,
+    private val audioManager: CallAudioManager,
 ) : ViewModel() {
 
     private var messageCounter = 0
     private var callStartTime = 0L
     @Volatile private var isSending = false
     private var eventCollectionJob: kotlinx.coroutines.Job? = null
+    private var connectionStateJob: kotlinx.coroutines.Job? = null
 
     private val _uiState = MutableStateFlow(ActiveCallUiState())
     val uiState: StateFlow<ActiveCallUiState> = _uiState.asStateFlow()
 
-    fun connect(callId: String, contextSummary: String? = null) {
+    fun connect(
+        callId: String,
+        contextSummary: String? = null,
+        agentName: String = "AI Agent",
+        isOutgoing: Boolean = false,
+    ) {
         callStartTime = System.currentTimeMillis()
-        _uiState.value = _uiState.value.copy(callId = callId)
+        _uiState.value = _uiState.value.copy(
+            callId = callId,
+            agentName = agentName,
+            isOutgoing = isOutgoing,
+            phase = if (isOutgoing) CallPhase.OUTGOING else CallPhase.CONNECTING,
+            statusText = if (isOutgoing) "Calling..." else "Connecting...",
+        )
 
         viewModelScope.launch {
             try {
@@ -76,9 +108,14 @@ class CallViewModel @Inject constructor(
                     ?: call.result?.userResponse
                     ?: call.result?.transcriptSummary
                     ?: "AI needs your input."
+                val terminal = call.status == "ended" || call.status == "cancelled" || call.status == "expired"
                 _uiState.value = _uiState.value.copy(
-                    isConnected = true,
-                    statusText = "Connected",
+                    isConnected = !terminal,
+                    statusText = when {
+                        terminal -> "Call ended"
+                        isOutgoing -> "Calling..."
+                        else -> "Connected"
+                    },
                     callContext = CallContextInfo(
                         summary = summary,
                         reason = call.context?.reason ?: "",
@@ -86,11 +123,19 @@ class CallViewModel @Inject constructor(
                     ),
                     aiResponding = call.aiWait?.active,
                     aiRespondingUntilMs = call.aiWait?.activeUntil?.toEpochMsOrNull(),
+                    phase = when {
+                        terminal -> CallPhase.ENDED
+                        isOutgoing -> CallPhase.OUTGOING
+                        else -> CallPhase.ACTIVE
+                    },
                 )
+                if (isOutgoing && !terminal) {
+                    audioManager.requestFocus()
+                }
             } catch (_: Exception) {
                 _uiState.value = _uiState.value.copy(
                     isConnected = true,
-                    statusText = "Connected",
+                    statusText = if (isOutgoing) "Calling..." else "Connected",
                     callContext = CallContextInfo(summary = contextSummary ?: "AI needs your input."),
                 )
             }
@@ -100,22 +145,88 @@ class CallViewModel @Inject constructor(
         eventCollectionJob = viewModelScope.launch {
             CallEventBus.events.collect { event ->
                 when (event) {
-                    is CallEvent.AiMessage -> addAiMessage(event.text)
+                    is CallEvent.AiMessage -> {
+                        promoteToActive()
+                        addAiMessage(event.text)
+                    }
                     is CallEvent.UserMessage -> addUserTranscript(event.messageId, event.text)
                     is CallEvent.UserTextSent -> markUserTextSent(event.messageId)
                     is CallEvent.UserTextFailed -> markUserTextFailed(event.messageId)
                     is CallEvent.CallAnswered -> {
+                        promoteToActive()
                         _uiState.value = _uiState.value.copy(
                             isConnected = true,
                             statusText = "Connected",
                         )
                     }
-                    is CallEvent.CallEnded -> disconnect()
+                    is CallEvent.CallEnded -> {
+                        _uiState.value = _uiState.value.copy(
+                            phase = CallPhase.ENDED,
+                            isConnected = false,
+                            statusText = "Call ended",
+                        )
+                    }
                     is CallEvent.AiSpeakingStarted -> setAiSpeaking(true)
                     is CallEvent.AiSpeakingFinished -> setAiSpeaking(false)
-                    is CallEvent.AiWaitStatusChanged -> setAiResponding(event.active, event.activeUntilMs)
+                    is CallEvent.AiWaitStatusChanged ->
+                        setAiResponding(event.active, event.activeUntilMs, event.agentOnline)
                 }
             }
+        }
+
+        // Phase-2 reconnect state: a mid-call socket drop must surface as
+        // "Reconnecting..." (never as a hung call), and a reconnect re-syncs
+        // the call so a call that ended while offline lands in ENDED.
+        connectionStateJob?.cancel()
+        connectionStateJob = viewModelScope.launch {
+            signalingClient.connectionState.collect { state ->
+                val current = _uiState.value
+                when (state) {
+                    SignalingClient.ConnectionState.RECONNECTING -> {
+                        if (current.phase == CallPhase.ACTIVE) {
+                            _uiState.value = current.copy(
+                                phase = CallPhase.RECONNECTING,
+                                statusText = "Reconnecting — call stays live",
+                            )
+                        }
+                    }
+                    SignalingClient.ConnectionState.CONNECTED -> {
+                        if (current.phase == CallPhase.RECONNECTING) {
+                            reSyncCall(current.callId)
+                        }
+                    }
+                    else -> {}
+                }
+            }
+        }
+    }
+
+    /** Outgoing dial completes on the first backend confirmation. */
+    private fun promoteToActive() {
+        val current = _uiState.value
+        if (current.phase != CallPhase.OUTGOING) return
+        callStartTime = System.currentTimeMillis()
+        _uiState.value = current.copy(
+            phase = CallPhase.ACTIVE,
+            isConnected = true,
+            statusText = "Connected",
+        )
+    }
+
+    private fun reSyncCall(callId: String) {
+        if (callId.isBlank()) return
+        viewModelScope.launch {
+            val terminal = try {
+                val status = ApiClient.create<ApiService>().getCall(callId).status
+                status == "ended" || status == "cancelled" || status == "expired"
+            } catch (_: Exception) {
+                false
+            }
+            _uiState.value = _uiState.value.copy(
+                phase = if (terminal) CallPhase.ENDED else CallPhase.ACTIVE,
+                isConnected = !terminal,
+                statusText = if (terminal) "Call ended" else "Connected",
+            )
         }
     }
 
@@ -131,10 +242,6 @@ class CallViewModel @Inject constructor(
             statusText = "AI speaking",
             isAiSpeaking = true,
         )
-        val cid = _uiState.value.callId
-        if (cid.isNotBlank()) {
-            viewModelScope.launch { repository.saveAiMessage(cid, text) }
-        }
     }
 
     fun addUserTranscript(messageId: String, text: String) {
@@ -148,10 +255,6 @@ class CallViewModel @Inject constructor(
             isAiSpeaking = false,
             statusText = "You said: ${text.take(50)}",
         )
-        val cid = _uiState.value.callId
-        if (cid.isNotBlank()) {
-            viewModelScope.launch { repository.saveUserTextMessage(cid, text) }
-        }
     }
 
     fun sendTextMessage(text: String, messageId: String = UUID.randomUUID().toString()) {
@@ -229,11 +332,26 @@ class CallViewModel @Inject constructor(
         _uiState.value = _uiState.value.copy(isAiSpeaking = speaking)
     }
 
-    fun setAiResponding(active: Boolean, activeUntilMs: Long?) {
+    fun setAiResponding(active: Boolean, activeUntilMs: Long?, agentOnline: Boolean = true) {
         _uiState.value = _uiState.value.copy(
             aiResponding = active,
             aiRespondingUntilMs = if (active) activeUntilMs else null,
+            agentOnline = agentOnline,
         )
+    }
+
+    fun setMuted(context: Context, muted: Boolean) {
+        _uiState.value = _uiState.value.copy(isMuted = muted)
+        context.startService(Intent(context, CallService::class.java).apply {
+            action = CallService.ACTION_SET_MUTED
+            putExtra(CallService.EXTRA_MUTED, muted)
+        })
+    }
+
+    fun toggleSpeaker(): Boolean {
+        val next = audioManager.toggleSpeaker()
+        _uiState.value = _uiState.value.copy(isSpeakerOn = next)
+        return next
     }
 
     fun tick() {
@@ -257,6 +375,7 @@ class CallViewModel @Inject constructor(
 
     fun disconnect() {
         _uiState.value = _uiState.value.copy(
+            phase = CallPhase.ENDED,
             isConnected = false,
             statusText = "Disconnected",
             isAiSpeaking = false,

@@ -17,6 +17,7 @@ sealed class CallEvent {
         val active: Boolean,
         val activeUntilMs: Long?,
         val lastActiveAtMs: Long?,
+        val agentOnline: Boolean = true,
     ) : CallEvent()
 }
 

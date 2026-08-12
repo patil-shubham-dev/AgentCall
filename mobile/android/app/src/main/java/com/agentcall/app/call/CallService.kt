@@ -35,6 +35,7 @@ class CallService : Service() {
     @Inject lateinit var signalingClient: SignalingClient
     @Inject lateinit var transcriptDao: TranscriptMessageDao
     @Inject lateinit var repository: CallRepository
+    @Inject lateinit var audioManager: CallAudioManager
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     // Survives stopSelf(): End/Done + Decline persist their intent first, then retry
@@ -48,6 +49,8 @@ class CallService : Service() {
     @Volatile var isRecording = false
     @Volatile var isAiSpeaking = false
     @Volatile var isPaused = false
+    /** Muted: the AI's spoken replies are silenced (transcript still flows). */
+    @Volatile var isMuted = false
 
     private var transcriptSequence = 0
     private var lastAiMessage: String = ""
@@ -133,6 +136,7 @@ class CallService : Service() {
             flushPending(KEY_PENDING_CANCELS) { attemptCancel(it) }
             flushPending(KEY_PENDING_COMPLETES) { attemptComplete(it) }
             flushPending(KEY_PENDING_ANSWERS) { attemptAnswer(it) }
+            flushPending(KEY_PENDING_CALLBACKS) { attemptScheduleCallback(it) }
             flushPendingUserTexts(pendingUserTexts)
         }
         when (intent?.action) {
@@ -150,6 +154,7 @@ class CallService : Service() {
                 SignalingForegroundService.notifyRingResolved(this)
                 startForeground(NOTIFICATION_ID_ONGOING, createOngoingCallNotification("AI Call"))
                 acquireWakeLock()
+                audioManager.requestFocus()
                 val agentId = callerName.lowercase().replace("\\s+".toRegex(), "-")
                 scope.launch { repository.markCallAnswered(id, agentId, callerName) }
                 startVoiceSession(id)
@@ -160,6 +165,11 @@ class CallService : Service() {
             ACTION_SPEAK -> {
                 val text = intent.getStringExtra(EXTRA_TEXT) ?: return START_NOT_STICKY
                 speakText(text)
+            }
+            ACTION_SET_MUTED -> {
+                isMuted = intent.getBooleanExtra(EXTRA_MUTED, false)
+                updateNotification(if (isMuted) "Muted" else "AI speaking enabled")
+                Log.i(TAG, "[MUTE] muted=$isMuted")
             }
             ACTION_REPEAT_LAST -> {
                 if (lastAiMessage.isNotBlank()) {
@@ -192,11 +202,8 @@ class CallService : Service() {
                 val id = intent.getStringExtra(EXTRA_CALL_ID) ?: return START_NOT_STICKY
                 val delayMin = intent.getStringExtra(EXTRA_TEXT)?.toIntOrNull() ?: 10
                 val note = intent.getStringExtra(EXTRA_NOTE)?.takeIf { it.isNotBlank() }
-                scope.launch {
-                    try {
-                        api.scheduleCallback(id, CallbackRequest(delayMinutes = delayMin, note = note))
-                    } catch (_: Exception) {}
-                }
+                savePendingCallback(id, delayMin, note)
+                retryWithBackoff(id, KEY_PENDING_CALLBACKS, "CALLBACK") { attemptScheduleCallback(it) }
             }
         }
         return START_STICKY
@@ -255,6 +262,43 @@ class CallService : Service() {
         }
     }
 
+    private suspend fun attemptScheduleCallback(callId: String): Boolean {
+        return try {
+            val request = pendingCallbackFor(callId)
+            if (request == null) {
+                Log.w(TAG, "[CALLBACK] no pending callback payload for $callId")
+                return true
+            }
+            api.scheduleCallback(callId, request)
+            Log.i(TAG, "[CALLBACK] backend confirmed callback for $callId")
+            true
+        } catch (e: Exception) {
+            Log.w(TAG, "[CALLBACK] schedule $callId failed, will retry", e)
+            false
+        }
+    }
+
+    private fun savePendingCallback(callId: String, delayMinutes: Int, note: String?) {
+        val entry = JSONObject()
+            .put("delayMinutes", delayMinutes)
+            .putOpt("note", note)
+            .toString()
+        getSharedPreferences(PREFS_CALL_STATE, MODE_PRIVATE)
+            .edit().putString("callback:$callId", entry).apply()
+    }
+
+    private fun pendingCallbackFor(callId: String): CallbackRequest? {
+        val raw = getSharedPreferences(PREFS_CALL_STATE, MODE_PRIVATE)
+            .getString("callback:$callId", null) ?: return null
+        return runCatching {
+            val obj = JSONObject(raw)
+            CallbackRequest(
+                delayMinutes = obj.optInt("delayMinutes", 10),
+                note = obj.optString("note").ifBlank { null },
+            )
+        }.getOrNull()
+    }
+
     private suspend fun flushPending(key: String, attempt: suspend (String) -> Boolean) {
         val pending = getSharedPreferences(PREFS_CALL_STATE, MODE_PRIVATE)
             .getStringSet(key, emptySet())
@@ -279,7 +323,7 @@ class CallService : Service() {
         val prefs = getSharedPreferences(PREFS_CALL_STATE, MODE_PRIVATE)
         val ids = prefs.getStringSet(key, emptySet())?.toMutableSet() ?: return
         if (ids.remove(callId)) {
-            prefs.edit().putStringSet(key, ids).remove("note:$callId").apply()
+            prefs.edit().putStringSet(key, ids).remove("note:$callId").remove("callback:$callId").apply()
         }
     }
 
@@ -295,6 +339,13 @@ class CallService : Service() {
 
     fun speakText(text: String, force: Boolean = false) {
         if (!force && isPaused) return
+        if (isMuted && !force) {
+            // Muted: silence the voice but keep the transcript truthful — the
+            // last message still updates so "Repeat last" works after unmuting.
+            lastAiMessage = text
+            Log.d(TAG, "[MUTE] skipping speech (muted): ${text.take(60)}")
+            return
+        }
         val tts = textToSpeech
         if (tts == null || !ttsInitialized) {
             pendingSpeakText = text
@@ -364,10 +415,23 @@ class CallService : Service() {
                             repository.saveCallEnded(callId, "cancelled")
                             delay(1500); stopSelf()
                         }
+                        is VoiceBridgeEvent.CallExpired -> {
+                            if (event.callId != callId) return@collect
+                            // Missed call: the ring window closed before
+                            // anyone answered (agent offline / no answer).
+                            CallEventBus.emit(CallEvent.CallEnded)
+                            repository.saveCallEnded(callId, "expired")
+                            delay(1500); stopSelf()
+                        }
                         is VoiceBridgeEvent.AiWaitStatus -> {
                             if (event.callId != callId) return@collect
                             CallEventBus.emit(
-                                CallEvent.AiWaitStatusChanged(event.active, event.activeUntilMs, event.lastActiveAtMs)
+                                CallEvent.AiWaitStatusChanged(
+                                    event.active,
+                                    event.activeUntilMs,
+                                    event.lastActiveAtMs,
+                                    event.agentOnline,
+                                )
                             )
                         }
                         // Disconnected is defined but NOT emitted by SignalingClient.
@@ -564,6 +628,8 @@ class CallService : Service() {
         speechRecognizer = null
         isRecording = false
         isAiSpeaking = false
+        isMuted = false
+        audioManager.abandonFocus()
         releaseWakeLock()
         stopForeground(STOP_FOREGROUND_REMOVE)
     }
@@ -616,6 +682,7 @@ class CallService : Service() {
         const val ACTION_START_RECORDING = "com.agentcall.action.START_RECORDING"
         const val ACTION_STOP_RECORDING = "com.agentcall.action.STOP_RECORDING"
         const val ACTION_SPEAK = "com.agentcall.action.SPEAK"
+        const val ACTION_SET_MUTED = "com.agentcall.action.SET_MUTED"
         const val ACTION_REPEAT_LAST = "com.agentcall.action.REPEAT_LAST"
         const val ACTION_SEND_TEXT = "com.agentcall.action.SEND_TEXT"
         const val ACTION_END_CALL = "com.agentcall.action.END_CALL"
@@ -626,6 +693,7 @@ class CallService : Service() {
         const val EXTRA_TEXT = "text"
         const val EXTRA_MESSAGE_ID = "message_id"
         const val EXTRA_NOTE = "note"
+        const val EXTRA_MUTED = "muted"
         const val CHANNEL_ONGOING_CALL = "ongoing_call"
         // v2: old "incoming_call" channel had no ringtone/vibration and ColorOS drops
         // channel updates/delete, so an in-place upgrade is impossible — version the ID.
@@ -637,6 +705,7 @@ class CallService : Service() {
         private const val KEY_PENDING_CANCELS = "pending_cancel_ids"
         private const val KEY_PENDING_COMPLETES = "pending_complete_ids"
         private const val KEY_PENDING_ANSWERS = "pending_answer_ids"
+        private const val KEY_PENDING_CALLBACKS = "pending_callback_ids"
         private const val KEY_PENDING_USER_TEXTS = "pending_user_texts"
         private const val NOTIFICATION_ID_ONGOING = 1001
         private const val NOTIFICATION_ID_INCOMING = 1002

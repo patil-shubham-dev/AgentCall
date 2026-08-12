@@ -23,10 +23,18 @@ private const val TAG = "AgentCall"
 sealed class VoiceBridgeEvent {
     data class AiMessage(val callId: String, val messageId: String, val content: String) : VoiceBridgeEvent()
     data class CallbackScheduled(val callId: String, val delayMinutes: Int) : VoiceBridgeEvent()
-    data class CallIncoming(val callId: String, val reason: String, val summary: String, val callerName: String) : VoiceBridgeEvent()
+    data class CallIncoming(
+        val callId: String,
+        val reason: String,
+        val summary: String,
+        val callerName: String,
+        val createdAtMs: Long? = null,
+        val expiresAtMs: Long? = null,
+    ) : VoiceBridgeEvent()
     data class CallAnswered(val callId: String) : VoiceBridgeEvent()
     data class CallEnded(val callId: String) : VoiceBridgeEvent()
     data class CallCancelled(val callId: String) : VoiceBridgeEvent()
+    data class CallExpired(val callId: String, val reason: String) : VoiceBridgeEvent()
     data class Connected(val userId: String) : VoiceBridgeEvent()
     data class Error(val code: String, val message: String) : VoiceBridgeEvent()
     data class AiWaitStatus(
@@ -34,6 +42,7 @@ sealed class VoiceBridgeEvent {
         val active: Boolean,
         val activeUntilMs: Long?,
         val lastActiveAtMs: Long?,
+        val agentOnline: Boolean = true,
     ) : VoiceBridgeEvent()
     object Disconnected : VoiceBridgeEvent()
 }
@@ -56,6 +65,12 @@ class SignalingClient @Inject constructor(
     private var networkCallback: ConnectivityNetworkCallback? = null
     private var wasEverConnected = false
 
+    @Volatile
+    private var userDisconnected = false
+
+    @Volatile
+    private var connectGeneration = 0
+
     companion object {
         private const val MAX_RECONNECT_ATTEMPTS = 20
         private const val MIN_RECONNECT_DELAY_MS = 2000L
@@ -77,10 +92,12 @@ class SignalingClient @Inject constructor(
         }
         currentUserId = userId
         reconnectAttempt = 0
+        userDisconnected = false
         _connectionState.value = ConnectionState.CONNECTING
         connectionJob?.cancel()
         registerNetworkCallback()
         SignalingForegroundService.start(app)
+        connectGeneration++
         connectionJob = scope.launch {
             connectInternal("CALLER=connect()")
         }
@@ -114,11 +131,13 @@ class SignalingClient @Inject constructor(
     }
 
     private fun onNetworkAvailable() {
+        if (userDisconnected) return
         val state = _connectionState.value
         Log.d(TAG, "[TRACE] onNetworkAvailable() fired state=$state")
         if (state == ConnectionState.DISCONNECTED) {
             Log.d(TAG, "[WS] network became available — reconnecting")
             reconnectAttempt = 0
+            connectGeneration++
             connectionJob = scope.launch {
                 _connectionState.value = ConnectionState.CONNECTING
                 connectInternal("CALLER=onNetworkAvailable")
@@ -127,7 +146,9 @@ class SignalingClient @Inject constructor(
     }
 
     private suspend fun connectInternal(caller: String = "unknown") {
+        val gen = connectGeneration
         Log.d(TAG, "[TRACE] connectInternal() called from=$caller state=${_connectionState.value} attempt=$reconnectAttempt")
+        if (userDisconnected) return
         if (reconnectAttempt >= MAX_RECONNECT_ATTEMPTS) {
             Log.e(TAG, "[WS] max reconnect attempts reached ($MAX_RECONNECT_ATTEMPTS)")
             _connectionState.value = ConnectionState.DISCONNECTED
@@ -146,11 +167,17 @@ class SignalingClient @Inject constructor(
             return
         }
         val url = ApiClient.getWsUrl(currentUserId)
-        Log.d(TAG, "[WS] connecting to $url")
-        val request = Request.Builder().url(url).build()
+        Log.d(TAG, "[WS] connecting to ${url.substringBefore('?')}")
+        val requestBuilder = Request.Builder().url(url)
+        ApiClient.phoneToken?.let { requestBuilder.addHeader("Authorization", "Bearer $it") }
+        val request = requestBuilder.build()
 
         val listener = object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
+                if (connectGeneration != gen || userDisconnected) {
+                    webSocket.cancel()
+                    return
+                }
                 Log.d(TAG, "[WS] opened userId=$currentUserId")
                 reconnectAttempt = 0
                 wasEverConnected = true
@@ -163,6 +190,7 @@ class SignalingClient @Inject constructor(
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                if (connectGeneration != gen || userDisconnected) return
                 Log.e(TAG, "[WS] connection failure", t)
                 scope.launch {
                     val httpCode = response?.code
@@ -179,6 +207,7 @@ class SignalingClient @Inject constructor(
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                if (connectGeneration != gen || userDisconnected) return
                 Log.d(TAG, "[WS] closed code=$code reason=$reason")
                 scope.launch {
                     if (code == 4001) {
@@ -225,8 +254,17 @@ class SignalingClient @Inject constructor(
                     val reason = payload.optString("reason", "input_required")
                     val summary = payload.optString("summary", "")
                     val callerName = payload.optString("callerName", "AI Agent")
+                    val createdAtMs = payload.optString("createdAt", "").toEpochMsOrNull()
+                    val expiresAtMs = payload.optString("expiresAt", "").toEpochMsOrNull()
+                    // Defense in depth: a queued push whose ring window already
+                    // expired (server queue TTL or clock skew) is stale — it
+                    // must never ring.
+                    if (expiresAtMs != null && expiresAtMs <= System.currentTimeMillis()) {
+                        Log.w(TAG, "[WS] dropping stale call_incoming callId=$callId (expired)")
+                        return
+                    }
                     Log.d(TAG, "[WS] call_incoming callId=$callId reason=$reason callerName=$callerName")
-                    _events.emit(VoiceBridgeEvent.CallIncoming(callId, reason, summary, callerName))
+                    _events.emit(VoiceBridgeEvent.CallIncoming(callId, reason, summary, callerName, createdAtMs, expiresAtMs))
                 }
                 "ai_message" -> {
                     val callId = payload?.getString("callId") ?: return
@@ -257,13 +295,23 @@ class SignalingClient @Inject constructor(
                     Log.d(TAG, "[WS] call_cancelled callId=$callId")
                     _events.emit(VoiceBridgeEvent.CallCancelled(callId))
                 }
+                "call_expired" -> {
+                    val callId = payload?.getString("callId") ?: return
+                    val reason = payload.optString("reason", "ring_ttl_expired")
+                    Log.d(TAG, "[WS] call_expired callId=$callId reason=$reason")
+                    _events.emit(VoiceBridgeEvent.CallExpired(callId, reason))
+                }
                 "ai_wait_status" -> {
                     val callId = payload?.getString("callId") ?: return
                     val active = payload.optBoolean("active", false)
                     val activeUntilMs = payload.optString("activeUntil", "").toEpochMsOrNull()
                     val lastActiveAtMs = payload.optString("lastActiveAt", "").toEpochMsOrNull()
-                    Log.d(TAG, "[WS] ai_wait_status callId=$callId active=$active")
-                    _events.emit(VoiceBridgeEvent.AiWaitStatus(callId, active, activeUntilMs, lastActiveAtMs))
+                    // Phase 2: older backends don't send agentOnline — default
+                    // to true so the UI never claims the agent is offline on
+                    // stale events.
+                    val agentOnline = payload.optBoolean("agentOnline", true)
+                    Log.d(TAG, "[WS] ai_wait_status callId=$callId active=$active agentOnline=$agentOnline")
+                    _events.emit(VoiceBridgeEvent.AiWaitStatus(callId, active, activeUntilMs, lastActiveAtMs, agentOnline))
                 }
                 "error" -> {
                     val code = payload?.getString("code") ?: "UNKNOWN"
@@ -288,10 +336,13 @@ class SignalingClient @Inject constructor(
 
     fun disconnect() {
         Log.d(TAG, "[WS] disconnect")
+        userDisconnected = true
+        connectGeneration++
         unregisterNetworkCallback()
         connectionJob?.cancel()
-        webSocket?.close(1000, "User disconnected")
+        val socket = webSocket
         webSocket = null
+        socket?.close(1000, "User disconnected")
         _connectionState.value = ConnectionState.DISCONNECTED
         SignalingForegroundService.stop(app)
     }

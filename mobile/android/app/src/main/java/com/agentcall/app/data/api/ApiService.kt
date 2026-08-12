@@ -64,6 +64,15 @@ data class AiKeyListResponse(
 )
 
 @Serializable
+data class CreateCallRequest(
+    @SerialName("agent_id") val agentId: String,
+    @SerialName("summary") val summary: String,
+    @SerialName("reason") val reason: String = "clarification",
+    @SerialName("origin") val origin: String = "agent",
+    @SerialName("user_id") val userId: String? = null,
+)
+
+@Serializable
 data class AiKeyDeleteResponse(
     @SerialName("status") val status: String = "",
     @SerialName("key_id") val keyId: String = "",
@@ -72,7 +81,7 @@ data class AiKeyDeleteResponse(
 interface ApiService {
 
     @POST("calls")
-    suspend fun createCall(): CreateCallResponse
+    suspend fun createCall(@Body body: CreateCallRequest): CreateCallResponse
 
     @GET("calls/{callId}")
     suspend fun getCall(@Path("callId") callId: String): CallResponse

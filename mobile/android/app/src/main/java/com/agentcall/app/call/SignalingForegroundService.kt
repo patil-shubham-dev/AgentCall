@@ -46,8 +46,11 @@ class SignalingForegroundService : Service() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var eventsJob: Job? = null
+    private var connectionStateJob: Job? = null
     private var ringTimeoutJob: Job? = null
     private var ringingCallId: String? = null
+    private val recentlyRung = ArrayDeque<Pair<String, Long>>()
+    @Volatile private var foregroundStarted = false
 
     private val disconnectReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -68,16 +71,26 @@ class SignalingForegroundService : Service() {
                 handleEvent(event)
             }
         }
+        // Keep the notification text truthful as the connection state changes.
+        connectionStateJob = scope.launch {
+            signalingClient.connectionState.collect { state ->
+                updateNotificationForState(state)
+            }
+        }
+        // After a device reboot the app process is gone; the boot receiver only
+        // starts this service, so establish the WebSocket from here.
+        if (signalingClient.connectionState.value == SignalingClient.ConnectionState.DISCONNECTED) {
+            signalingClient.connect()
+        }
     }
 
     private suspend fun handleEvent(event: VoiceBridgeEvent) {
         when (event) {
             is VoiceBridgeEvent.Connected -> {
-                // Covers calls created while the app/WS was fully closed: the
-                // backend queues the push and this catches it on reconnect.
-                if (ringingCallId == null) {
-                    ringFromActiveCall()
-                }
+                // Single delivery path: calls created while the phone was
+                // offline arrive as queued call_incoming pushes (bounded by the
+                // server queue TTL). No active-call poll here — it could ring a
+                // call whose push was already dropped as stale.
             }
             is VoiceBridgeEvent.CallIncoming -> {
                 ringFromEvent(event)
@@ -95,24 +108,32 @@ class SignalingForegroundService : Service() {
         }
     }
 
-    private suspend fun ringFromActiveCall() {
-        val active = callRepository.checkActiveCall(signalingClient.currentUserId) ?: return
-        if (active.callId == ringingCallId) return
-        val callerName = when (active.reason) {
-            "approval" -> "Approval Request"
-            "error" -> "Error Alert"
-            "clarification" -> "AI Assistant"
-            else -> "AI Agent"
+    private fun wasRecentlyRung(callId: String): Boolean {
+        pruneRecentlyRung()
+        return recentlyRung.any { it.first == callId }
+    }
+
+    private fun rememberRung(callId: String) {
+        pruneRecentlyRung()
+        recentlyRung.addLast(callId to System.currentTimeMillis())
+        while (recentlyRung.size > MAX_RECENT_RINGS) recentlyRung.removeFirst()
+    }
+
+    private fun pruneRecentlyRung() {
+        val cutoff = System.currentTimeMillis() - RECENT_RING_TTL_MS
+        while (recentlyRung.isNotEmpty() && recentlyRung.first().second < cutoff) {
+            recentlyRung.removeFirst()
         }
-        val agentId = callerName.lowercase().replace("\\s+".toRegex(), "-")
-        callRepository.ensureProfileExists(agentId, callerName)
-        ring(active.callId, callerName, active.summary)
     }
 
     private suspend fun ringFromEvent(event: VoiceBridgeEvent.CallIncoming) {
         // The shared flow replays its last event on collector start, and queued
         // pushes can arrive for calls that were already resolved while we were
         // offline. Verify the call is still live before ringing.
+        if (event.expiresAtMs != null && event.expiresAtMs <= System.currentTimeMillis()) {
+            Log.w(TAG, "[RING] skipping expired call_incoming callId=${event.callId}")
+            return
+        }
         val session = try {
             callRepository.getCallStatus(event.callId)
         } catch (_: Exception) {
@@ -127,6 +148,11 @@ class SignalingForegroundService : Service() {
 
     private fun ring(callId: String, callerName: String, summary: String) {
         if (callId == ringingCallId) return
+        if (wasRecentlyRung(callId)) {
+            Log.i(TAG, "[RING] skipping repeat ring callId=$callId (recently rung)")
+            return
+        }
+        rememberRung(callId)
         Log.i(TAG, "[RING] ringing callId=$callId caller=$callerName")
         logRingDiagnostics()
         ringingCallId = callId
@@ -185,38 +211,8 @@ class SignalingForegroundService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        val disconnectIntent = PendingIntent.getBroadcast(
-            this, REQUEST_DISCONNECT,
-            Intent(ACTION_DISCONNECT),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-        )
-
-        val notification = NotificationCompat.Builder(this, CHANNEL_SIGNALING)
-            .setContentTitle("AgentCall")
-            .setContentText("Connected — ready for calls")
-            .setSmallIcon(R.drawable.ic_agent)
-            .setOngoing(true)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
-            .setSilent(true)
-            .setContentIntent(
-                PendingIntent.getActivity(
-                    this, 0,
-                    Intent(this, MainActivity::class.java).apply {
-                        addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
-                    },
-                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-                )
-            )
-            .addAction(
-                NotificationCompat.Action.Builder(
-                    android.R.drawable.ic_menu_close_clear_cancel,
-                    "Disconnect",
-                    disconnectIntent,
-                ).build()
-            )
-            .build()
-
-        startForeground(NOTIFICATION_ID, notification)
+        startForeground(NOTIFICATION_ID, createNotification(notificationTextFor(signalingClient.connectionState.value)).build())
+        foregroundStarted = true
 
         when (intent?.action) {
             ACTION_RING_OPENED -> {
@@ -241,9 +237,54 @@ class SignalingForegroundService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
+    private fun notificationTextFor(state: SignalingClient.ConnectionState): String = when (state) {
+        SignalingClient.ConnectionState.CONNECTED -> "Connected — ready for calls"
+        SignalingClient.ConnectionState.CONNECTING -> "Connecting..."
+        SignalingClient.ConnectionState.RECONNECTING -> "Reconnecting..."
+        SignalingClient.ConnectionState.DISCONNECTED -> "Disconnected"
+    }
+
+    private fun createNotification(text: String): NotificationCompat.Builder {
+        val disconnectIntent = PendingIntent.getBroadcast(
+            this, REQUEST_DISCONNECT,
+            Intent(ACTION_DISCONNECT),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        return NotificationCompat.Builder(this, CHANNEL_SIGNALING)
+            .setContentTitle("AgentCall")
+            .setContentText(text)
+            .setSmallIcon(R.drawable.ic_agent)
+            .setOngoing(true)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setSilent(true)
+            .setContentIntent(
+                PendingIntent.getActivity(
+                    this, 0,
+                    Intent(this, MainActivity::class.java).apply {
+                        addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                    },
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+                )
+            )
+            .addAction(
+                NotificationCompat.Action.Builder(
+                    android.R.drawable.ic_menu_close_clear_cancel,
+                    "Disconnect",
+                    disconnectIntent,
+                ).build()
+            )
+    }
+
+    private fun updateNotificationForState(state: SignalingClient.ConnectionState) {
+        if (!foregroundStarted) return
+        val mgr = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        mgr.notify(NOTIFICATION_ID, createNotification(notificationTextFor(state)).build())
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         eventsJob?.cancel()
+        connectionStateJob?.cancel()
         ringTimeoutJob?.cancel()
         try { unregisterReceiver(disconnectReceiver) } catch (_: IllegalArgumentException) {}
     }
@@ -257,6 +298,8 @@ class SignalingForegroundService : Service() {
         private const val NOTIFICATION_ID = 1003
         private const val REQUEST_DISCONNECT = 1001
         private const val RING_TIMEOUT_MS = 60_000L
+        private const val RECENT_RING_TTL_MS = 5 * 60_000L
+        private const val MAX_RECENT_RINGS = 16
 
         fun start(context: Context) {
             context.startForegroundService(Intent(context, SignalingForegroundService::class.java))
