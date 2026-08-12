@@ -36,7 +36,9 @@ export const config = {
   },
 
   security: {
-    corsAllowedOrigins: env('CORS_ALLOWED_ORIGINS', '*'),
+    // Fail-closed: empty means no CORS headers are sent, so browsers deny
+    // cross-origin requests. Set an explicit comma-separated allowlist.
+    corsAllowedOrigins: env('CORS_ALLOWED_ORIGINS', ''),
     bodyLimit: parseIntSafe('BODY_LIMIT_BYTES', '1048576'),
   },
 
