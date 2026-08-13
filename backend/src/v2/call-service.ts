@@ -5,10 +5,11 @@ import { uuidV7 } from './ids.js';
 import { isOpenState, transition, InvalidTransitionError } from './call-fsm.js';
 import type { V2CallState } from './call-fsm.js';
 import { CallNotFoundError, ForbiddenError, ValidationError } from './errors.js';
-import type { IdempotencyStore } from './idempotency.js';
+import type { IdempotencyBackend } from './idempotency.js';
 import type { V2Actor } from './events.js';
 import { SyncTtsProvider } from './providers.js';
 import type { TtsProvider, TtsHandle, TtsStats } from './providers.js';
+import { rehydrate } from './recovery.js';
 
 /** Who is acting (audit + ownership). 'service' bypasses ownership checks. */
 export interface V2ActorInput {
@@ -136,7 +137,7 @@ export class V2CallService {
 
   constructor(
     readonly plane: EventPlane,
-    readonly idempotency: IdempotencyStore,
+    readonly idempotency: IdempotencyBackend,
     /** Media provider seam (roadmap M2). Defaults to the $0 on-device sync TTS. */
     readonly ttsProvider: TtsProvider = new SyncTtsProvider(),
   ) {}
@@ -355,6 +356,9 @@ export class V2CallService {
     const stream = this.streamMessage(callId, input, messageId);
     void stream.finished
       .then(() => Promise.all(stream.emits))
+      // Same post-turn contract as sendMessage(): once the turn settles, the
+      // silence policy arms so silence.detected escalations resume.
+      .then(() => this.armSilencePolicy(callId))
       .catch((err) => {
         logger.error({ err, callId, messageId }, '[v2] detached speech stream failed');
       });
@@ -716,6 +720,9 @@ export class V2CallService {
     let archived = 0;
     for (const call of this.calls.values()) {
       if (Date.parse(call.lastActivityAt) >= cutoff) continue;
+      // A swept call must not keep a live TTS stream running into the void
+      // (events for an archived call, audio continuing after retention).
+      this.stopTtsSilently(call.id);
       this.clearSilencePolicy(call.id);
       await this.emit(call.id, V2_EVENTS.CALL_ARCHIVED, systemActor(), {
         retention_days: 90,
@@ -750,9 +757,44 @@ export class V2CallService {
     });
   }
 
+  // ---- recovery (roadmap M3) ------------------------------------------------
+
+  /**
+   * Rehydrates one call from the durable event log after a worker restart
+   * (RPO 0: replay restores exactly what the outbox recorded). Timer
+   * reconstruction: an armed silence policy is re-armed with its REMAINING
+   * budget (elapsed time since the last completed AI turn); a budget already
+   * spent fires the first silence.detected immediately.
+   */
+  async recoverCall(callId: string, now = Date.now()): Promise<V2CallRecord | null> {
+    const hydrated = await rehydrate(this.plane.log, callId);
+    if (!hydrated) return null;
+    const { call, silence } = hydrated;
+    this.calls.set(callId, call);
+    if (silence && call.policy?.silence_after_ms) {
+      const elapsed = now - silence.armedAt;
+      this.armSilencePolicy(callId, Math.max(0, call.policy.silence_after_ms - elapsed));
+    }
+    logger.info({ callId, state: call.state }, '[v2.recovery] call recovered from event log');
+    return call;
+  }
+
+  /** Replays every call in the log back into the aggregate map. */
+  async recoverAll(now = Date.now()): Promise<{ recovered: number; total: number }> {
+    const callIds = await this.plane.log.callIds();
+    let recovered = 0;
+    for (const callId of callIds) {
+      if (await this.recoverCall(callId, now)) recovered++;
+    }
+    if (callIds.length > 0) {
+      logger.info({ recovered, total: callIds.length }, '[v2.recovery] startup recovery completed');
+    }
+    return { recovered, total: callIds.length };
+  }
+
   // ---- silence policy (advisory, R7) ---------------------------------------
 
-  private armSilencePolicy(callId: string): void {
+  private armSilencePolicy(callId: string, delayOverrideMs?: number): void {
     const call = this.calls.get(callId);
     if (!call || !call.policy?.silence_after_ms || call.policy.silence_after_ms <= 0) return;
     this.clearSilencePolicy(callId);
@@ -781,7 +823,7 @@ export class V2CallService {
       state.timer = setTimeout(tick, afterMs);
       state.timer.unref?.();
     };
-    state.timer = setTimeout(tick, afterMs);
+    state.timer = setTimeout(tick, delayOverrideMs ?? afterMs);
     state.timer.unref?.();
   }
 

@@ -21,6 +21,56 @@
 
 ## 2. Schema
 
+> **M3 status (2026-08-13):** durability tables implemented live in
+> `backend/src/v2/db/schema.ts` — `v2_events` + `v2_idempotency` (see §2.1). The
+> remaining tables below (`calls`, `transcript_segments`, …) are the target schema
+> for M4+; nothing else exists in the DB yet. Implemented deviations from this
+> section are listed in §2.1 and are deliberate (documented per table).
+
+### 2.1 Implemented (M3) — `v2_events`, `v2_idempotency`
+
+```sql
+-- Event log (truth). Prefix `v2_` avoids colliding with the target `events`
+-- name while v1 is live; no `calls` FK yet because the `calls` table does not
+-- exist in M3 (engine state is derived by replay instead).
+CREATE TABLE IF NOT EXISTS v2_events (
+  event_id        UUID PRIMARY KEY,             -- UUID v7
+  call_id         TEXT NOT NULL,
+  seq             BIGINT NOT NULL,              -- per-call monotonic, assigned via
+                                                -- advisory-lock tx: pg_advisory_xact_lock(hashtextextended(call_id))
+  type            TEXT NOT NULL,
+  version         INT  NOT NULL DEFAULT 1,
+  correlation_id  UUID NOT NULL,
+  causation_id    UUID,
+  occurred_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  actor           JSONB NOT NULL,               -- {type, identity} — target schema
+                                                -- splits this into two columns (M4)
+  payload         JSONB NOT NULL,               -- zod-validated at write
+  partition_key   TEXT NOT NULL,                -- 'calls:<call_id>' (scaling); M3 writes call_id
+  UNIQUE (call_id, seq)
+);
+
+-- HTTP idempotency (durable replay across worker restarts, RPO 0).
+CREATE TABLE IF NOT EXISTS v2_idempotency (
+  key         TEXT PRIMARY KEY,                 -- hex(identity):hex(call_id):hex(key) — PG-safe
+  status_code INT NOT NULL,
+  body        JSONB NOT NULL,
+  stored_at   BIGINT NOT NULL                  -- epoch ms; NUL-free composite key (PG rejects \u0000)
+);
+
+-- TTL-sweep backing: lets the idle sweeper purge expired rows by range scan
+-- instead of a full-table scan (idempotency rows are write-once, never updated).
+CREATE INDEX IF NOT EXISTS v2_idempotency_stored_at_idx ON v2_idempotency (stored_at);
+```
+
+**Deviations vs §2 (documented):** `v2_` prefix (see above); `actor` is a JSONB
+`{type, identity}` instead of `actor_type`/`actor_identity` columns (same content,
+fewer columns — split at M4 when `calls` lands); `v2_idempotency` is not in the
+target schema (in-memory idempotency was M1; Postgres-backed is M3's RPO-0
+upgrade); `seq` allocation serialized with `pg_advisory_xact_lock` — the
+statement-snapshot race makes a CTE lock insufficient (see
+`backend/src/v2/db/pg-event-log.ts`).
+
 ```sql
 -- ── 1. Event log (truth) ─────────────────────────────────────────────────
 CREATE TABLE events (

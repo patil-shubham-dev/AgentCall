@@ -80,7 +80,7 @@ export const config = {
   },
 } as const;
 
-const VALID_PERSISTENCE_MODES = ['memory', 'dual-write', 'database-read', 'database'] as const;
+const VALID_PERSISTENCE_MODES = ['memory', 'dual-write', 'database-read', 'database', 'v2'] as const;
 
 export type PersistenceMode = (typeof VALID_PERSISTENCE_MODES)[number];
 
@@ -116,7 +116,7 @@ export function validateConfig(): void {
       `Invalid PERSISTENCE_MODE: "${mode}". Must be one of: ${VALID_PERSISTENCE_MODES.join(', ')}`,
     );
   }
-  if ((mode === 'database' || mode === 'database-read') && !config.database.url) {
+  if ((mode === 'database' || mode === 'database-read' || mode === 'v2') && !config.database.url) {
     throw new Error(`PERSISTENCE_MODE=${mode} requires DATABASE_URL to be set`);
   }
 }

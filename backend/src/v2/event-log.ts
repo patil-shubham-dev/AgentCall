@@ -14,8 +14,10 @@ export interface EventLogStore {
   /** Events strictly after `eventId` (cursor replay; at-least-once, consumers dedupe). */
   after(callId: string, eventId: string): Promise<V2Event[]>;
   /** True when the call has logged events (existence probe for 404 semantics). */
-  exists(callId: string): boolean;
-  count(callId: string): number;
+  exists(callId: string): Promise<boolean>;
+  count(callId: string): Promise<number>;
+  /** Every call id present in the log (recovery enumeration). */
+  callIds(): Promise<string[]>;
 }
 
 export class InMemoryEventLogStore implements EventLogStore {
@@ -56,11 +58,15 @@ export class InMemoryEventLogStore implements EventLogStore {
     return entries.slice(position + 1);
   }
 
-  exists(callId: string): boolean {
+  async exists(callId: string): Promise<boolean> {
     return (this.logs.get(callId)?.length ?? 0) > 0;
   }
 
-  count(callId: string): number {
+  async count(callId: string): Promise<number> {
     return this.logs.get(callId)?.length ?? 0;
+  }
+
+  async callIds(): Promise<string[]> {
+    return [...this.logs.keys()];
   }
 }

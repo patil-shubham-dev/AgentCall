@@ -12,7 +12,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "db:up": "tsx src/scripts/db-up.ts"
   },
   "dependencies": {
     "@fastify/compress": "^7.0.3",

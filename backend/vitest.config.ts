@@ -5,6 +5,10 @@ export default defineConfig({
     globals: true,
     environment: 'node',
     include: ['src/**/*.test.ts'],
+    // DB-backed suites (v2-pg-*, v2-recovery.integration) share the same
+    // Postgres tables and reset them in beforeAll; parallel file workers
+    // would truncate each other's rows mid-test.
+    fileParallelism: false,
     env: {
       POSTGRES_PASSWORD: 'test-pg-pass',
       REDIS_PASSWORD: 'test-redis-pass',
