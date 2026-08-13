@@ -447,7 +447,8 @@ biggest perceived-quality jump — replaces record-clip-then-reply with a conver
 
 ### Item 16 — No-45s-cap engine (v2 M1)
 
-**Status:** `[DEFERRED]` (user decision 2026-08-12 session 2 — defer to roadmap) · **Why:** the documented 45-second reply window is user-facing
+**Status:** `[PARTIAL]` — **M1 engine core landed (2026-08-12 session 3)**; M2–M6 remain on
+the roadmap. · **Why:** the documented 45-second reply window is user-facing
 and wrong for long agent turns.
 
 **Current state (verified):** **No `MESSAGE_WINDOW_MS`/45s constant exists in the tree**
@@ -461,7 +462,22 @@ reply-poll cadence, `AI_REPLY_POLL_INTERVAL_MS=500` in `config.ts:49`).
 
 **Implementation steps:** follow `docs/v2/10-roadmap.md` M1 (3–5 wk estimate) — milestones and exit criteria are the source of truth; this item is the roadmap, not a new design.
 
-**Verification:** roadmap M1 gate: v1 suite green; v2 contract tests green; cap removed only when flag on.
+**What shipped (M1 core, session 3):**
+- `backend/src/v2/` — new additive namespace, zero v1 surface changes:
+  - `ids.ts` (UUID v7, no new dep) · `events.ts` (envelope + M1 catalog + zod EventRegistry)
+  - `event-log.ts` (`EventLogStore` iface + `InMemoryEventLogStore`, contiguous per-call sequence, cursor replay) — Postgres impl slots in at M3
+  - `event-plane.ts` (in-process bus: outbox write first, per-call total order, replay+cursor, id-dedupe)
+  - `call-fsm.ts` (pure FSM creating→ringing→connecting→connected→paused→completed/failed; `INVALID_TRANSITION`=409)
+  - `idempotency.ts` (`Idempotency-Key`, 24h TTL, `X-Idempotent-Replay`)
+  - `call-service.ts` (`createCall/answerCall/sendMessage/submitUtterance/hangupCall/failCall/archiveCall`, ownership, idempotent `client_message_id`, advisory silence policy → `silence.detected`×3 → `call.noactivity`)
+  - `routes.ts` (`POST/GET /api/v2/calls`, `answer`, `hangup`, `messages`, `utterances`, `transcript`, `DELETE`; SSE `GET /calls/:id/events` with `Last-Event-ID`/`?after=` resume, heartbeat, `stream.end`)
+- `config.ts`: `v2.engineV2` (`ENGINE_V2=true`), `v2.noactivityEscalationMs` (default 5 min), `v2.sseHeartbeatMs`, `v2.idempotencyTtlMs`.
+- **45s cap gone behind flag:** `send_message_and_wait` with `ENGINE_V2=true` uses turn-lease semantics — `timeout_seconds` becomes an optional client window (no maximum); absent = wait until reply/call-end/noactivity escalation. `registerAiWait(callId, null)` = no-expiry lease. Flag off = today's behavior byte-for-byte (schema still caps at 45).
+- Tests: 5 new files / 46 tests (`v2-fsm`, `v2-event-log` (log+plane), `v2-call-service`, `v2-routes` (REST+SSE), `v2-mcp-lease`).
+
+**Verification (green):** roadmap M1 gate — v1 suite green (164), v2 contract tests green (46), total **210 tests / 26 files**, `tsc --noEmit` + ESLint clean. Cap removed only when flag on.
+
+**Remaining (M2+ per roadmap):** streaming STT/TTS + barge-in (M2), Postgres event log + recovery (M3), tools/media channel (M4). Phase-1 façade re-pointing of `complete_call`/`cancel_call` through v2 `hangupCall` deferred until the WS `/phone` projection exists (Phase 3) — v2 tracks its own calls only.
 
 **Risks:** engine work must not destabilize the shipped async flow — façade keeps v1 shapes (roadmap R5).
 
@@ -523,6 +539,13 @@ not a nice-to-have.
 ---
 
 ## 4. Session log
+
+- **2026-08-12 (session 3)** — **Item 16 (v2 M1) implemented**: new `backend/src/v2/` engine
+  (EventPlane + in-memory event log + pure FSM + `V2CallService` + idempotency + `/api/v2/*`
+  REST + SSE). `ENGINE_V2` flag removes the `send_message_and_wait` 45s cap (turn-lease
+  semantics, `registerAiWait(null)` no-expiry lease, noactivity escalation). 46 new v2
+  contract tests; full suite 210 green, lint/typecheck clean. Not committed yet.
+
 
 - **2026-08-12 (session 2)** — Backlog wave 2 executed (user scope: Items 1–13 + 17;
 v2 engine items 15/16 deferred to roadmap). **Item 6 design deviation:** backend verified
