@@ -2,7 +2,7 @@
 import { logger } from '../common/logger.js';
 import { InvalidTransitionError, transition } from './call-fsm.js';
 import type { EventLogStore } from './event-log.js';
-import { V2_EVENTS } from './events.js';
+import { V2_EVENTS, EVENT_PAYLOAD_SCHEMAS } from './events.js';
 import type { V2Event } from './events.js';
 import type { TranscriptSegment, V2CallRecord } from './call-service.js';
 
@@ -266,6 +266,8 @@ export interface CallVerification {
   contiguous: boolean;
   /** Events whose id was seen earlier in the same call log. */
   duplicateIds: number;
+  /** Events whose payload fails its registered schema (emit-time log-and-continue surfaced). */
+  payloadViolations: number;
   corrupt: boolean;
   /** sha256 of the joined event ids — lets two instances compare logs. */
   lastEventHash: string;
@@ -274,9 +276,12 @@ export interface CallVerification {
 export function verifyCallLog(callId: string, events: V2Event[]): CallVerification {
   const ids = new Set<string>();
   let duplicateIds = 0;
+  let payloadViolations = 0;
   for (const event of events) {
     if (ids.has(event.id)) duplicateIds++;
     else ids.add(event.id);
+    const schema = EVENT_PAYLOAD_SCHEMAS[event.type];
+    if (schema && !schema.safeParse(event.payload).success) payloadViolations++;
   }
   const count = events.length;
   const firstSeq = events[0]?.sequence ?? 0;
@@ -294,7 +299,8 @@ export function verifyCallLog(callId: string, events: V2Event[]): CallVerificati
     lastSeq,
     contiguous,
     duplicateIds,
-    corrupt: !contiguous || duplicateIds > 0,
+    payloadViolations,
+    corrupt: !contiguous || duplicateIds > 0 || payloadViolations > 0,
     lastEventHash,
   };
 }
@@ -303,27 +309,42 @@ export interface VerificationReport {
   calls: CallVerification[];
   totalEvents: number;
   corruptCalls: number;
+  payloadViolations: number;
   durationMs: number;
 }
 
 export class EventLogVerifier {
+  /**
+   * Walks the log in bounded keyset batches (recovery.ts header: no single
+   * statement may scan the whole table — the per-connection statement_timeout
+   * would kill it on a large log).
+   */
   async verify(log: EventLogStore): Promise<VerificationReport> {
     const started = Date.now();
-    const callIds = await log.callIds();
+    const BATCH = 500;
     const calls: CallVerification[] = [];
     let totalEvents = 0;
     let corruptCalls = 0;
-    for (const callId of callIds) {
-      const events = await log.list(callId);
-      const verification = verifyCallLog(callId, events);
-      calls.push(verification);
-      totalEvents += verification.count;
-      if (verification.corrupt) corruptCalls++;
+    let payloadViolations = 0;
+    let afterCallId: string | undefined;
+    for (;;) {
+      const page = await log.callIds(BATCH, afterCallId);
+      if (page.length === 0) break;
+      for (const callId of page) {
+        const events = await log.list(callId);
+        const verification = verifyCallLog(callId, events);
+        calls.push(verification);
+        totalEvents += verification.count;
+        payloadViolations += verification.payloadViolations;
+        if (verification.corrupt) corruptCalls++;
+      }
+      afterCallId = page[page.length - 1];
     }
     return {
       calls,
       totalEvents,
       corruptCalls,
+      payloadViolations,
       durationMs: Date.now() - started,
     };
   }

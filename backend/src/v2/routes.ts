@@ -23,6 +23,12 @@ export interface V2RouteDeps {
 
 const TERMINAL_EVENT_TYPES = new Set([V2_EVENTS.CALL_COMPLETED, V2_EVENTS.CALL_FAILED, 'call.archived']);
 
+// Per-route rate limits (plugin registered globally in index.ts; v1 uses the
+// same shape). Mutations are cheap-stateful and abuse-prone: 60/min like v1.
+// Reads are heavier on the engine (snapshot/transcript scans): 120/min.
+const moderateRateLimit = { max: 60, timeWindow: '1 minute' };
+const readRateLimit = { max: 120, timeWindow: '1 minute' };
+
 // ---- zod schemas (project convention: validation at every boundary) ---------
 
 const mediaSchema = z
@@ -215,7 +221,7 @@ export function registerV2Routes(app: FastifyInstance, deps: V2RouteDeps): void 
     });
   });
 
-  app.get('/api/v2/calls/:callId', async (request, reply) => {
+  app.get('/api/v2/calls/:callId', { config: { rateLimit: readRateLimit } }, async (request, reply) => {
     try {
       const { callId } = request.params as { callId: string };
       const call = callService.getSnapshot(callId, toActor(request));
@@ -257,7 +263,7 @@ export function registerV2Routes(app: FastifyInstance, deps: V2RouteDeps): void 
     }
   });
 
-  app.post('/api/v2/calls/:callId/answer', async (request, reply) => {
+  app.post('/api/v2/calls/:callId/answer', { config: { rateLimit: moderateRateLimit } }, async (request, reply) => {
     const actor = toActor(request);
     const { callId } = request.params as { callId: string };
     const input = parse(answerSchema, request.body, 'answer body');
@@ -267,7 +273,7 @@ export function registerV2Routes(app: FastifyInstance, deps: V2RouteDeps): void 
     });
   });
 
-  app.post('/api/v2/calls/:callId/hangup', async (request, reply) => {
+  app.post('/api/v2/calls/:callId/hangup', { config: { rateLimit: moderateRateLimit } }, async (request, reply) => {
     const actor = toActor(request);
     const { callId } = request.params as { callId: string };
     const input = parse(hangupSchema, request.body ?? {}, 'hangup body');
@@ -277,7 +283,7 @@ export function registerV2Routes(app: FastifyInstance, deps: V2RouteDeps): void 
     });
   });
 
-  app.post('/api/v2/calls/:callId/messages', async (request, reply) => {
+  app.post('/api/v2/calls/:callId/messages', { config: { rateLimit: moderateRateLimit } }, async (request, reply) => {
     const actor = toActor(request);
     const { callId } = request.params as { callId: string };
     const input = parse(messageSchema, request.body, 'message body');
@@ -292,7 +298,7 @@ export function registerV2Routes(app: FastifyInstance, deps: V2RouteDeps): void 
    * the stream is observed via message.started / message.completed /
    * message.failed on the events channel.
    */
-  app.post('/api/v2/calls/:callId/speak', async (request, reply) => {
+  app.post('/api/v2/calls/:callId/speak', { config: { rateLimit: moderateRateLimit } }, async (request, reply) => {
     const actor = toActor(request);
     const { callId } = request.params as { callId: string };
     const input = parse(messageSchema, request.body, 'speak body');
@@ -303,7 +309,7 @@ export function registerV2Routes(app: FastifyInstance, deps: V2RouteDeps): void 
   });
 
   /** AI-initiated hard cut (roadmap M2 §7 stopSpeaking). */
-  app.post('/api/v2/calls/:callId/stop-speaking', async (request, reply) => {
+  app.post('/api/v2/calls/:callId/stop-speaking', { config: { rateLimit: moderateRateLimit } }, async (request, reply) => {
     const actor = toActor(request);
     const { callId } = request.params as { callId: string };
     try {
@@ -317,7 +323,7 @@ export function registerV2Routes(app: FastifyInstance, deps: V2RouteDeps): void 
     }
   });
 
-  app.post('/api/v2/calls/:callId/utterances', async (request, reply) => {
+  app.post('/api/v2/calls/:callId/utterances', { config: { rateLimit: moderateRateLimit } }, async (request, reply) => {
     const actor = toActor(request);
     const { callId } = request.params as { callId: string };
     const input = parse(utteranceSchema, request.body, 'utterance body');
@@ -335,7 +341,7 @@ export function registerV2Routes(app: FastifyInstance, deps: V2RouteDeps): void 
    * whole utterance (speech.final + transcript + turn.ended), so a retry after
    * a crash or a flaky network must not duplicate the transcript segment.
    */
-  app.post('/api/v2/calls/:callId/utterances/partial', async (request, reply) => {
+  app.post('/api/v2/calls/:callId/utterances/partial', { config: { rateLimit: moderateRateLimit } }, async (request, reply) => {
     const actor = toActor(request);
     const { callId } = request.params as { callId: string };
     const input = parse(utterancePartialSchema, request.body, 'utterance partial body');
@@ -368,7 +374,7 @@ export function registerV2Routes(app: FastifyInstance, deps: V2RouteDeps): void 
     });
   });
 
-  app.get('/api/v2/calls/:callId/transcript', async (request, reply) => {
+  app.get('/api/v2/calls/:callId/transcript', { config: { rateLimit: readRateLimit } }, async (request, reply) => {
     try {
       const { callId } = request.params as { callId: string };
       const query = (request.query ?? {}) as { after?: string; partials?: string; limit?: string };
@@ -387,8 +393,10 @@ export function registerV2Routes(app: FastifyInstance, deps: V2RouteDeps): void 
   });
 
   // SSE — the AI's real-time feed (API spec §3.1). Resumable via Last-Event-ID
-  // or ?after= (empty = full history). Heartbeat every V2_SSE_HEARTBEAT_MS.
-  // Closes with `event: stream.end` on terminal states / client disconnect.
+  // or ?after= (empty = last V2_SSE_REPLAY_MAX_EVENTS events — a reconnect must
+  // not flood the socket with full history on a long-lived call). Heartbeat
+  // every V2_SSE_HEARTBEAT_MS. Closes with `event: stream.end` on terminal
+  // states / client disconnect.
   app.get('/api/v2/calls/:callId/events', { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } }, async (request, reply) => {
     const { callId } = request.params as { callId: string };
     const actor = toActor(request);
@@ -402,10 +410,18 @@ export function registerV2Routes(app: FastifyInstance, deps: V2RouteDeps): void 
     const query = (request.query ?? {}) as { after?: string };
     const lastEventId = request.headers['last-event-id'];
     let replay: EventPlaneOptions['replay'] = 'none';
+    let replayMax: number | undefined;
     if (typeof lastEventId === 'string' && lastEventId.length > 0) {
+      // Cursor resume: uncapped — the client asked for everything after its
+      // cursor, and silently truncating it would drop events (contract §3.1:
+      // drops are never silent). Only the full-history path is capped.
       replay = { afterEventId: lastEventId };
     } else if (query.after === '') {
       replay = 'all';
+      // Full-history reconnect: a long-lived call must not flood the socket
+      // with its whole log; the newest V2_SSE_REPLAY_MAX_EVENTS suffice, the
+      // client catches up from the transcript or a ?after=<id> cursor.
+      replayMax = config.v2.sseReplayMaxEvents;
     } else if (typeof query.after === 'string' && query.after.length > 0) {
       replay = { afterEventId: query.after };
     }
@@ -444,7 +460,7 @@ export function registerV2Routes(app: FastifyInstance, deps: V2RouteDeps): void 
           close();
         }
       },
-      { replay },
+      { replay, replayMax },
     );
 
     heartbeat = setInterval(() => write(': ping\n\n'), config.v2.sseHeartbeatMs);
@@ -458,7 +474,7 @@ export function registerV2Routes(app: FastifyInstance, deps: V2RouteDeps): void 
     return reply;
   });
 
-  app.delete('/api/v2/calls/:callId', async (request, reply) => {
+  app.delete('/api/v2/calls/:callId', { config: { rateLimit: moderateRateLimit } }, async (request, reply) => {
     const actor = toActor(request);
     const { callId } = request.params as { callId: string };
     try {

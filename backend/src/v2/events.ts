@@ -247,21 +247,33 @@ const REGISTRY: Record<string, z.ZodType> = {
 };
 
 /**
+ * The payload schemas, exported for integrity checking: the background
+ * verifier re-validates every logged event's payload against these, so an
+ * emit-time schema violation (a code bug — log-and-continue at publish) is
+ * surfaced as corruption instead of silently polluting the truth log.
+ */
+export const EVENT_PAYLOAD_SCHEMAS: Readonly<Record<string, z.ZodType>> = REGISTRY;
+
+/**
  * Single registration point per event-model §5. In dev, emitting an event whose
  * payload fails its schema logs loudly (emit still proceeds); the schema is
  * enforced at the API boundary already, so a failure here is a code bug.
+ * Returns true when the payload is valid (or the type is unregistered), false
+ * on a schema violation — the publisher counts it so the verifier can flag it.
  */
-export function validateEventPayload(type: string, payload: Record<string, unknown>): void {
+export function validateEventPayload(type: string, payload: Record<string, unknown>): boolean {
   const schema = REGISTRY[type];
   if (!schema) {
     if (process.env.NODE_ENV !== 'production') {
       logger.warn({ type }, '[v2.event] unregistered event type emitted');
     }
-    return;
+    return true;
   }
   const parsed = schema.safeParse(payload);
   if (!parsed.success) {
     logger.error({ type, issues: parsed.error.issues }, '[v2.event] payload schema violation');
+    return false;
   }
+  return true;
 }
 

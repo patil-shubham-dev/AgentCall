@@ -126,6 +126,8 @@ async function main() {
       max: config.database.poolMax,
       idleTimeoutMillis: config.database.poolIdleTimeoutMs,
       connectionTimeoutMillis: config.database.poolAcquireTimeoutMs,
+      // Identifiable in pg_stat_activity alongside the v2 engine's pool.
+      application_name: 'agentcall-backend',
     });
     pool.on('connect', (client) => {
       client.query("SET statement_timeout = '5s'").catch(() => {});
@@ -148,6 +150,7 @@ async function main() {
         max: config.database.poolMax,
         idleTimeoutMillis: config.database.poolIdleTimeoutMs,
         connectionTimeoutMillis: config.database.poolAcquireTimeoutMs,
+        application_name: 'agentcall-backend',
       });
       pool.on('connect', (client) => {
         client.query("SET statement_timeout = '5s'").catch(() => {});
@@ -368,6 +371,7 @@ async function main() {
       max: config.database.poolMax,
       idleTimeoutMillis: config.database.poolIdleTimeoutMs,
       connectionTimeoutMillis: config.database.poolAcquireTimeoutMs,
+      application_name: 'agentcall-backend-v2',
     });
     v2Pool.on('connect', (client) => {
       client.query("SET statement_timeout = '5s'").catch(() => {});
@@ -428,7 +432,7 @@ async function main() {
       v2Idempotency.sweep().catch((err) => {
         logger.error({ err }, '[v2] idempotency sweep failed');
       });
-    }, config.v2.sweepIntervalMs);
+    }, config.v2.idempotencySweepIntervalMs);
     v2IdemSweeperTimer.unref?.();
   }
 

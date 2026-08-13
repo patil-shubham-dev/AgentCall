@@ -3,11 +3,12 @@ import { InMemoryEventLogStore } from '../v2/event-log.js';
 import { EventPlane } from '../v2/event-plane.js';
 import { V2CallService } from '../v2/call-service.js';
 import { IdempotencyStore } from '../v2/idempotency.js';
-import { ForbiddenError, CallNotFoundError, ValidationError } from '../v2/errors.js';
+import { ForbiddenError, CallNotFoundError, ValidationError, V2ApiError } from '../v2/errors.js';
 import { InvalidTransitionError } from '../v2/call-fsm.js';
 import { V2_EVENTS } from '../v2/events.js';
 import type { V2Event } from '../v2/events.js';
 import { ScriptedTtsProvider } from '../v2/providers.js';
+import { uuidV7 } from '../v2/ids.js';
 
 const AI_ACTOR = { type: 'ai', identity: 'agent-01' } as const;
 const USER_ACTOR = { type: 'user', identity: 'user_123' } as const;
@@ -309,6 +310,40 @@ describe('v2 silence / noactivity escalation (R7)', () => {
     const archived = await service.sweepIdleCalls(60_000);
     expect(archived).toBe(1);
     expect(handle.stopped).toBe(true); // hard-cut, not left streaming into the void
+
+    service.dispose();
+  });
+
+  it('answer on a recovered call stuck in creating returns CALL_NEVER_ANSWERED', async () => {
+    const log = new InMemoryEventLogStore();
+    const plane = new EventPlane(log);
+    const service = new V2CallService(plane, new IdempotencyStore());
+    // Simulates a worker crash between call.created and call.ringing: the log
+    // has only CALL_CREATED, so recovery leaves the aggregate in 'creating'.
+    const callId = 'stale-creating';
+    await plane.publish(callId, {
+      id: uuidV7(),
+      type: V2_EVENTS.CALL_CREATED,
+      version: 1,
+      call_id: callId,
+      correlation_id: callId,
+      occurred_at: new Date().toISOString(),
+      actor: { type: 'ai', identity: 'agent-01' },
+      payload: { user_id: 'user_123', agent_id: 'agent-01' },
+    });
+
+    const { recovered, total } = await service.recoverAll();
+    expect(recovered).toBe(1);
+    expect(total).toBe(1);
+    expect(service.getSnapshot(callId, SERVICE_ACTOR).state).toBe('creating');
+
+    const err = await service.answerCall(callId, 'phone', SERVICE_ACTOR).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(V2ApiError);
+    expect((err as V2ApiError).code).toBe('CALL_NEVER_ANSWERED');
+    expect((err as V2ApiError).statusCode).toBe(409);
 
     service.dispose();
   });

@@ -39,7 +39,11 @@ export function composeIdempotencyKey(identity: string, key: string, callId?: st
 export class IdempotencyStore implements IdempotencyBackend {
   private readonly entries = new Map<string, StoredIdempotentResponse>();
 
-  constructor(protected readonly ttlMs: number = config.v2.idempotencyTtlMs) {}
+  constructor(
+    protected readonly ttlMs: number = config.v2.idempotencyTtlMs,
+    /** Hard cap (dev/memory modes): oldest entries are evicted beyond this. */
+    private readonly maxEntries: number = config.v2.idempotencyMaxEntries,
+  ) {}
 
   key(identity: string, idempotencyKey: string, callId?: string): string {
     return composeIdempotencyKey(identity, idempotencyKey, callId);
@@ -60,6 +64,15 @@ export class IdempotencyStore implements IdempotencyBackend {
     // Opportunistic size guard: drop expired entries when the map grows large.
     if (this.entries.size > 10_000) {
       await this.sweep();
+    }
+    // Hard cap (dev/memory modes): beyond maxEntries the OLDEST entries are
+    // evicted (Map preserves insertion order). Replay protection degrades for
+    // those keys, never the process — bounded memory beats unlimited growth in
+    // a long-running dev/staging process.
+    while (this.entries.size > this.maxEntries) {
+      const oldest = this.entries.keys().next().value;
+      if (oldest === undefined) break;
+      this.entries.delete(oldest);
     }
   }
 

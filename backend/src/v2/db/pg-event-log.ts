@@ -71,7 +71,11 @@ WHERE call_id = $1
 ORDER BY seq`;
 const EXISTS_SQL = `SELECT EXISTS(SELECT 1 FROM v2_events WHERE call_id = $1) AS present`;
 const COUNT_SQL = `SELECT COUNT(*) AS total FROM v2_events WHERE call_id = $1`;
-const CALL_IDS_SQL = `SELECT DISTINCT call_id FROM v2_events ORDER BY call_id`;
+const CALL_IDS_SQL = `
+SELECT DISTINCT call_id FROM v2_events
+WHERE call_id > COALESCE($1, '')
+ORDER BY call_id
+LIMIT $2`;
 
 export class PostgresEventLogStore implements EventLogStore {
   constructor(private readonly pool: Pool) {}
@@ -133,8 +137,12 @@ export class PostgresEventLogStore implements EventLogStore {
     return Number(result.rows[0]?.total ?? 0);
   }
 
-  async callIds(): Promise<string[]> {
-    const result = await this.pool.query<{ call_id: string }>(CALL_IDS_SQL);
+  async callIds(limit?: number, afterCallId?: string): Promise<string[]> {
+    const pageSize = limit !== undefined && limit > 0 ? limit : 1000;
+    const result = await this.pool.query<{ call_id: string }>(CALL_IDS_SQL, [
+      afterCallId ?? '',
+      pageSize,
+    ]);
     return result.rows.map((r) => r.call_id);
   }
 

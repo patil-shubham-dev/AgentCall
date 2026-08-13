@@ -77,6 +77,23 @@ export const config = {
     // sweeper. A live exchange keeps touching lastActivityAt and is never swept.
     callIdleArchiveMs: parseIntSafe('V2_CALL_IDLE_ARCHIVE_MS', '86400000'),
     sweepIntervalMs: parseIntSafe('V2_SWEEP_INTERVAL_MS', '300000'),
+    // Independent interval for the durable idempotency TTL sweep: idempotency
+    // rows are write-once and bounded by V2_IDEMPOTENCY_MAX_ENTRIES, so they
+    // don't need the same cadence as call retention.
+    idempotencySweepIntervalMs: parseIntSafe('V2_IDEMPOTENCY_SWEEP_INTERVAL_MS', '600000'),
+    // In-memory idempotency cap (dev/memory persistence modes only): when the
+    // map exceeds this, the OLDEST entries are evicted (insertion order) so a
+    // long-running dev process can't grow without bound. The Postgres store is
+    // bounded by its TTL sweep instead.
+    idempotencyMaxEntries: parseIntSafe('V2_IDEMPOTENCY_MAX_ENTRIES', '50000'),
+    // Cap on SSE reconnect replays: `?after=` empty (or a stale Last-Event-ID)
+    // replays at most this many events, so a long-lived call can't flood the
+    // socket with full history on every reconnect. Live events are never capped.
+    sseReplayMaxEvents: parseIntSafe('V2_SSE_REPLAY_MAX_EVENTS', '500'),
+    // Boot recovery slower than this logs a warning (keyset-batched callIds
+    // keep every statement bounded by the per-connection 5s timeout; the
+    // warning is for total-time observability, not a hard cap).
+    recoverySlowMs: parseIntSafe('V2_RECOVERY_SLOW_MS', '30000'),
   },
 } as const;
 

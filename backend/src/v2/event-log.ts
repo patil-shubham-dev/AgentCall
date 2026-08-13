@@ -16,8 +16,13 @@ export interface EventLogStore {
   /** True when the call has logged events (existence probe for 404 semantics). */
   exists(callId: string): Promise<boolean>;
   count(callId: string): Promise<number>;
-  /** Every call id present in the log (recovery enumeration). */
-  callIds(): Promise<string[]>;
+  /**
+   * Call ids present in the log, sorted ascending, for recovery/verification
+   * enumeration. Keyset-paginated: pass `limit` and the last `afterCallId`
+   * returned to walk a huge table in bounded statements (the Postgres
+   * implementation must not do a full DISTINCT scan in one query).
+   */
+  callIds(limit?: number, afterCallId?: string): Promise<string[]>;
 }
 
 export class InMemoryEventLogStore implements EventLogStore {
@@ -66,7 +71,10 @@ export class InMemoryEventLogStore implements EventLogStore {
     return this.logs.get(callId)?.length ?? 0;
   }
 
-  async callIds(): Promise<string[]> {
-    return [...this.logs.keys()];
+  async callIds(limit?: number, afterCallId?: string): Promise<string[]> {
+    const sorted = [...this.logs.keys()].sort();
+    const start = afterCallId === undefined ? 0 : sorted.indexOf(afterCallId) + 1;
+    const slice = limit !== undefined && limit > 0 ? sorted.slice(start, start + limit) : sorted.slice(start);
+    return slice;
   }
 }

@@ -1,10 +1,11 @@
 import { logger } from '../common/logger.js';
+import { config } from '../common/config.js';
 import type { EventPlane } from './event-plane.js';
 import { V2_EVENTS } from './events.js';
 import { uuidV7 } from './ids.js';
 import { isOpenState, transition, InvalidTransitionError } from './call-fsm.js';
 import type { V2CallState } from './call-fsm.js';
-import { CallNotFoundError, ForbiddenError, ValidationError } from './errors.js';
+import { CallNotFoundError, ForbiddenError, ValidationError, V2ApiError } from './errors.js';
 import type { IdempotencyBackend } from './idempotency.js';
 import type { V2Actor } from './events.js';
 import { SyncTtsProvider } from './providers.js';
@@ -277,6 +278,17 @@ export class V2CallService {
 
     // Idempotent re-answer (phone retries).
     if (call.state === 'connected' || call.state === 'connecting') return call;
+
+    // Recovered calls that crashed between call.created and call.ringing are
+    // stuck in 'creating' — the FSM rejects 'answer' there with a generic 409.
+    // Give the client a distinct code so it can recreate instead of retrying.
+    if (call.state === 'creating') {
+      throw new V2ApiError(
+        409,
+        'CALL_NEVER_ANSWERED',
+        'Call was created but never entered ringing (e.g. the worker restarted mid-setup); create a new call',
+      );
+    }
 
     transition(call.state, 'answer');
     call.state = 'connecting';
@@ -781,15 +793,34 @@ export class V2CallService {
 
   /** Replays every call in the log back into the aggregate map. */
   async recoverAll(now = Date.now()): Promise<{ recovered: number; total: number }> {
-    const callIds = await this.plane.log.callIds();
+    const started = Date.now();
+    const BATCH = 500;
     let recovered = 0;
-    for (const callId of callIds) {
-      if (await this.recoverCall(callId, now)) recovered++;
+    let total = 0;
+    let afterCallId: string | undefined;
+    for (;;) {
+      // Keyset batches: every statement stays bounded (the Postgres
+      // per-connection 5s statement_timeout must never be tripped by a
+      // full-table DISTINCT scan on a large log).
+      const page = await this.plane.log.callIds(BATCH, afterCallId);
+      if (page.length === 0) break;
+      for (const callId of page) {
+        if (await this.recoverCall(callId, now)) recovered++;
+        total++;
+      }
+      afterCallId = page[page.length - 1];
     }
-    if (callIds.length > 0) {
-      logger.info({ recovered, total: callIds.length }, '[v2.recovery] startup recovery completed');
+    if (total > 0) {
+      const durationMs = Date.now() - started;
+      const slow = durationMs > config.v2.recoverySlowMs;
+      // Bracket access keeps `this` bound to the pino instance — pino methods
+      // are this-sensitive, so a detached `const log = logger.warn` explodes.
+      logger[slow ? 'warn' : 'info'](
+        { recovered, total, durationMs, slow: slow || undefined },
+        '[v2.recovery] startup recovery completed',
+      );
     }
-    return { recovered, total: callIds.length };
+    return { recovered, total };
   }
 
   // ---- silence policy (advisory, R7) ---------------------------------------

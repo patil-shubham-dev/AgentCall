@@ -47,6 +47,19 @@ describe('v2 event log', () => {
     const after = await log.after('call-1', 'unknown-event-id');
     expect(after).toHaveLength(1);
   });
+
+  it('keyset-paginates call ids for recovery enumeration', async () => {
+    const log = new InMemoryEventLogStore();
+    await log.append('call-b', makeEvent('call-b', 'call.created'));
+    await log.append('call-a', makeEvent('call-a', 'call.created'));
+    await log.append('call-c', makeEvent('call-c', 'call.created'));
+    expect(await log.callIds()).toEqual(['call-a', 'call-b', 'call-c']);
+    const first = await log.callIds(2);
+    expect(first).toEqual(['call-a', 'call-b']);
+    const second = await log.callIds(2, first[first.length - 1] as string);
+    expect(second).toEqual(['call-c']);
+    expect(await log.callIds(2, 'call-c')).toEqual([]);
+  });
 });
 
 describe('v2 event plane', () => {
@@ -177,5 +190,28 @@ describe('v2 event plane', () => {
     await new Promise((r) => setTimeout(r, 20));
 
     expect(received.map((e) => e.sequence)).toEqual([1, 2, 3, 4]);
+  });
+
+  it('caps a full-history replay to the newest replayMax events', async () => {
+    const plane = new EventPlane(new InMemoryEventLogStore());
+    for (let i = 1; i <= 5; i++) {
+      await plane.publish('call-1', makeEvent('call-1', 'call.created'));
+    }
+    const received: V2Event[] = [];
+    // SSE reconnects use this: `?after=` empty must not flood the socket with
+    // the whole log of a long-lived call.
+    plane.subscribe('call-1', (e) => received.push(e), { replay: 'all', replayMax: 2 });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(received.map((e) => e.sequence)).toEqual([4, 5]);
+  });
+
+  it('counts emit-time payload schema violations without dropping the event', async () => {
+    const plane = new EventPlane(new InMemoryEventLogStore());
+    // message.queued requires {message_id, content} — this payload must fail
+    // its schema, be counted, and still be appended (log-and-continue contract).
+    const stored = await plane.publish('call-1', makeEvent('call-1', 'message.queued', { n: 1 }));
+    expect(plane.invalidPayloadCount).toBe(1);
+    expect(stored.type).toBe('message.queued');
+    expect(await plane.log.list('call-1')).toHaveLength(1);
   });
 });

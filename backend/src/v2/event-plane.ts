@@ -13,6 +13,13 @@ export interface EventPlaneSubscription {
 export interface EventPlaneOptions {
   /** Replay on subscribe: 'none' (live only) | 'all' (from the first event) | after an event id. */
   replay?: 'none' | 'all' | { afterEventId: string };
+  /**
+   * Caps how many events a replay may deliver (e.g. SSE reconnects on a
+   * long-lived call: `?after=` empty must not flood the socket with full
+   * history). `slice(-replayMax)` — the newest events win. Live delivery is
+   * never capped.
+   */
+  replayMax?: number;
 }
 
 /**
@@ -28,11 +35,20 @@ export class EventPlane {
   private nextSubscriberId = 1;
   private readonly pendingWrites = new Map<string, Promise<unknown>>();
 
+  /**
+   * Emit-time payload schema violations (log-and-continue contract): the event
+   * is still appended, but the counter lets the verifier / operator see that
+   * the engine emitted something its own schema rejects.
+   */
+  invalidPayloadCount = 0;
+
   constructor(readonly log: EventLogStore) {}
 
   /** Appends to the log (outbox), then delivers to per-call subscribers. */
   async publish(callId: string, event: Omit<V2Event, 'sequence'>): Promise<V2Event> {
-    validateEventPayload(event.type, event.payload);
+    if (!validateEventPayload(event.type, event.payload)) {
+      this.invalidPayloadCount++;
+    }
 
     // Serialize appends per call so `sequence` is assigned in a deterministic
     // order even when two commands race (total order per call, roadmap R6).
@@ -90,11 +106,14 @@ export class EventPlane {
     if (replaying) {
       void (async () => {
         try {
+          const replayMax = options.replayMax;
+          const cap = (events: V2Event[]): V2Event[] =>
+            replayMax !== undefined && replayMax > 0 ? events.slice(-replayMax) : events;
           const events =
             replayOption === 'all'
-              ? await this.log.list(callId)
+              ? cap(await this.log.list(callId))
               : replayOption !== 'none'
-                ? await this.log.after(callId, replayOption.afterEventId)
+                ? cap(await this.log.after(callId, replayOption.afterEventId))
                 : [];
           for (const event of events) {
             if (delivered.has(event.id)) continue;

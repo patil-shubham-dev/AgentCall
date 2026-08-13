@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import Fastify from 'fastify';
 import type { FastifyInstance } from 'fastify';
+import rateLimit from '@fastify/rate-limit';
 import { registerRoutes } from '../routes.js';
 import { registerV2Routes } from '../v2/routes.js';
 import { InMemorySessionRepository, InMemoryCallbackRepository } from '../voicebridge/repositories/index.js';
@@ -406,5 +407,45 @@ describe('v2 SSE events', () => {
     });
     expect(stream.body).toContain('event: call.created');
     expect(stream.body).toContain('event: stream.end');
+  });
+});
+
+describe('v2 rate limiting', () => {
+  // The shared app above does not register @fastify/rate-limit (prod registers
+  // it once, globally, in src/index.ts); a dedicated app proves the per-route
+  // configs in registerV2Routes work end-to-end.
+  it('rejects the 61st mutation in a minute with 429', async () => {
+    const service = new V2CallService(new EventPlane(new InMemoryEventLogStore()), new IdempotencyStore());
+
+    const limited = Fastify();
+    // High default; the routes' own configs (max 60/min) are what we exercise.
+    await limited.register(rateLimit, { max: 1000, timeWindow: '1 minute' });
+    registerV2Routes(limited, { callService: service });
+    await limited.ready();
+    try {
+      const url = `${BASE}/calls/nonexistent/messages`;
+      let lastStatus = 0;
+      for (let i = 0; i < 61; i++) {
+        const res = await limited.inject({
+          method: 'POST',
+          url,
+          payload: { content: 'x' },
+          headers: { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' },
+        });
+        lastStatus = res.statusCode;
+      }
+      expect(lastStatus).toBe(429);
+
+      const replay = await limited.inject({
+        method: 'POST',
+        url,
+        payload: { content: 'x' },
+        headers: { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' },
+      });
+      expect(replay.statusCode).toBe(429);
+    } finally {
+      service.dispose();
+      await limited.close();
+    }
   });
 });

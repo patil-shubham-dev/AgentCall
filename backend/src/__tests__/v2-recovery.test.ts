@@ -270,7 +270,7 @@ describe('v2 event log verifier', () => {
       correlation_id: 'c',
       occurred_at: new Date().toISOString(),
       actor: { type: 'system' as const },
-      payload: {},
+      payload: { user_id: 'u1', agent_id: 'a1' },
     };
     const e = (id: string, sequence: number): V2Event => ({ ...base, id, type: 'call.created', sequence });
 
@@ -296,9 +296,9 @@ describe('v2 event log verifier', () => {
 
   it('reports per-call and total stats over a log', async () => {
     const log = new InMemoryEventLogStore();
-    await log.append('c1', makeEvent('c1', 'call.created'));
+    await log.append('c1', makeEvent('c1', 'call.created', { user_id: 'u1', agent_id: 'a1' }));
     await log.append('c1', makeEvent('c1', 'call.ringing'));
-    await log.append('c2', makeEvent('c2', 'call.created'));
+    await log.append('c2', makeEvent('c2', 'call.created', { user_id: 'u2', agent_id: 'a2' }));
 
     const report = await new EventLogVerifier().verify(log);
     expect(report.totalEvents).toBe(3);
@@ -307,5 +307,21 @@ describe('v2 event log verifier', () => {
       ['c1', 2],
       ['c2', 1],
     ]);
+  });
+
+  it('verifier flags payloads that violate their registered schema', async () => {
+    const log = new InMemoryEventLogStore();
+    const callId = 'bad-payload';
+    await log.append(callId, makeEvent(callId, V2_EVENTS.CALL_CREATED, { user_id: 'u1', agent_id: 'a1' }));
+    // message.queued requires {message_id, content} — a wrong-shaped payload is
+    // a data-quality signal even though the fold still processed the event.
+    await log.append(callId, makeEvent(callId, V2_EVENTS.MESSAGE_QUEUED, { n: 1 }));
+
+    const report = await new EventLogVerifier().verify(log);
+    const callCheck = report.calls.find((c) => c.callId === callId);
+    expect(callCheck?.payloadViolations).toBe(1);
+    expect(callCheck?.corrupt).toBe(true);
+    expect(report.payloadViolations).toBe(1);
+    expect(report.corruptCalls).toBe(1);
   });
 });
