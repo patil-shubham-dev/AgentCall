@@ -143,14 +143,22 @@ async function withIdempotency(
       return reply.status(result.statusCode).send(result.body);
     }
     const key = deps.callService.idempotency.key(identity, idemKey, callId);
-    const stored = deps.callService.idempotency.get(key);
+    const stored = await deps.callService.idempotency.get(key);
     if (stored) {
       logger.info({ key: callId ?? identity, idemKey }, '[v2] idempotency replay');
       reply.header('X-Idempotent-Replay', 'true');
       return reply.status(stored.statusCode).send(stored.body);
     }
     const result = await fn();
-    deps.callService.idempotency.put(key, result.statusCode, result.body);
+    try {
+      await deps.callService.idempotency.put(key, result.statusCode, result.body);
+    } catch (err) {
+      // The command already settled and its events are durably logged (outbox
+      // write path) — a failed replay-record must not turn a success into a
+      // retryable 500, or the client's retry would re-execute the command and
+      // duplicate the side effect. Log and proceed without replay protection.
+      logger.error({ err, callId: callId ?? identity, idemKey }, '[v2] idempotency put failed; proceeding without replay protection');
+    }
     return reply.status(result.statusCode).send(result.body);
   } catch (err) {
     // Map v2 errors (INVALID_TRANSITION, NOT_FOUND, FORBIDDEN…) even when no
@@ -320,25 +328,44 @@ export function registerV2Routes(app: FastifyInstance, deps: V2RouteDeps): void 
   });
 
   /**
-   * Streaming user speech (roadmap M2): partials until finalize=true. NOT
-   * idempotency-wrapped — partials are cheap and continuous by nature; the
-   * client_message_id binds inside the engine when the utterance finalizes.
+   * Streaming user speech (roadmap M2): partials until finalize=true. Live
+   * partials are NOT idempotency-wrapped — they are cheap and continuous by
+   * nature; the client_message_id binds inside the engine when the utterance
+   * finalizes. The finalize request IS idempotency-wrapped: it settles the
+   * whole utterance (speech.final + transcript + turn.ended), so a retry after
+   * a crash or a flaky network must not duplicate the transcript segment.
    */
   app.post('/api/v2/calls/:callId/utterances/partial', async (request, reply) => {
     const actor = toActor(request);
     const { callId } = request.params as { callId: string };
     const input = parse(utterancePartialSchema, request.body, 'utterance partial body');
-    try {
+
+    if (!input.finalize) {
+      try {
+        const result = await callService.submitUtterancePartial(callId, input, actor);
+        return {
+          utterance_id: result.utterance_id,
+          text: result.text,
+          idempotent: result.idempotent,
+          final: false,
+        };
+      } catch (err) {
+        return sendError(reply, err);
+      }
+    }
+
+    return withIdempotency(deps, request, reply, idemIdentity(actor), callId, async () => {
       const result = await callService.submitUtterancePartial(callId, input, actor);
       return {
-        utterance_id: result.utterance_id,
-        text: result.text,
-        idempotent: result.idempotent,
-        final: result.final,
+        statusCode: 200,
+        body: {
+          utterance_id: result.utterance_id,
+          text: result.text,
+          idempotent: result.idempotent,
+          final: true,
+        },
       };
-    } catch (err) {
-      return sendError(reply, err);
-    }
+    });
   });
 
   app.get('/api/v2/calls/:callId/transcript', async (request, reply) => {

@@ -16,6 +16,14 @@ import { initializePhoneTokens, createPhoneToken } from '../voicebridge/phone-to
 const TOKEN = config.serviceToken || 'test-service-token';
 const BASE = '/api/v2';
 
+/** Idempotency backend whose put() fails — simulates a store outage after the
+ * command already settled (outbox truth is in the event log, not the store). */
+class FailingPutIdempotency extends IdempotencyStore {
+  override async put(): Promise<void> {
+    throw new Error('simulated idempotency store outage');
+  }
+}
+
 let app: FastifyInstance;
 let v2Service: V2CallService;
 let agentKey: string;
@@ -227,6 +235,77 @@ describe('v2 REST contract', () => {
     expect(second.statusCode).toBe(201);
     expect(second.headers['x-idempotent-replay']).toBe('true');
     expect((second.json() as { call_id: string }).call_id).toBe((first.json() as { call_id: string }).call_id);
+  });
+
+  it('replays a finalized partial utterance idempotently (single transcript segment)', async () => {
+    const { body: call } = await createCall({ user_id: 'UserV2', agent_id: 'AgentV2' });
+    await app.inject({
+      method: 'POST',
+      url: `${BASE}/calls/${call.call_id}/answer`,
+      payload: {},
+      headers: { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' },
+    });
+    const headers = {
+      authorization: `Bearer ${TOKEN}`,
+      'content-type': 'application/json',
+      'idempotency-key': 'idem-finalize-1',
+    };
+    const first = await app.inject({
+      method: 'POST',
+      url: `${BASE}/calls/${call.call_id}/utterances/partial`,
+      payload: { text: 'Final answer', finalize: true, client_message_id: 'cm-final' },
+      headers,
+    });
+    const second = await app.inject({
+      method: 'POST',
+      url: `${BASE}/calls/${call.call_id}/utterances/partial`,
+      payload: { text: 'Final answer', finalize: true, client_message_id: 'cm-final' },
+      headers,
+    });
+    expect(first.statusCode).toBe(200);
+    expect(second.statusCode).toBe(200);
+    expect(second.headers['x-idempotent-replay']).toBe('true');
+    expect((second.json() as { utterance_id: string }).utterance_id).toBe(
+      (first.json() as { utterance_id: string }).utterance_id,
+    );
+
+    const transcript = await app.inject({
+      method: 'GET',
+      url: `${BASE}/calls/${call.call_id}/transcript`,
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+    const body = transcript.json() as { segments: Array<{ text: string }> };
+    expect(body.segments.filter((s) => s.text === 'Final answer')).toHaveLength(1);
+  });
+
+  it('returns the success response even when the idempotency record cannot be stored', async () => {
+    const sessionRepo = new InMemorySessionRepository();
+    const callbackRepo = new InMemoryCallbackRepository();
+    const voicebridge = new VoiceBridgeService(sessionRepo, callbackRepo);
+    const plane = new EventPlane(new InMemoryEventLogStore());
+    const failing = new V2CallService(plane, new FailingPutIdempotency());
+    const testApp = Fastify();
+    registerRoutes(testApp, { voicebridge, sessionRepo, callbackRepo });
+    registerV2Routes(testApp, { callService: failing });
+    await testApp.ready();
+    try {
+      const res = await testApp.inject({
+        method: 'POST',
+        url: `${BASE}/calls`,
+        payload: { user_id: 'UserV2', agent_id: 'AgentV2' },
+        headers: {
+          authorization: `Bearer ${TOKEN}`,
+          'content-type': 'application/json',
+          'idempotency-key': 'idem-put-fail',
+        },
+      });
+      // The command settled and its events are durably logged; the client must
+      // not see a retryable 500 (its retry would duplicate the side effect).
+      expect(res.statusCode).toBe(201);
+    } finally {
+      failing.dispose();
+      await testApp.close();
+    }
   });
 
   it('rejects a call-create for an AI identity that does not own the agent_id', async () => {

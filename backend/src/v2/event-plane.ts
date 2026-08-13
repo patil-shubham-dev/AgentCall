@@ -28,7 +28,7 @@ export class EventPlane {
   private nextSubscriberId = 1;
   private readonly pendingWrites = new Map<string, Promise<unknown>>();
 
-  constructor(private readonly log: EventLogStore) {}
+  constructor(readonly log: EventLogStore) {}
 
   /** Appends to the log (outbox), then delivers to per-call subscribers. */
   async publish(callId: string, event: Omit<V2Event, 'sequence'>): Promise<V2Event> {
@@ -101,15 +101,22 @@ export class EventPlane {
             delivered.add(event.id);
             await handler(event);
           }
-          // Snapshot delivered — open the live path, then flush the buffer.
-          // The flip is synchronous, so nothing interleaves at the boundary.
-          replaying = false;
-          const pending = buffer.splice(0);
-          for (const event of pending) {
-            if (delivered.has(event.id)) continue;
-            delivered.add(event.id);
-            await handler(event);
+          // Snapshot delivered — drain the buffer, then open the live path.
+          // `replaying` stays true while draining: events published during an
+          // awaited handler keep buffering instead of overtaking the flush,
+          // so per-call total order holds even with slow async handlers.
+          // The flip is synchronous after the last empty splice, so a publish
+          // cannot interleave between the final buffer check and the flip.
+          for (;;) {
+            const pending = buffer.splice(0);
+            if (pending.length === 0) break;
+            for (const event of pending) {
+              if (delivered.has(event.id)) continue;
+              delivered.add(event.id);
+              await handler(event);
+            }
           }
+          replaying = false;
         } catch (err) {
           logger.error({ err, callId }, '[v2.event-plane] replay failed');
         }

@@ -134,4 +134,48 @@ describe('v2 event plane', () => {
     expect(received.map((e) => e.sequence)).toEqual([1, 2]);
     expect(received.map((e) => (e.payload as { message_id: string }).message_id).sort()).toEqual(['m1', 'm2']);
   });
+
+  it('keeps total order when a live event races the post-replay buffer flush', async () => {
+    // Deterministic race: gate list() so the replay snapshot is frozen at [1,2],
+    // publish 3 while the replay is blocked (it must buffer), then release.
+    // The handler for buffered event 3 publishes event 4 BEFORE recording 3 —
+    // with a naive flip-then-flush the live 4 overtook the async flush and the
+    // subscriber observed [1,2,4,3].
+    class GatedLogStore extends InMemoryEventLogStore {
+      gate: Promise<void> = Promise.resolve();
+      override async list(callId: string): Promise<V2Event[]> {
+        await this.gate;
+        return super.list(callId);
+      }
+    }
+    const log = new GatedLogStore();
+    const plane = new EventPlane(log);
+    await plane.publish('call-1', makeEvent('call-1', 'call.created')); // seq 1
+    await plane.publish('call-1', makeEvent('call-1', 'call.ringing')); // seq 2
+
+    let release: () => void = () => {};
+    log.gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    const received: V2Event[] = [];
+    plane.subscribe(
+      'call-1',
+      async (e) => {
+        if (e.sequence === 3) {
+          await plane.publish('call-1', makeEvent('call-1', 'call.connected')); // seq 4
+        }
+        received.push(e);
+      },
+      { replay: 'all' },
+    );
+
+    // Replay is blocked awaiting list(); this live event must buffer behind
+    // the snapshot, never overtake it.
+    await plane.publish('call-1', makeEvent('call-1', 'call.answer.requested')); // seq 3
+    release();
+    await new Promise((r) => setTimeout(r, 20));
+
+    expect(received.map((e) => e.sequence)).toEqual([1, 2, 3, 4]);
+  });
 });

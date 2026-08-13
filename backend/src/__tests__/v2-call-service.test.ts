@@ -7,6 +7,7 @@ import { ForbiddenError, CallNotFoundError, ValidationError } from '../v2/errors
 import { InvalidTransitionError } from '../v2/call-fsm.js';
 import { V2_EVENTS } from '../v2/events.js';
 import type { V2Event } from '../v2/events.js';
+import { ScriptedTtsProvider } from '../v2/providers.js';
 
 const AI_ACTOR = { type: 'ai', identity: 'agent-01' } as const;
 const USER_ACTOR = { type: 'user', identity: 'user_123' } as const;
@@ -257,6 +258,57 @@ describe('v2 silence / noactivity escalation (R7)', () => {
       if (e.type === V2_EVENTS.SILENCE_DETECTED) silence.push(e);
     }, { replay: 'all' });
     expect(silence).toHaveLength(0); // user spoke — no silence events
+
+    service.dispose();
+  });
+
+  it('speak() arms the silence policy once the streamed turn settles', async () => {
+    const log = new InMemoryEventLogStore();
+    const plane = new EventPlane(log);
+    const service = new V2CallService(plane, new IdempotencyStore());
+    const call = await service.createCall(
+      { user_id: 'user_123', agent_id: 'agent-01', policy: { silence_after_ms: 20 } },
+      AI_ACTOR,
+    );
+    await service.answerCall(call.id, undefined, USER_ACTOR);
+    // Non-blocking say(): the policy must arm AFTER the turn settles, exactly
+    // like sendMessage — otherwise silence.detected never escalates for
+    // streamed AI messages.
+    await service.speak(call.id, { content: 'Streamed message' }, AI_ACTOR);
+
+    const silence: V2Event[] = [];
+    plane.subscribe(call.id, (e) => {
+      if (e.type === V2_EVENTS.SILENCE_DETECTED) silence.push(e);
+    }, { replay: 'all' });
+
+    await new Promise((r) => setTimeout(r, 100));
+    expect(silence.length).toBeGreaterThanOrEqual(1);
+
+    service.dispose();
+  });
+
+  it('sweeping an idle call hard-cuts its live TTS stream', async () => {
+    const log = new InMemoryEventLogStore();
+    const plane = new EventPlane(log);
+    // Second token far in the future: the stream is deterministically still in
+    // flight when the sweep runs (a short delay would race a loaded runner).
+    const provider = new ScriptedTtsProvider([
+      { text: 'first', audio_ms: 50, delay_ms: 0 },
+      { text: 'second', audio_ms: 50, delay_ms: 10_000 },
+    ]);
+    const service = new V2CallService(plane, new IdempotencyStore(), provider);
+    const call = await service.createCall({ user_id: 'user_123', agent_id: 'agent-01' }, AI_ACTOR);
+    await service.answerCall(call.id, undefined, USER_ACTOR);
+    await service.speak(call.id, { content: 'still streaming' }, AI_ACTOR);
+
+    const handle = must(service.getSnapshot(call.id, SERVICE_ACTOR).tts?.handle, 'tts handle');
+    // Age by well beyond idleMs: the sweep's cutoff is now - idleMs, so aging
+    // by exactly idleMs races the same millisecond and the call looks active.
+    service.getSnapshot(call.id, SERVICE_ACTOR).lastActivityAt = new Date(Date.now() - 3_600_000).toISOString();
+
+    const archived = await service.sweepIdleCalls(60_000);
+    expect(archived).toBe(1);
+    expect(handle.stopped).toBe(true); // hard-cut, not left streaming into the void
 
     service.dispose();
   });
