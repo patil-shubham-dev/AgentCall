@@ -70,7 +70,7 @@ describe('v2 call service lifecycle', () => {
     await service.answerCall(call.id, undefined, USER_ACTOR);
     const { message_id } = await service.sendMessage(call.id, { content: 'Hello there' }, AI_ACTOR);
 
-    const events = await collectEvents(plane, call.id, 9);
+    const events = await collectEvents(plane, call.id, 10);
     const messageEvents = events.filter((e) => e.type.startsWith('message.'));
     expect(messageEvents.map((e) => e.type)).toEqual([
       V2_EVENTS.MESSAGE_QUEUED,
@@ -78,6 +78,11 @@ describe('v2 call service lifecycle', () => {
       V2_EVENTS.MESSAGE_COMPLETED,
     ]);
     expect((must(messageEvents[0], 'queued').payload as { message_id: string }).message_id).toBe(message_id);
+
+    // M2 lease: the AI finished its turn and is now waiting for the human.
+    const lease = events.at(-1);
+    expect(lease?.type).toBe(V2_EVENTS.TURN_LEASE);
+    expect(lease?.payload).toMatchObject({ ai_wait_status: { active: true, active_until: null } });
 
     const transcript = service.getTranscript(call.id, AI_ACTOR);
     expect(transcript.at(-1)).toMatchObject({ role: 'ai', text: 'Hello there' });

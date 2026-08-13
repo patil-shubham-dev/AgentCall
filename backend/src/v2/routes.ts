@@ -78,6 +78,16 @@ const utteranceSchema = z.object({
   language: z.string().optional(),
 });
 
+/** Streaming user speech (roadmap M2): partials until finalize=true. */
+const utterancePartialSchema = z.object({
+  utterance_id: z.string().optional(),
+  text: z.string().min(1).max(2000),
+  finalize: z.boolean().optional(),
+  client_message_id: z.string().optional(),
+  language: z.string().optional(),
+  start_ms: z.number().int().min(0).optional(),
+});
+
 // ---- helpers ----------------------------------------------------------------
 
 function toActor(request: FastifyRequest): V2ActorInput {
@@ -209,8 +219,19 @@ export function registerV2Routes(app: FastifyInstance, deps: V2RouteDeps): void 
         user_id: call.userId,
         agent_id: call.agentId,
         transcript_seq: call.transcriptSeq,
-        active_turn: null,
-        ai_wait: { active: false, active_until: null, last_active_at: null },
+        active_turn: call.activeTurn
+          ? {
+              type: call.activeTurn.type,
+              ...(call.activeTurn.message_id ? { message_id: call.activeTurn.message_id } : {}),
+              ...(call.activeTurn.utterance_id ? { utterance_id: call.activeTurn.utterance_id } : {}),
+              started_at: call.activeTurn.started_at,
+            }
+          : null,
+        ai_wait: {
+          active: call.aiWaiting,
+          active_until: null,
+          last_active_at: call.aiWaiting ? call.lastActivityAt : null,
+        },
         media: {
           transport: call.media?.transport ?? null,
           stt: call.media?.stt?.provider ?? null,
@@ -258,6 +279,36 @@ export function registerV2Routes(app: FastifyInstance, deps: V2RouteDeps): void 
     });
   });
 
+  /**
+   * Non-blocking AI speech (roadmap M2 §6 `say()`): 201 as soon as queued;
+   * the stream is observed via message.started / message.completed /
+   * message.failed on the events channel.
+   */
+  app.post('/api/v2/calls/:callId/speak', async (request, reply) => {
+    const actor = toActor(request);
+    const { callId } = request.params as { callId: string };
+    const input = parse(messageSchema, request.body, 'speak body');
+    return withIdempotency(deps, request, reply, idemIdentity(actor), callId, async () => {
+      const result = await callService.speak(callId, input, actor);
+      return { statusCode: 201, body: { message_id: result.message_id, status: 'streaming' } };
+    });
+  });
+
+  /** AI-initiated hard cut (roadmap M2 §7 stopSpeaking). */
+  app.post('/api/v2/calls/:callId/stop-speaking', async (request, reply) => {
+    const actor = toActor(request);
+    const { callId } = request.params as { callId: string };
+    try {
+      const result = await callService.stopSpeaking(callId, actor);
+      return {
+        stopped: result.stopped,
+        ...(result.message_id ? { message_id: result.message_id } : {}),
+      };
+    } catch (err) {
+      return sendError(reply, err);
+    }
+  });
+
   app.post('/api/v2/calls/:callId/utterances', async (request, reply) => {
     const actor = toActor(request);
     const { callId } = request.params as { callId: string };
@@ -268,13 +319,36 @@ export function registerV2Routes(app: FastifyInstance, deps: V2RouteDeps): void 
     });
   });
 
+  /**
+   * Streaming user speech (roadmap M2): partials until finalize=true. NOT
+   * idempotency-wrapped — partials are cheap and continuous by nature; the
+   * client_message_id binds inside the engine when the utterance finalizes.
+   */
+  app.post('/api/v2/calls/:callId/utterances/partial', async (request, reply) => {
+    const actor = toActor(request);
+    const { callId } = request.params as { callId: string };
+    const input = parse(utterancePartialSchema, request.body, 'utterance partial body');
+    try {
+      const result = await callService.submitUtterancePartial(callId, input, actor);
+      return {
+        utterance_id: result.utterance_id,
+        text: result.text,
+        idempotent: result.idempotent,
+        final: result.final,
+      };
+    } catch (err) {
+      return sendError(reply, err);
+    }
+  });
+
   app.get('/api/v2/calls/:callId/transcript', async (request, reply) => {
     try {
       const { callId } = request.params as { callId: string };
       const query = (request.query ?? {}) as { after?: string; partials?: string; limit?: string };
       const afterSeq = query.after !== undefined && query.after !== '' ? Number(query.after) : undefined;
       const limit = Math.min(Math.max(Number(query.limit ?? '200') || 200, 1), 500);
-      const segments = callService.getTranscript(callId, toActor(request), afterSeq, limit);
+      const includePartials = query.partials === 'true';
+      const segments = callService.getTranscript(callId, toActor(request), afterSeq, limit, includePartials);
       return {
         call_id: callId,
         segments,

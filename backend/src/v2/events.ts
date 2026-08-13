@@ -51,10 +51,13 @@ export const V2_EVENTS = {
   TURN_CANCELLED: 'turn.cancelled',
   // speech / transcript
   SPEECH_STARTED: 'speech.started',
+  SPEECH_PARTIAL: 'speech.partial',
   SPEECH_FINAL: 'speech.final',
   SPEECH_FAILED: 'speech.failed',
   TRANSCRIPT_UPDATED: 'transcript.updated',
+  TRANSCRIPT_PARTIAL_CLEARED: 'transcript.partial.cleared',
   // interruption & silence (advisory — M2 emits these from VAD; M1 from policy)
+  USER_INTERRUPTED: 'user.interrupted',
   SILENCE_DETECTED: 'silence.detected',
   CALL_NOACTIVITY: 'call.noactivity',
   // observability (internal — not delivered to AI subscribers by default)
@@ -175,6 +178,14 @@ const SPEECH_EVENTS: Record<string, z.ZodType> = {
     utterance_id: z.string(),
     speaker: z.string(),
   }),
+  [V2_EVENTS.SPEECH_PARTIAL]: z.object({
+    utterance_id: z.string(),
+    text: z.string(),
+    confidence: z.number().optional(),
+    start_ms: z.number().optional(),
+    // 0 = open (still talking); >0 = a completed segment within an utterance.
+    end_ms: z.number().optional(),
+  }),
   [V2_EVENTS.SPEECH_FINAL]: z.object({
     utterance_id: z.string(),
     text: z.string(),
@@ -198,6 +209,14 @@ const SPEECH_EVENTS: Record<string, z.ZodType> = {
       end_ms: z.number().optional(),
       confidence: z.number().optional(),
     }),
+  }),
+  [V2_EVENTS.TRANSCRIPT_PARTIAL_CLEARED]: z.object({
+    utterance_id: z.string(),
+  }),
+  [V2_EVENTS.USER_INTERRUPTED]: z.object({
+    interrupted_message_id: z.string().optional(),
+    interrupted_audio_ms: z.number().optional(),
+    utterance_id: z.string().optional(),
   }),
   [V2_EVENTS.SILENCE_DETECTED]: z.object({
     after_ms: z.number(),

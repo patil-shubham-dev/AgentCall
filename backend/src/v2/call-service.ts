@@ -7,6 +7,8 @@ import type { V2CallState } from './call-fsm.js';
 import { CallNotFoundError, ForbiddenError, ValidationError } from './errors.js';
 import type { IdempotencyStore } from './idempotency.js';
 import type { V2Actor } from './events.js';
+import { SyncTtsProvider } from './providers.js';
+import type { TtsProvider, TtsHandle, TtsStats } from './providers.js';
 
 /** Who is acting (audit + ownership). 'service' bypasses ownership checks. */
 export interface V2ActorInput {
@@ -22,6 +24,8 @@ export interface TranscriptSegment {
   start_ms?: number;
   end_ms?: number;
   confidence?: number;
+  /** Live partial appended to transcript reads; never in transcript.updated events. */
+  is_partial?: boolean;
   createdAt: string;
 }
 
@@ -49,6 +53,23 @@ export interface V2CallRecord {
   transcriptSeq: number;
   /** client_message_id -> utterance_id (user-text idempotency). */
   clientMessageIds: Map<string, string>;
+  /**
+   * Floor holder: the streaming AI turn or the open user utterance. Mirrors
+   * the SDK's active_turn snapshot field; null when nobody holds the floor.
+   */
+  activeTurn: { type: 'ai' | 'user'; message_id?: string; utterance_id?: string; started_at: string } | null;
+  /** Open (in-flight) user utterance being recognized via speech.partial. */
+  openUtterance: {
+    utterance_id: string;
+    text: string;
+    started_at: string;
+    last_partial_at: string;
+    language?: string;
+  } | null;
+  /** Live streaming TTS handle (an AI turn is mid-audio). */
+  tts: { message_id: string; handle: TtsHandle; started_at: string; settle: () => void } | null;
+  /** Lease truth: is the AI waiting for human input? Gates turn.lease emission. */
+  aiWaiting: boolean;
   result?: { outcome?: Record<string, unknown>; note?: string };
   createdAt: string;
   lastActivityAt: string;
@@ -80,6 +101,19 @@ export interface SubmitUtteranceInput {
   language?: string;
 }
 
+/** Streaming user speech (roadmap M2): one partial per call, finalize to close. */
+export interface SubmitUtterancePartialInput {
+  /** Client-generated id — binds the whole partial stream when finalized. */
+  utterance_id?: string;
+  text: string;
+  /** finalize=true closes the utterance: speech.final + transcript + turn.ended. */
+  finalize?: boolean;
+  client_message_id?: string;
+  language?: string;
+  /** STT start offset within the audio buffer, ms. */
+  start_ms?: number;
+}
+
 export interface HangupInput {
   outcome?: Record<string, unknown>;
   note?: string;
@@ -103,6 +137,8 @@ export class V2CallService {
   constructor(
     readonly plane: EventPlane,
     readonly idempotency: IdempotencyStore,
+    /** Media provider seam (roadmap M2). Defaults to the $0 on-device sync TTS. */
+    readonly ttsProvider: TtsProvider = new SyncTtsProvider(),
   ) {}
 
   // ---- emit -----------------------------------------------------------------
@@ -202,6 +238,10 @@ export class V2CallService {
       transcript: [],
       transcriptSeq: 0,
       clientMessageIds: new Map(),
+      activeTurn: null,
+      openUtterance: null,
+      tts: null,
+      aiWaiting: false,
       createdAt: new Date().toISOString(),
       lastActivityAt: new Date().toISOString(),
     };
@@ -273,27 +313,14 @@ export class V2CallService {
       ...(input.tts ? { tts: input.tts } : {}),
       ...(input.reply_to ? { reply_to: input.reply_to } : {}),
     });
-    await this.emit(callId, V2_EVENTS.MESSAGE_STARTED, systemActor(), {
-      message_id: messageId,
-      tts_provider: input.tts?.provider,
-      streamed: true,
-    });
-    await this.emit(callId, V2_EVENTS.MESSAGE_COMPLETED, systemActor(), {
-      message_id: messageId,
-      chars_spoken: input.content.length,
-      audio_bytes: 0,
-    });
 
-    await this.appendTranscript(callId, {
-      role: 'ai',
-      type: 'text',
-      text: input.content,
-      createdAt: new Date().toISOString(),
-    });
-    await this.emit(callId, V2_EVENTS.TURN_ENDED, systemActor(), {
-      turn_type: 'ai',
-      message_id: messageId,
-    });
+    // M1 contract: the command returns only after the whole turn is durably
+    // recorded (queued → started → completed → transcript → turn.ended →
+    // turn.lease). The sync provider completes in one pass; scripted/cloud
+    // providers stream and this awaits their completion.
+    const stream = this.streamMessage(callId, input, messageId);
+    await stream.finished;
+    await Promise.all(stream.emits);
 
     // Advisory silence policy: after an AI turn, no human activity for
     // silence_after_ms escalates silence.detected → call.noactivity (R7).
@@ -301,6 +328,186 @@ export class V2CallService {
 
     logger.info({ callId, messageId }, '[v2] message sent');
     return { message_id: messageId };
+  }
+
+  /**
+   * Non-blocking AI message (roadmap M2 §6 `say()`): returns as soon as the
+   * message is queued; streaming happens in the background through the TTS
+   * provider. Errors land as message.failed / turn.cancelled events.
+   */
+  async speak(callId: string, input: SendMessageInput, actor: V2ActorInput): Promise<{ message_id: string }> {
+    if (!input.content || input.content.trim().length === 0) {
+      throw new ValidationError('content is required');
+    }
+    const call = this.getCall(callId);
+    this.assertAccess(call, actor);
+    this.assertOpen(call);
+    transition(call.state, 'message');
+
+    const messageId = uuidV7();
+    await this.emit(callId, V2_EVENTS.MESSAGE_QUEUED, actor, {
+      message_id: messageId,
+      content: input.content,
+      ...(input.tts ? { tts: input.tts } : {}),
+      ...(input.reply_to ? { reply_to: input.reply_to } : {}),
+    });
+
+    const stream = this.streamMessage(callId, input, messageId);
+    void stream.finished
+      .then(() => Promise.all(stream.emits))
+      .catch((err) => {
+        logger.error({ err, callId, messageId }, '[v2] detached speech stream failed');
+      });
+
+    logger.info({ callId, messageId }, '[v2] speech queued (streaming)');
+    return { message_id: messageId };
+  }
+
+  /** AI-initiated hard cut of the streaming turn (roadmap M2 §7 stopSpeaking). */
+  async stopSpeaking(callId: string, actor: V2ActorInput): Promise<{ message_id?: string; stopped: boolean }> {
+    const call = this.getCall(callId);
+    this.assertAccess(call, actor);
+    const cut = this.cutTts(callId);
+    if (!cut) return { stopped: false };
+
+    await this.emit(callId, V2_EVENTS.TURN_CANCELLED, systemActor(), {
+      turn_type: 'ai',
+      message_id: cut.message_id,
+      reason: 'ai_stop',
+    });
+    // The cut message never completes — close it explicitly so consumers
+    // waiting on message.completed don't hang (v1 messageFailed equivalent).
+    await this.emit(callId, V2_EVENTS.MESSAGE_FAILED, systemActor(), {
+      message_id: cut.message_id,
+      reason: 'ai_stop',
+      partial_audio_ms: cut.partial_audio_ms,
+    });
+    if (call.aiWaiting) {
+      call.aiWaiting = false;
+      await this.emitTurnLease(callId, false);
+    }
+    call.activeTurn = null;
+    this.clearSilencePolicy(callId);
+
+    logger.info({ callId, messageId: cut.message_id }, '[v2] speech stopped by AI');
+    return { message_id: cut.message_id, stopped: true };
+  }
+
+  /**
+   * Streaming user speech (roadmap M2): each call replaces the open partial;
+   * finalize=true closes the utterance and binds client_message_id for
+   * idempotent replay. Barge-in: the first partial of an open stream cuts the
+   * AI turn synchronously (the p95 ≤ 50 ms budget lives in TtsHandle.stop()).
+   */
+  async submitUtterancePartial(
+    callId: string,
+    input: SubmitUtterancePartialInput,
+    actor: V2ActorInput,
+  ): Promise<{ utterance_id: string; text: string; idempotent: boolean; final: boolean }> {
+    if (!input.text || input.text.trim().length === 0) {
+      throw new ValidationError('text is required');
+    }
+    const call = this.getCall(callId);
+    this.assertAccess(call, actor);
+    this.assertOpen(call);
+    transition(call.state, 'utterance');
+
+    // Barge-in cut BEFORE anything else — synchronous, deterministic.
+    const cut = this.cutTts(callId);
+    if (cut) {
+      await this.emit(callId, V2_EVENTS.USER_INTERRUPTED, actor, {
+        interrupted_message_id: cut.message_id,
+        interrupted_audio_ms: cut.partial_audio_ms,
+      });
+      await this.emit(callId, V2_EVENTS.TURN_CANCELLED, systemActor(), {
+        turn_type: 'ai',
+        message_id: cut.message_id,
+        reason: 'barge_in',
+      });
+      call.activeTurn = null;
+    }
+
+    let open = call.openUtterance;
+    if (!open) {
+      const utteranceId = input.utterance_id ?? uuidV7();
+      open = {
+        utterance_id: utteranceId,
+        text: '',
+        started_at: new Date().toISOString(),
+        last_partial_at: new Date().toISOString(),
+        ...(input.language ? { language: input.language } : {}),
+      };
+      call.openUtterance = open;
+      call.activeTurn = { type: 'user', utterance_id: utteranceId, started_at: open.started_at };
+      await this.emit(callId, V2_EVENTS.SPEECH_STARTED, actor, {
+        utterance_id: utteranceId,
+        speaker: 'user',
+      });
+    }
+
+    open.text = input.text;
+    open.last_partial_at = new Date().toISOString();
+
+    if (!input.finalize) {
+      await this.emit(callId, V2_EVENTS.SPEECH_PARTIAL, actor, {
+        utterance_id: open.utterance_id,
+        text: input.text,
+        ...(input.start_ms !== undefined ? { start_ms: input.start_ms } : {}),
+        end_ms: 0, // open segment — replaced by the next partial
+      });
+      return { utterance_id: open.utterance_id, text: input.text, idempotent: false, final: false };
+    }
+
+    // Finalize: the text goes ONLY into speech.final (a trailing partial would
+    // duplicate it); the idempotency key binds the COMPLETE utterance.
+    if (input.client_message_id) {
+      const existing = call.clientMessageIds.get(input.client_message_id);
+      if (existing) {
+        logger.info({ callId, clientMessageId: input.client_message_id }, '[v2] duplicate finalized utterance ignored (idempotent)');
+        return { utterance_id: existing, text: input.text, idempotent: true, final: true };
+      }
+      if (call.clientMessageIds.size < 10_000) {
+        call.clientMessageIds.set(input.client_message_id, open.utterance_id);
+      }
+    }
+
+    const endMs = Math.max(0, Date.now() - Date.parse(open.started_at));
+    await this.emit(callId, V2_EVENTS.SPEECH_FINAL, actor, {
+      utterance_id: open.utterance_id,
+      text: input.text,
+      ...(input.language ? { language: input.language } : {}),
+      ...(input.start_ms !== undefined ? { start_ms: input.start_ms } : {}),
+      end_ms: endMs,
+      duration_ms: endMs,
+    });
+    await this.emit(callId, V2_EVENTS.TRANSCRIPT_PARTIAL_CLEARED, systemActor(), {
+      utterance_id: open.utterance_id,
+    });
+    await this.appendTranscript(callId, {
+      role: 'user',
+      type: 'speech',
+      text: input.text,
+      ...(input.start_ms !== undefined ? { start_ms: input.start_ms } : {}),
+      end_ms: endMs,
+      createdAt: new Date().toISOString(),
+    });
+    await this.emit(callId, V2_EVENTS.TURN_ENDED, systemActor(), {
+      turn_type: 'user',
+      turn_id: open.utterance_id,
+    });
+
+    // Human spoke — the AI lease is over, silence is over.
+    if (call.aiWaiting) {
+      call.aiWaiting = false;
+      await this.emitTurnLease(callId, false);
+    }
+    call.openUtterance = null;
+    call.activeTurn = null;
+    this.clearSilencePolicy(callId);
+    call.lastActivityAt = new Date().toISOString();
+
+    logger.info({ callId, utteranceId: open.utterance_id }, '[v2] utterance finalized (partial stream)');
+    return { utterance_id: open.utterance_id, text: input.text, idempotent: false, final: true };
   }
 
   async submitUtterance(callId: string, input: SubmitUtteranceInput, actor: V2ActorInput): Promise<{ utterance_id: string; text: string; idempotent: boolean }> {
@@ -318,6 +525,21 @@ export class V2CallService {
         logger.info({ callId, clientMessageId: input.client_message_id }, '[v2] duplicate utterance ignored (idempotent)');
         return { utterance_id: existing, text: input.text, idempotent: true };
       }
+    }
+
+    // Barge-in cut BEFORE opening a new utterance — synchronous, deterministic.
+    const cut = this.cutTts(callId);
+    if (cut) {
+      await this.emit(callId, V2_EVENTS.USER_INTERRUPTED, actor, {
+        interrupted_message_id: cut.message_id,
+        interrupted_audio_ms: cut.partial_audio_ms,
+      });
+      await this.emit(callId, V2_EVENTS.TURN_CANCELLED, systemActor(), {
+        turn_type: 'ai',
+        message_id: cut.message_id,
+        reason: 'barge_in',
+      });
+      call.activeTurn = null;
     }
 
     const utteranceId = uuidV7();
@@ -348,7 +570,11 @@ export class V2CallService {
       turn_id: utteranceId,
     });
 
-    // Human spoke — silence is over.
+    // Human spoke — the AI lease is over, silence is over.
+    if (call.aiWaiting) {
+      call.aiWaiting = false;
+      await this.emitTurnLease(callId, false);
+    }
     this.clearSilencePolicy(callId);
     call.lastActivityAt = new Date().toISOString();
 
@@ -362,6 +588,11 @@ export class V2CallService {
 
     // Idempotent terminal no-op (retries from the phone's persisted queue).
     if (call.state === 'completed' || call.state === 'failed') return call;
+
+    // Hangup supersedes any streaming turn (silent — the turn is moot).
+    this.stopTtsSilently(callId);
+    call.openUtterance = null;
+    call.aiWaiting = false;
 
     // A hangup note becomes part of the transcript the AI reads at the end.
     if (input.note && input.note.trim()) {
@@ -404,6 +635,10 @@ export class V2CallService {
     this.assertAccess(call, actor);
     if (call.state === 'failed' || call.state === 'completed') return call;
 
+    this.stopTtsSilently(callId);
+    call.openUtterance = null;
+    call.aiWaiting = false;
+
     transition(call.state, 'fail');
     call.state = 'failed';
     call.endedAt = new Date().toISOString();
@@ -424,10 +659,31 @@ export class V2CallService {
     return call;
   }
 
-  getTranscript(callId: string, actor: V2ActorInput, afterSeq?: number, limit = 200): TranscriptSegment[] {
+  getTranscript(
+    callId: string,
+    actor: V2ActorInput,
+    afterSeq?: number,
+    limit = 200,
+    includePartials = false,
+  ): TranscriptSegment[] {
     const call = this.getCall(callId);
     this.assertAccess(call, actor);
     let segments = call.transcript;
+    if (includePartials && call.openUtterance) {
+      // Live partial: appended after the settled transcript with is_partial
+      // (api-spec §2.6) — the next speech.final replaces it via TRANSCRIPT_UPDATED.
+      segments = [
+        ...segments,
+        {
+          seq: call.transcriptSeq + 1,
+          role: 'user',
+          type: 'speech',
+          text: call.openUtterance.text,
+          is_partial: true,
+          createdAt: call.openUtterance.last_partial_at,
+        },
+      ];
+    }
     if (afterSeq !== undefined) {
       segments = segments.filter((s) => s.seq > afterSeq);
     }
@@ -535,11 +791,206 @@ export class V2CallService {
     this.silence.delete(callId);
   }
 
-  /** Releases all timers (shutdown / tests). */
+  // ---- TTS streaming helpers (roadmap M2) ----------------------------------
+
+  /**
+   * Drives one AI message through the TTS provider. Provider callbacks emit
+   * ordered events: onStarted → message.started, onDone → message.completed +
+   * transcript + turn.ended + turn.lease(active), onError → message.failed +
+   * turn.cancelled. `finished` resolves when the stream settles (done, error,
+   * or cut); `emits` is the durable-write queue a caller awaits.
+   */
+  private streamMessage(
+    callId: string,
+    input: SendMessageInput,
+    messageId: string,
+  ): { message_id: string; finished: Promise<void>; emits: Promise<void>[] } {
+    const call = this.getCall(callId);
+
+    // AI talking over itself (retry/rephrase): silently cut the prior stream.
+    if (call.tts) {
+      call.tts.handle.stop();
+      call.tts.settle();
+      call.tts = null;
+    }
+
+    let settled = false;
+    let finishResolve!: () => void;
+    const finished = new Promise<void>((resolve) => {
+      finishResolve = resolve;
+    });
+    const settle = (): void => {
+      if (!settled) {
+        settled = true;
+        finishResolve();
+      }
+    };
+
+    // The provider may emit callbacks SYNCHRONOUSLY inside speak() (sync
+    // provider), before `handle` below is initialized — and a cut may land
+    // before a stale async callback fires. A proxy handle assigned before
+    // speak() keeps call.tts and the callback guards consistent in both
+    // worlds; `stopped` is the cut oracle the callbacks consult.
+    let realHandle: TtsHandle | null = null;
+    const pendingStop: TtsHandle = {
+      stop(): void {
+        realHandle?.stop();
+      },
+      get stopped(): boolean {
+        return realHandle?.stopped ?? false;
+      },
+      get stats(): { chars_streamed: number; audio_ms_streamed: number } {
+        return realHandle?.stats ?? { chars_streamed: 0, audio_ms_streamed: 0 };
+      },
+    };
+    call.tts = {
+      message_id: messageId,
+      handle: pendingStop,
+      started_at: new Date().toISOString(),
+      settle,
+    };
+    call.activeTurn = { type: 'ai', message_id: messageId, started_at: new Date().toISOString() };
+
+    const emits: Promise<void>[] = [];
+    const handle = this.ttsProvider.speak(
+      { messageId, content: input.content, ...(input.tts?.voice ? { voice: input.tts.voice } : {}) },
+      {
+        onStarted: (mid) => {
+          if (mid !== messageId || pendingStop.stopped) return;
+          emits.push(
+            this.emit(callId, V2_EVENTS.MESSAGE_STARTED, systemActor(), {
+              message_id: mid,
+              tts_provider: input.tts?.provider ?? this.ttsProvider.name,
+              streamed: true,
+            }),
+          );
+        },
+        // Token pacing is provider-internal; no per-token event exists in the
+        // catalog (event-model §3.2: audio fidelity arrives with the M4 transport).
+        onToken: () => undefined,
+        onDone: (mid, stats) => {
+          // A cut message never completes; settle so awaiting commands unblock.
+          if (mid !== messageId || pendingStop.stopped) {
+            settle();
+            return;
+          }
+          emits.push(this.finishAiTurn(callId, mid, input.content, stats));
+          settle();
+        },
+        onError: (mid, reason) => {
+          if (mid !== messageId || pendingStop.stopped) {
+            settle();
+            return;
+          }
+          emits.push(this.failAiTurn(callId, mid, reason));
+          settle();
+        },
+      },
+    );
+    realHandle = handle;
+    return { message_id: messageId, finished, emits };
+  }
+
+  /**
+   * Synchronous hard cut of a live stream (barge-in / ai_stop). Returns the
+   * cut facts for event emission; null when no stream is live. The p95 ≤ 50 ms
+   * barge-in budget is whatever `TtsHandle.stop()` takes.
+   */
+  private cutTts(callId: string): { message_id: string; partial_audio_ms: number } | null {
+    const call = this.calls.get(callId);
+    if (!call?.tts) return null;
+    const live = call.tts;
+    live.handle.stop();
+    live.settle();
+    call.tts = null;
+    return {
+      message_id: live.message_id,
+      partial_audio_ms: live.handle.stats.audio_ms_streamed,
+    };
+  }
+
+  /** Silently stops a live stream without emitting (hangup/fail supersede it). */
+  private stopTtsSilently(callId: string): void {
+    const call = this.calls.get(callId);
+    if (!call?.tts) return;
+    call.tts.handle.stop();
+    call.tts.settle();
+    call.tts = null;
+    call.activeTurn = null;
+  }
+
+  private async finishAiTurn(callId: string, messageId: string, content: string, stats: TtsStats): Promise<void> {
+    const call = this.calls.get(callId);
+    if (!call) return; // archived mid-stream — nothing left to record
+    call.tts = null;
+    call.aiWaiting = true;
+
+    await this.emit(callId, V2_EVENTS.MESSAGE_COMPLETED, systemActor(), {
+      message_id: messageId,
+      duration_ms: stats.duration_ms,
+      chars_spoken: stats.chars_spoken,
+      audio_bytes: stats.audio_bytes,
+    });
+    await this.appendTranscript(callId, {
+      role: 'ai',
+      type: 'text',
+      text: content,
+      createdAt: new Date().toISOString(),
+    });
+    await this.emit(callId, V2_EVENTS.TURN_ENDED, systemActor(), {
+      turn_type: 'ai',
+      message_id: messageId,
+    });
+    await this.emitTurnLease(callId, true);
+  }
+
+  private async failAiTurn(callId: string, messageId: string, reason: string): Promise<void> {
+    const call = this.calls.get(callId);
+    if (!call) return; // archived mid-stream — nothing left to record
+    call.tts = null;
+    call.aiWaiting = false;
+    call.activeTurn = null;
+
+    await this.emit(callId, V2_EVENTS.MESSAGE_FAILED, systemActor(), {
+      message_id: messageId,
+      reason,
+      partial_audio_ms: 0,
+    });
+    await this.emit(callId, V2_EVENTS.TURN_CANCELLED, systemActor(), {
+      turn_type: 'ai',
+      message_id: messageId,
+      reason: 'tts_error',
+    });
+  }
+
+  /**
+   * ai_wait_status lease (event-model §3.2). Emitted ONLY on wait-state
+   * changes, so a sequence of turn churn doesn't spam the log: active=true
+   * when the AI finishes a turn and waits; active=false when human speech
+   * resolves it or an ai_stop/error ends the turn. active_until is null — the
+   * lease has no expiry semantics in M2.
+   */
+  private async emitTurnLease(callId: string, active: boolean): Promise<void> {
+    await this.emit(callId, V2_EVENTS.TURN_LEASE, systemActor(), {
+      ai_wait_status: {
+        active,
+        active_until: null,
+        last_active_at: active ? new Date().toISOString() : null,
+      },
+    });
+  }
+
+  /** Releases all timers and streaming handles (shutdown / tests). */
   dispose(): void {
     for (const state of this.silence.values()) {
       if (state.timer) clearTimeout(state.timer);
     }
     this.silence.clear();
+    for (const call of this.calls.values()) {
+      if (call.tts) {
+        call.tts.handle.stop();
+        call.tts.settle();
+      }
+    }
   }
 }
