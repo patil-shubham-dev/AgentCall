@@ -447,9 +447,9 @@ biggest perceived-quality jump — replaces record-clip-then-reply with a conver
 
 ### Item 16 — No-45s-cap engine (v2 M1)
 
-**Status:** `[PARTIAL]` — **M1 engine core landed (2026-08-12 session 3)**; M2–M6 remain on
-the roadmap. · **Why:** the documented 45-second reply window is user-facing
-and wrong for long agent turns.
+**Status:** `[PARTIAL]` — **M1 engine core landed (2026-08-12 session 3)**; **M2 realtime
+core landed (2026-08-13 session 4)**; M3–M6 remain on the roadmap. · **Why:** the
+documented 45-second reply window is user-facing and wrong for long agent turns.
 
 **Current state (verified):** **No `MESSAGE_WINDOW_MS`/45s constant exists in the tree**
 (searched `backend/src` + mobile). The cap is a *behavioral* constraint of the current
@@ -477,7 +477,16 @@ reply-poll cadence, `AI_REPLY_POLL_INTERVAL_MS=500` in `config.ts:49`).
 
 **Verification (green):** roadmap M1 gate — v1 suite green (164), v2 contract tests green (46), total **210 tests / 26 files**, `tsc --noEmit` + ESLint clean. Cap removed only when flag on.
 
-**Remaining (M2+ per roadmap):** streaming STT/TTS + barge-in (M2), Postgres event log + recovery (M3), tools/media channel (M4). Phase-1 façade re-pointing of `complete_call`/`cancel_call` through v2 `hangupCall` deferred until the WS `/phone` projection exists (Phase 3) — v2 tracks its own calls only.
+**What shipped (M2 realtime core, session 4):**
+- `providers.ts` — TTS provider seam (roadmap §3.2 R2/R10): `TtsProvider`/`TtsCallbacks`/`TtsHandle`; `SyncTtsProvider` ($0 on-device default, preserves M1 event sequence) + `ScriptedTtsProvider` (deterministic token streams for tests). `TtsHandle.stop()` is the synchronous barge-in budget.
+- `call-service.ts` — engine-level streaming lifecycle: `sendMessage` streams through the provider (queued → `message.started` on first byte → `message.completed`); new `speak()` (non-blocking `say()`), `stopSpeaking()` (`turn.cancelled(ai_stop)` + `message.failed`), `submitUtterancePartial()` (partials → finalize: `speech.started` → `speech.partial`* → `speech.final` + `transcript.partial.cleared`; idempotency binds at finalize); **barge-in**: first partial cuts the live stream synchronously → `user.interrupted` + `turn.cancelled(barge_in)` before `speech.started`; `turn.lease` emitted only on wait-state change (active after AI turn, released on human speech/ai_stop/error); snapshot `active_turn`/`ai_wait` live; `getTranscript(includePartials)` exposes open partials with `is_partial`.
+- `routes.ts` — `POST /calls/:id/speak`, `POST /calls/:id/stop-speaking`, `POST /calls/:id/utterances/partial` (not idempotency-wrapped — client key binds at finalize), `GET transcript?partials=true`.
+- `events.ts` — catalog + schemas for `speech.partial`, `transcript.partial.cleared`, `user.interrupted`.
+- Tests: `v2-realtime.test.ts` (11 tests) — scripted-provider determinism, TTFB/speak latency, **barge-in p95 ≤ 50 ms measured** (engine path + seam), ai_stop, provider-error, partial streams, transcript partials.
+
+**Verification (green):** M2 gate — 223 tests / 27 files, `tsc --noEmit` + ESLint clean. M2 exit criteria met: scripted-provider tests deterministic; barge-in p95 measured ≤ 50 ms (both at the `TtsHandle.stop()` seam and through the engine barge path).
+
+**Remaining (M3+ per roadmap):** Postgres event log + recovery (M3), tools/media channel + WS `/v2/media` audio transport (M4). Phase-1 façade re-pointing of `complete_call`/`cancel_call` through v2 `hangupCall` deferred until the WS `/phone` projection exists (Phase 3) — v2 tracks its own calls only.
 
 **Risks:** engine work must not destabilize the shipped async flow — façade keeps v1 shapes (roadmap R5).
 
@@ -540,11 +549,19 @@ not a nice-to-have.
 
 ## 4. Session log
 
+- **2026-08-13 (session 4)** — **Item 16 (v2 M2 realtime core) implemented**: TTS provider
+  seam (`providers.ts`), engine streaming lifecycle + barge-in + `turn.lease` (`call-service.ts`),
+  `speak`/`stop-speaking`/`utterances/partial` + `transcript?partials=true` routes, 11 new
+  `v2-realtime` tests (barge-in p95 ≤ 50 ms measured at seam + engine path). M1 suite updated
+  for the lease event (sendMessage 9→10). Full suite **223 tests / 27 files** green, lint +
+  typecheck clean. Committed as 4 atomic commits (M1: `74266fc` engine core, `5d71a3f` service
+  + REST/SSE, `fade701` contract tests, `eb46590` docs) + M2 commit.
+
 - **2026-08-12 (session 3)** — **Item 16 (v2 M1) implemented**: new `backend/src/v2/` engine
   (EventPlane + in-memory event log + pure FSM + `V2CallService` + idempotency + `/api/v2/*`
   REST + SSE). `ENGINE_V2` flag removes the `send_message_and_wait` 45s cap (turn-lease
   semantics, `registerAiWait(null)` no-expiry lease, noactivity escalation). 46 new v2
-  contract tests; full suite 210 green, lint/typecheck clean. Not committed yet.
+  contract tests; full suite 210 green, lint/typecheck clean. Committed (M1 set above).
 
 
 - **2026-08-12 (session 2)** — Backlog wave 2 executed (user scope: Items 1–13 + 17;
