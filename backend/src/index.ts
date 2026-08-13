@@ -43,6 +43,11 @@ import { RecoveryManager } from './voicebridge/recovery-manager.js';
 import { CleanupScheduler } from './common/cleanup-scheduler.js';
 import type { WebSocketServer } from 'ws';
 import { McpSessionRegistry } from './mcp/session-registry.js';
+import { EventPlane } from './v2/event-plane.js';
+import { InMemoryEventLogStore } from './v2/event-log.js';
+import { V2CallService } from './v2/call-service.js';
+import { IdempotencyStore } from './v2/idempotency.js';
+import { registerV2Routes } from './v2/routes.js';
 
 const FORCE_KILL_TIMEOUT_MS = 10_000;
 
@@ -343,6 +348,23 @@ async function main() {
   };
   registerRoutes(app, routeOpts);
 
+  // v2 engine (roadmap M1) — additive namespace beside v1, no route changes.
+  // In-process event log/plane per the $0 constraint; the outbox write path
+  // means every command's events are durably (in-memory) recorded before
+  // subscribers see them. Persistence slots in at M3.
+  const v2EventLog = new InMemoryEventLogStore();
+  const v2EventPlane = new EventPlane(v2EventLog);
+  const v2CallService = new V2CallService(v2EventPlane, new IdempotencyStore());
+  registerV2Routes(app, { callService: v2CallService });
+
+  // Retention sweep for v2 calls (mirrors the v1 stale-session sweeper).
+  // Retention, not a cap: active exchanges keep touching lastActivityAt.
+  setInterval(() => {
+    v2CallService.sweepIdleCalls(config.v2.callIdleArchiveMs).catch((err) => {
+      logger.error({ err }, '[v2] idle-call sweep failed');
+    });
+  }, config.v2.sweepIntervalMs).unref?.();
+
   // Streamable HTTP MCP endpoint — the AI-facing connector surface (/mcp)
   const mcpSessions = registerMcpEndpoint(app, voiceBridgeService);
 
@@ -364,6 +386,7 @@ async function main() {
     logger.info(`\n  VoiceBridge running — AI ↔ Human voice bridge`);
     logger.info(`  HTTP API:     http://localhost:${config.port}`);
     logger.info(`  Phone WS:     ws://localhost:${config.port}/phone`);
+    logger.info(`  v2 API:       http://localhost:${config.port}/api/v2 (engine ${config.v2.engineV2 ? 'v2 lease semantics' : 'v1 compatibility'})`);
     logger.info(`  TTS engine:   Phone-side (Android TextToSpeech)\n`);
 
     // Record startup metrics
@@ -399,6 +422,7 @@ async function main() {
       cleanupScheduler.shutdown();
 
       // Wait for active operations to drain
+      v2CallService.dispose();
       await app.close();
       signalingServer?.close();
       await eventBus.shutdown();

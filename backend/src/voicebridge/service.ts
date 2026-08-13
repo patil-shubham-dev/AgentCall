@@ -107,7 +107,7 @@ export class VoiceBridgeService {
   private lifecycleCoordinator: LifecycleCoordinator | null = null;
   private readonly sessionChangeCounters = new Map<string, number>();
   private readonly sessionChangeWaiters = new Map<string, Set<() => void>>();
-  private readonly aiWaitLeases = new Map<string, { count: number; activeUntil: string; lastActiveAt: string }>();
+  private readonly aiWaitLeases = new Map<string, { count: number; activeUntil: string | null; lastActiveAt: string }>();
 
   constructor(
     private sessionRepo: SessionRepository,
@@ -265,18 +265,23 @@ export class VoiceBridgeService {
     this.sessionChangeWaiters.get(callId)?.forEach((wake) => wake());
   }
 
-  registerAiWait(callId: string, timeoutMs: number): () => void {
+  registerAiWait(callId: string, timeoutMs: number | null): () => void {
     const startedAt = now();
     const existing = this.aiWaitLeases.get(callId);
-    const candidateUntil = new Date(Date.now() + Math.max(timeoutMs, 1000)).toISOString();
-    // A newer registration must never shorten an in-flight wait: with
-    // overlapping waits the status stays active until the FURTHEST deadline,
-    // otherwise the banner would flip to "not responding" while an older
-    // (longer) wait is still running. ISO strings compare chronologically.
-    const activeUntil =
-      existing && existing.count > 0 && existing.activeUntil > candidateUntil
-        ? existing.activeUntil
-        : candidateUntil;
+    // null = turn-lease semantics (v2, ENGINE_V2): no server-side expiry — the
+    // lease stays active until the waiter disposes it (reply / call end /
+    // noactivity escalation). A newer registration must never shorten an
+    // in-flight wait: with overlapping waits the status stays active until the
+    // FURTHEST deadline, otherwise the banner would flip to "not responding"
+    // while an older (longer) wait is still running. ISO strings compare
+    // chronologically; null (no expiry) always wins.
+    const candidateUntil =
+      timeoutMs === null ? null : new Date(Date.now() + Math.max(timeoutMs, 1000)).toISOString();
+    const existingNewer =
+      existing &&
+      existing.count > 0 &&
+      (existing.activeUntil === null || (candidateUntil !== null && existing.activeUntil > candidateUntil));
+    const activeUntil = existingNewer ? existing.activeUntil : candidateUntil;
     this.aiWaitLeases.set(callId, {
       count: (existing?.count ?? 0) + 1,
       activeUntil,
@@ -306,7 +311,7 @@ export class VoiceBridgeService {
   getAiWaitStatus(callId: string): AiWaitStatus {
     const lease = this.aiWaitLeases.get(callId);
     if (!lease) return { active: false, activeUntil: null, lastActiveAt: null };
-    const active = lease.count > 0 && Date.parse(lease.activeUntil) > Date.now();
+    const active = isLeaseActive(lease);
     return {
       active,
       activeUntil: active ? lease.activeUntil : null,
@@ -321,7 +326,7 @@ export class VoiceBridgeService {
   private isAgentBusyElsewhere(callId: string): boolean {
     for (const [otherCallId, lease] of this.aiWaitLeases) {
       if (otherCallId === callId) continue;
-      if (lease.count > 0 && Date.parse(lease.activeUntil) > Date.now()) return true;
+      if (isLeaseActive(lease)) return true;
     }
     return false;
   }
@@ -803,6 +808,15 @@ export function notifyPhone(userId: string, payload: Record<string, unknown>): b
   pendingNotifications.set(userId, fresh);
   logger.info({ userId, msgType, queueSize: fresh.length }, '[WS] notification queued for later delivery');
   return false;
+}
+
+/**
+ * A wait lease is active while registered — with an explicit deadline only
+ * until it passes, with `activeUntil: null` (v2 turn-lease mode) until the
+ * waiter disposes it. Count guards overlapping registrations.
+ */
+function isLeaseActive(lease: { count: number; activeUntil: string | null }): boolean {
+  return lease.count > 0 && (lease.activeUntil === null || Date.parse(lease.activeUntil) > Date.now());
 }
 
 export function isExpired(session: VoiceCallSession, now?: number): boolean {

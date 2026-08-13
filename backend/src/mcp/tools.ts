@@ -230,31 +230,52 @@ export function createTools(voicebridge: VoiceBridgeService): McpTool[] {
     {
       name: 'send_message_and_wait',
       description:
-        'Send a text message to the human during an active call and wait for their reply (up to timeout_seconds). ' +
-        "Returns the human's spoken or typed response if they reply within the window. " +
-        'If no reply arrives in time, returns a timeout so you can continue working and check back later with get_transcript.',
+        'Send a text message to the human during an active call and wait for their reply. ' +
+        (config.v2.engineV2
+          ? 'Returns the reply when the turn ends (human speaks, call ends, or a noactivity escalation) — there is no server-side cap; timeout_seconds is an optional client window.'
+          : 'Returns the reply if it arrives within the timeout window (max 45s). If not, returns a timeout so you can continue working and check back later with get_transcript.'),
       inputSchema: {
         type: 'object',
         required: ['call_id', 'content'],
         properties: {
           call_id: { type: 'string', description: 'Call ID from create_call' },
           content: { type: 'string', description: 'Text message to speak to the human', maxLength: 2000 },
-          timeout_seconds: {
-            type: 'number',
-            description: 'Max seconds to wait for a reply (1-45, default 15)',
-            default: 15,
-            minimum: 1,
-            maximum: 45,
-          },
+          timeout_seconds: config.v2.engineV2
+            ? {
+                type: 'number',
+                description: 'Optional client wait window in seconds. Omit to wait until the turn ends (reply, call end, or noactivity escalation). No server cap.',
+                minimum: 1,
+                maximum: 86400,
+              }
+            : {
+                type: 'number',
+                description: 'Max seconds to wait for a reply (1-45, default 15)',
+                default: 15,
+                minimum: 1,
+                maximum: 45,
+              },
         },
       },
       handler: async (args) => {
         const callId = args.call_id as string;
         const content = args.content as string;
-        const timeoutSeconds = Math.min(Math.max((args.timeout_seconds as number) ?? 15, 1), 45);
         const auth = await authorizeCall(voicebridge, callId);
         if (!auth.ok) return auth.result;
-        const disposeAiWait = voicebridge.registerAiWait(callId, timeoutSeconds * 1000);
+
+        // ENGINE_V2: turn-lease semantics — timeout_seconds is an optional
+        // client window (no maximum); absent = wait until the turn ends.
+        // Flag off: today's capped behavior, unchanged.
+        const rawTimeout = args.timeout_seconds as number | undefined;
+        const clientWindowSeconds = config.v2.engineV2
+          ? rawTimeout === undefined
+            ? undefined
+            : Math.max(rawTimeout, 1)
+          : Math.min(Math.max(rawTimeout ?? 15, 1), 45);
+
+        const disposeAiWait = voicebridge.registerAiWait(
+          callId,
+          clientWindowSeconds === undefined ? null : clientWindowSeconds * 1000,
+        );
 
         // Subscribe BEFORE sending so a reply that lands the instant the message
         // is written is not missed (wake is a counter bump, not an edge).
@@ -264,14 +285,19 @@ export function createTools(voicebridge: VoiceBridgeService): McpTool[] {
           if (!msg) return error(`Error: Call not found: ${callId}`);
 
           const aiMessageTime = msg.createdAt;
-          const deadline = Date.now() + timeoutSeconds * 1000;
+          const deadline = clientWindowSeconds === undefined ? null : Date.now() + clientWindowSeconds * 1000;
           // Safety-net interval: the session watcher wakes the loop the moment
           // a user message or terminal transition is persisted, so replies are
           // delivered with no poll floor. This only fires if a change somehow
           // bypasses the in-process event bus (e.g. a future multi-instance run).
           const safetyNetMs = config.mcp.replyPollIntervalMs;
+          // Lease-mode safety valve (roadmap R7): after this long with no user
+          // activity the wait escalates to `noactivity` instead of blocking an
+          // AI forever on a silent call. Advisory — the AI decides next.
+          const escalationMs = config.v2.engineV2 ? config.v2.noactivityEscalationMs : Number.POSITIVE_INFINITY;
+          const waitStartedAt = Date.now();
 
-          while (Date.now() < deadline) {
+          while (deadline === null || Date.now() < deadline) {
             const session = await voicebridge.getCall(callId);
             if (!session) return error(`Error: Call not found: ${callId}`);
 
@@ -302,15 +328,28 @@ export function createTools(voicebridge: VoiceBridgeService): McpTool[] {
               }, null, 2));
             }
 
-            const remainingMs = deadline - Date.now();
+            // Noactivity escalation (lease mode): surface the silence and let
+            // the AI decide (continue / prompt / end) — never block forever.
+            if (config.v2.engineV2 && Date.now() - waitStartedAt >= escalationMs) {
+              return text(JSON.stringify({
+                outcome: 'noactivity',
+                silent_seconds: Math.round(escalationMs / 1000),
+                message: 'No human activity since the message was sent. The call is still active.',
+                instruction: 'The call remains open. Call send_message_and_wait again to resume waiting, send another message, or end the call.',
+              }, null, 2));
+            }
+
+            const remainingMs = deadline === null ? safetyNetMs : deadline - Date.now();
             if (remainingMs <= 0) break;
             await watcher.waitForChange(Math.min(safetyNetMs, remainingMs));
           }
 
           return text(JSON.stringify({
             outcome: 'timeout',
-            waited_seconds: timeoutSeconds,
-            message: 'No reply received within the timeout window. The call is still active — use get_transcript to check for replies later, or call send_message_and_wait again.',
+            waited_seconds: clientWindowSeconds ?? null,
+            message: clientWindowSeconds === undefined
+              ? 'The wait was interrupted without a reply or terminal event.'
+              : 'No reply received within the client window. The call is still active — use get_transcript to check for replies later, or call send_message_and_wait again.',
             instruction: 'You can continue working and check back with get_transcript, or send another message with send_message_and_wait.',
           }, null, 2));
         } finally {

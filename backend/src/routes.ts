@@ -111,7 +111,7 @@ export function registerRoutes(app: FastifyInstance, opts: RouteOptions): void {
     const url = request.url ?? '';
     // Skip auth for health check endpoints (required by K8s probes), phone token
     // registration, and the MCP endpoint (which does its own multi-method auth)
-    if (url.startsWith('/api/v1/health') || url.startsWith('/api/v1/ready') || url.startsWith('/api/v1/metrics') || url === '/api/v1/phone/token' || url.split('?')[0] === '/mcp') {
+    if (url.startsWith('/api/v1/health') || url.startsWith('/api/v1/ready') || url.startsWith('/api/v1/metrics') || url === '/api/v1/phone/token' || url.split('?')[0] === '/mcp' || url.startsWith('/api/v2/health')) {
       return;
     }
     const isDev = config.serviceToken === DEV_SERVICE_TOKEN;
