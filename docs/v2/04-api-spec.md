@@ -108,6 +108,7 @@ All are idempotent. `hangup` is *the* terminal command — one path for every en
 | Endpoint | Body | Effects |
 |----------|------|---------|
 | `POST /calls/:id/utterances` | `{ "text": "…", "client_message_id": "…", "language": "en" }` | `speech.started`+`speech.final` (text-typed path; STT passthrough) — idempotent via `client_message_id` (carried from v1) |
+| `POST /calls/:id/utterances/partial` | `{ "text": "…", "final": false, "utterance_id": "…" }` | streams `speech.partial`; **`final: true` finalizes the utterance** → `speech.final` + `transcript.updated`. Finalization is idempotent: the first `final: true` wins, later finals for the same `utterance_id` are ignored (safe retry after a lost response) |
 | `POST /calls/:id/dtmf` | `{ "digit": "5" }` | `dtmf.received` |
 
 ### 2.6 Transcript
@@ -180,6 +181,10 @@ Rules:
 - **Resume:** client sends `Last-Event-ID: <event_id>`; server replays from the first event
   after it (at-least-once + dedupe by `id`). No `Last-Event-ID` = from now, or `?after=` for
   full history.
+- **Replay cap:** full-history replays (no `Last-Event-ID` / `?after=` empty) are capped at the
+  newest **500** events (`V2_SSE_REPLAY_MAX_EVENTS`) — a reconnecting client on a long-lived
+  call gets the latest state, not the whole log. Cursor resumes (`Last-Event-ID` / `?after=<id>`)
+  are not capped; missing older events are covered by `stream.resync` (below), never silent drops.
 - **Heartbeat:** `: ping` comment every 15s (keeps proxies open; no client action needed).
 - **Close:** server closes with `event: stream.end` + `data: {"reason":"call_archived"}`.
 - **Backpressure:** server pauses writes when a consumer is slow; drops are **never** silent —
