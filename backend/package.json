@@ -16,7 +16,7 @@
     "db:up": "tsx src/scripts/db-up.ts"
   },
   "dependencies": {
-    "@fastify/compress": "^7.0.3",
+    "@fastify/compress": "^9.2.0",
     "@fastify/cors": "^9.0.0",
     "@fastify/helmet": "^11.1.1",
     "@fastify/rate-limit": "^9.1.0",
