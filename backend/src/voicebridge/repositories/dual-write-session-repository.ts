@@ -39,6 +39,10 @@ export class DualWriteSessionRepository implements SessionRepository {
     return this.reader.findByUserId(userId);
   }
 
+  async findByAgentId(agentId: string): Promise<VoiceCallSession[]> {
+    return this.reader.findByAgentId(agentId);
+  }
+
   async list(): Promise<VoiceCallSession[]> {
     return this.reader.list();
   }

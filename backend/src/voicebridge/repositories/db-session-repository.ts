@@ -109,6 +109,20 @@ export class DatabaseSessionRepository implements SessionRepository {
     }
   }
 
+  async findByAgentId(agentId: string): Promise<VoiceCallSession[]> {
+    try {
+      // The sessions table keeps agent_id inside the JSONB data blob (no
+      // dedicated column); the ->' '>' operator reaches it without a cast.
+      const result = await this.query<SessionRow>(
+        "SELECT * FROM sessions WHERE data->>'agentId' = $1 ORDER BY created_at DESC",
+        [agentId],
+      );
+      return result.rows.map(rowToSession);
+    } catch (cause) {
+      throw new RepositoryError(`Failed to find sessions for agent: ${agentId}`, cause);
+    }
+  }
+
   async list(): Promise<VoiceCallSession[]> {
     try {
       const result = await this.query<SessionRow>(

@@ -15,6 +15,7 @@ import { createSignalingServer } from './signaling/server.js';
 import { DefaultEventBus, createEventLoggerHook } from './event-bus/index.js';
 import type { EventBus } from './event-bus/index.js';
 import { initializePhoneTokens } from './voicebridge/phone-tokens.js';
+import { initializeFcmTokens } from './voicebridge/fcm-tokens.js';
 import { initializeAiKeys } from './voicebridge/ai-keys.js';
 import { register as registerNotifications } from './voicebridge/notifications/index.js';
 import { register as registerPresence } from './voicebridge/presence/index.js';
@@ -187,6 +188,9 @@ async function main() {
   // Initialize phone tokens (database-backed if a pool exists, in-memory otherwise)
   await initializePhoneTokens(pool);
 
+  // Phase A (FCM push-to-wake): device token registry, same persistence pattern.
+  await initializeFcmTokens(pool);
+
   // Initialize the named AI keys registry (Add-AI flow)
   await initializeAiKeys(pool);
 
@@ -231,7 +235,7 @@ async function main() {
   }
 
   await app.register(rateLimit, {
-    max: 100,
+    max: parseInt(process.env.RATE_LIMIT_MAX ?? '100', 10),
     timeWindow: '1 minute',
     // The plugin throws whatever this builder returns; a plain object without
     // statusCode would make Fastify reply 500, so build a real 429 error

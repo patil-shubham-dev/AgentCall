@@ -43,15 +43,59 @@ describe('ENGINE_V2 lease-mode send_message_and_wait', () => {
     (config as unknown as { v2: { engineV2: boolean } }).v2.engineV2 = false;
   });
 
-  it('keeps a null-timeout wait lease active with no expiry until disposed', async () => {
+  it('caps a null-timeout lease at maxTurnLeaseMs instead of activeUntil null', async () => {
     const service = makeService();
     const callId = await makeActiveCall(service);
 
     const dispose = service.registerAiWait(callId, null);
-    // Lease with no activeUntil: active until disposed, regardless of time.
-    expect(service.getAiWaitStatus(callId)).toMatchObject({ active: true, activeUntil: null });
+    // The uncapped lease now carries a hard server-side ceiling (default 15
+    // min) so a crashed waiter can never shield a call indefinitely. activeUntil
+    // must be a real timestamp, not null.
+    const status = service.getAiWaitStatus(callId);
+    expect(status.active).toBe(true);
+    expect(status.activeUntil).not.toBeNull();
+    const untilMs = Date.parse(must(status.activeUntil, 'activeUntil'));
+    const nowMs = Date.now();
+    expect(untilMs - nowMs).toBeGreaterThan(14 * 60 * 1000);
+    expect(untilMs - nowMs).toBeLessThanOrEqual(16 * 60 * 1000);
     dispose();
     expect(service.getAiWaitStatus(callId).active).toBe(false);
+  });
+
+  it('expires an undisposed null-timeout lease after the ceiling passes (fake timers)', async () => {
+    const service = makeService();
+    const callId = await makeActiveCall(service);
+
+    // Register without disposing (simulates a crashed waiter whose dispose()
+    // never runs): the lease must still self-expire once maxTurnLeaseMs
+    // elapses, so cancelCallsByAgent can abort the call afterwards.
+    service.registerAiWait(callId, null);
+    const status = service.getAiWaitStatus(callId);
+    const untilMs = Date.parse(must(status.activeUntil, 'activeUntil'));
+    expect(status.active).toBe(true);
+
+    const originalMax = (config as unknown as { v2: { maxTurnLeaseMs: number } }).v2.maxTurnLeaseMs;
+    (config as unknown as { v2: { maxTurnLeaseMs: number } }).v2.maxTurnLeaseMs = 100;
+    try {
+      // Fresh call so no overlapping-lease "farthest deadline wins" logic
+      // interferes; a 100ms ceiling is way below the real 15-min default.
+      const call2 = await makeActiveCall(service);
+      service.registerAiWait(call2, null);
+      expect(service.getAiWaitStatus(call2).active).toBe(true);
+
+      // Simulate the clock passing the ceiling: sleep past 100ms.
+      await new Promise((r) => setTimeout(r, 150));
+      expect(service.getAiWaitStatus(call2).active).toBe(false);
+
+      // And cancelCallsByAgent can now abort the call (the guard no longer
+      // blocks it) — the whole point of the ceiling.
+      const count = await service.cancelCallsByAgent('agent-1', 'agent_disconnected');
+      expect(count).toBe(1);
+      expect((await service.getCall(call2))?.status).toBe('aborted');
+    } finally {
+      (config as unknown as { v2: { maxTurnLeaseMs: number } }).v2.maxTurnLeaseMs = originalMax;
+      void untilMs;
+    }
   });
 
   it('resolves with the reply when the human responds — no 45s cap', async () => {

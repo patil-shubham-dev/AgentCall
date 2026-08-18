@@ -15,6 +15,9 @@ import dagger.hilt.android.HiltAndroidApp
 class AgentCallApp : Application() {
     override fun onCreate() {
         super.onCreate()
+        // Restore the persisted backend host BEFORE anything (services,
+        // Hilt singletons) builds URLs from ApiClient.serverHost.
+        com.agentcall.app.data.api.ApiClient.init(this)
         createNotificationChannels()
         checkFullScreenIntentPermission()
         ForegroundTracker.register(this)

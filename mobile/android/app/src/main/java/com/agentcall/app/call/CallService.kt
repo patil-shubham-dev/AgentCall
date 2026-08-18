@@ -176,6 +176,11 @@ class CallService : Service() {
             ACTION_STOP_RECORDING -> stopRecording()
             ACTION_SPEAK -> {
                 val text = intent.getStringExtra(EXTRA_TEXT) ?: return START_NOT_STICKY
+                // The fallback path (WS-down) delivers AI messages via the
+                // transcript poll in CallViewModel; it forwards them here so
+                // they are spoken AND recorded as lastAiMessage — otherwise
+                // "Repeat last" is a silent no-op on such deployments.
+                lastAiMessage = text
                 speakText(text)
             }
             ACTION_SET_MUTED -> {
@@ -489,6 +494,18 @@ class CallService : Service() {
                                     }
                                 }
                             }
+                            delay(1500); stopSelf()
+                        }
+                        is VoiceBridgeEvent.CallAborted -> {
+                            // Distinct terminal outcome: the agent's process
+                            // died mid-call, not a user cancel. Emit the
+                            // dedicated event so the UI can say "AI disconnected"
+                            // instead of the generic "Call ended".
+                            if (event.callId != callId) return@collect
+                            CallEventBus.emit(CallEvent.CallAborted(event.reason))
+                            speakTextOnMain("The AI disconnected. Call ended.")
+                            repository.saveCallEnded(callId, "aborted")
+                            deriveSummary()?.let { repository.saveCallSummary(callId, it) }
                             delay(1500); stopSelf()
                         }
                         is VoiceBridgeEvent.AiWaitStatus -> {

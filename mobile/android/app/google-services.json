@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "450908410530",
+    "project_id": "agentcall-prod",
+    "storage_bucket": "agentcall-prod.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:450908410530:android:9b0c392ede270dc41fbdfb",
+        "android_client_info": {
+          "package_name": "com.agentcall.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDgL31AZ-7BT4Wj3cK1_dA4lx9LV0zb2pc"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

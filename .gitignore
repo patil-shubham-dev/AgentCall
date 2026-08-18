@@ -9,6 +9,7 @@ mobile/android/local.properties
 .env
 .env.local
 backend/keys/jwt_*.pem
+backend/secrets/
 
 # IDE
 .idea/

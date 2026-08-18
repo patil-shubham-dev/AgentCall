@@ -20,6 +20,10 @@ export class InstrumentedSessionRepository implements SessionRepository {
     return this.track('findByUserId', () => this.inner.findByUserId(userId), { userId });
   }
 
+  async findByAgentId(agentId: string): Promise<VoiceCallSession[]> {
+    return this.track('findByAgentId', () => this.inner.findByAgentId(agentId), { agentId });
+  }
+
   async list(): Promise<VoiceCallSession[]> {
     return this.track('list', () => this.inner.list());
   }

@@ -2,7 +2,7 @@ import type { CallPriority, CallReason } from '../common/types.js';
 
 export type MessageRole = 'ai' | 'user' | 'system';
 export type MessageType = 'text' | 'audio' | 'system';
-export type CallStatus = 'pending' | 'active' | 'paused' | 'completed' | 'cancelled';
+export type CallStatus = 'pending' | 'active' | 'paused' | 'completed' | 'cancelled' | 'aborted';
 
 export interface VoiceMessage {
   id: string;

@@ -69,7 +69,7 @@ data class TranscriptMessage(
     val role: String,
     val type: String,
     val content: String,
-    @SerialName("created_at") val createdAt: String,
+    @SerialName("createdAt") val createdAt: String,
 )
 
 @Serializable

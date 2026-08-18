@@ -1,6 +1,6 @@
 import { existsSync, writeFileSync, unlinkSync } from 'node:fs';
 
-const BASE = 'https://agentcall-66ke.onrender.com';
+const BASE = 'http://127.0.0.1:4000';
 const MARK = 'C:/Users/91808/AppData/Local/Temp/opencode/';
 const phase = process.argv[2] ?? 'full';
 const out = { phase };
@@ -11,14 +11,6 @@ async function post(path, body, headers = {}) {
     headers: { 'Content-Type': 'application/json', ...headers },
     body: JSON.stringify(body),
   });
-  const text = await res.text();
-  let json = null;
-  try { json = JSON.parse(text); } catch {}
-  return { status: res.status, json, text: text.slice(0, 200) };
-}
-
-async function get(path, headers = {}) {
-  const res = await fetch(BASE + path, { headers });
   const text = await res.text();
   let json = null;
   try { json = JSON.parse(text); } catch {}
@@ -65,26 +57,19 @@ try {
   const phoneToken = phone.json.token;
 
   // 2. Temp AI key
-  const keyRes = await post('/api/v1/ai/keys', { name: 'LiveLeaseTest' }, { Authorization: `Bearer ${phoneToken}` });
+  const keyRes = await post('/api/v1/ai/keys', { name: 'FcmWakeTest' }, { Authorization: `Bearer ${phoneToken}` });
   if (keyRes.status !== 201) throw new Error('ai key: ' + keyRes.text);
   const aiKey = keyRes.json.key;
   const keyId = keyRes.json.key_id;
   out.keyId = keyId;
 
-  // (No own WebSocket here: the phone app holds the solo-user connection.
-  //  Opening a second one would stomp it — registerPhone replaces the
-  //  existing connection — and steal the call_incoming push.)
-
-  // 4. MCP init
-  const init = await mcp({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'live-driver', version: '1.0' } } }, { Authorization: `Bearer ${aiKey}` });
+  // 3. MCP init (holds the agent session; the ping loop keeps liveness alive)
+  const init = await mcp({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'fcm-wake-driver', version: '1.0' } } }, { Authorization: `Bearer ${aiKey}` });
   if (init.status !== 200 || !init.sessionId) throw new Error('MCP init failed: ' + init.raw);
   const sid = init.sessionId;
   const auth = { Authorization: `Bearer ${aiKey}`, 'Mcp-Session-Id': sid };
   await mcp({ jsonrpc: '2.0', id: 2, method: 'notifications/initialized', params: {} }, auth);
 
-  // 4b. Heartbeat: prove the session is alive. The backend's 45s liveness
-  // sweep (MCP_LIVENESS_TIMEOUT_MS) closes sessions whose notifications/ping
-  // stop — a kill -9 here must drop the pings so the sweep aborts the call.
   const pingTimer = setInterval(() => {
     fetch(`${BASE}/mcp`, {
       method: 'POST',
@@ -94,39 +79,32 @@ try {
   }, 10_000);
   pingTimer.unref?.();
 
-  // 5. create_call (rings the phone)
-  const call = await mcp({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'create_call', arguments: { context: { reason: 'clarification', summary: 'On-device AI-wait banner test. Please answer this test call.' } } } }, auth);
-  const callId = toolResult(call.body).call_id;
-  if (!callId) throw new Error('create_call: ' + call.raw);
-  out.callId = callId;
-  console.log('CALL_CREATED ' + callId);
-  console.log('RINGING_PHONE — waiting for signal file go-lease.txt');
-  setMark('ring.flag', callId);
+  console.log('SESSION_READY waiting for go-wake.txt');
+  setMark('wake-driver-ready.flag', '1');
 
-  // 6. Wait for the go signal (up to 8 min), then run the lease toggle
-  const deadline = Date.now() + 8 * 60 * 1000;
-  while (!existsSync(MARK + 'go-lease.txt') && Date.now() < deadline) {
-    await sleep(500);
+  // 4. Wait for the go signal, then create the call immediately
+  const deadline = Date.now() + 5 * 60 * 1000;
+  while (!existsSync(MARK + 'go-wake.txt') && Date.now() < deadline) {
+    await sleep(100);
   }
-  if (!existsSync(MARK + 'go-lease.txt')) {
+  if (!existsSync(MARK + 'go-wake.txt')) {
     console.log('NO_GO_SIGNAL_TIMEOUT');
   } else {
-    clearMark('go-lease.txt');
-    console.log('LEASE_START ' + new Date().toISOString());
-    const waitPromise = mcp({ jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'send_message_and_wait', arguments: { call_id: callId, content: 'I am waiting for your reply — please say something.', timeout_seconds: 25 } } }, auth);
-    await sleep(2500);
-    console.log('LEASE_ACTIVE_MARK ' + new Date().toISOString());
-    setMark('lease-active.flag', '1');
-    const waitDone = await waitPromise;
-    out.waitStatusText = (waitDone.body?.result?.content?.[0]?.text ?? '').slice(0, 200);
-    console.log('LEASE_DONE ' + new Date().toISOString());
-    setMark('lease-done.flag', '1');
-    // Window for a post-wait screencap while the call is still open
-    await sleep(6000);
+    clearMark('go-wake.txt');
+    const t0 = Date.now();
+    console.log('CALL_CREATE_AT ' + new Date().toISOString());
+    const call = await mcp({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'create_call', arguments: { context: { reason: 'clarification', summary: 'FCM wake-test call. Please answer on the phone.' } } } }, auth);
+    const callId = toolResult(call.body).call_id;
+    if (!callId) throw new Error('create_call: ' + call.raw);
+    out.callId = callId;
+    console.log('CALL_CREATED ' + callId + ' +' + (Date.now() - t0) + 'ms');
+    setMark('ring.flag', callId);
+    // Hold the session so the call stays pending; sweep will abort on kill.
+    await sleep(3 * 60 * 1000);
   }
 
-  // 7. Report + cleanup
-  try { await mcp({ jsonrpc: '2.0', id: 5, method: 'tools/call', params: { name: 'cancel_call', arguments: { call_id: callId } } }, auth); out.cancelled = true; } catch {}
+  // 5. Cleanup
+  try { await mcp({ jsonrpc: '2.0', id: 5, method: 'tools/call', params: { name: 'cancel_call', arguments: { call_id: out.callId } } }, auth); out.cancelled = true; } catch {}
   const del = await fetch(`${BASE}/api/v1/ai/keys/${keyId}`, { method: 'DELETE', headers: { Authorization: `Bearer ${phoneToken}` } });
   out.keyDeletedStatus = del.status;
   out.success = true;

@@ -16,6 +16,7 @@ export {
   publishCallResumed,
   publishCallDeleted,
   publishCallExpired,
+  publishCallAborted,
 } from './publisher.js';
 
 export type {
@@ -27,4 +28,5 @@ export type {
   CallResumedPayload,
   CallDeletedPayload,
   CallExpiredPayload,
+  CallAbortedPayload,
 } from './events.js';

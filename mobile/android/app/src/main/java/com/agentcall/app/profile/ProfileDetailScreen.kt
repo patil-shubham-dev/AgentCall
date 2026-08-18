@@ -45,6 +45,7 @@ import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Quickreply
 import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material.icons.filled.WifiOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -95,6 +96,7 @@ import com.agentcall.app.ui.theme.Indigo400
 import com.agentcall.app.ui.theme.Indigo600
 import com.agentcall.app.ui.theme.Indigo900
 import com.agentcall.app.ui.theme.Red400
+import com.agentcall.app.ui.theme.Red500
 import com.agentcall.app.ui.theme.Slate200
 import com.agentcall.app.ui.theme.Slate400
 import com.agentcall.app.ui.theme.Slate50
@@ -467,6 +469,7 @@ fun CallHistoryItem(call: CallRecordEntity, viewModel: ProfileDetailViewModel) {
     val statusColor = when (call.status) {
         "ended" -> Green500
         "cancelled" -> Red400
+        "aborted" -> Red500
         "expired" -> Amber400
         "ringing" -> Indigo400
         else -> Slate400
@@ -474,6 +477,7 @@ fun CallHistoryItem(call: CallRecordEntity, viewModel: ProfileDetailViewModel) {
     val statusIcon = when (call.status) {
         "ended" -> Icons.Default.CheckCircle
         "cancelled" -> Icons.Default.Cancel
+        "aborted" -> Icons.Default.WifiOff
         "expired" -> Icons.AutoMirrored.Filled.PhoneMissed
         "ringing" -> Icons.Default.Call
         else -> Icons.Default.Schedule
@@ -610,6 +614,7 @@ private fun formatDuration(seconds: Int): String {
 private fun statusLabel(status: String): String = when (status) {
     "ended" -> "Completed"
     "cancelled" -> "Cancelled"
+    "aborted" -> "AI disconnected"
     "expired" -> "Missed"
     "ringing" -> "Ringing"
     "started" -> "In progress"

@@ -9,6 +9,7 @@ import {
   CALL_RESUMED,
   CALL_DELETED,
   CALL_EXPIRED,
+  CALL_ABORTED,
 } from './events.js';
 import type {
   CallCreatedPayload,
@@ -19,6 +20,7 @@ import type {
   CallResumedPayload,
   CallDeletedPayload,
   CallExpiredPayload,
+  CallAbortedPayload,
 } from './events.js';
 
 export function registerCallSubscribers(eventBus: EventBus): void {
@@ -92,5 +94,14 @@ export function registerCallSubscribers(eventBus: EventBus): void {
       logger.info({ userId, callId, reason }, '[EventBus] CallExpired received');
     },
     { name: 'calls.expired-logger', scope: 'calls' },
+  );
+
+  eventBus.subscribe<CallAbortedPayload>(
+    CALL_ABORTED,
+    async (event) => {
+      const { userId, callId, reason } = event.payload;
+      logger.info({ userId, callId, reason }, '[EventBus] CallAborted received');
+    },
+    { name: 'calls.aborted-logger', scope: 'calls' },
   );
 }

@@ -93,8 +93,34 @@ function createMcpSession(voicebridge: VoiceBridgeService): McpSession {
   return { server, transport };
 }
 
+/** True when the JSON-RPC body is a notifications/ping (single or batch). */
+function isPingNotification(body: unknown): boolean {
+  if (Array.isArray(body)) {
+    return body.length > 0 && body.every((m) => (m as { method?: string } | null)?.method === 'notifications/ping');
+  }
+  return (body as { method?: string } | null)?.method === 'notifications/ping';
+}
+
 export function registerMcpEndpoint(app: FastifyInstance, voicebridge: VoiceBridgeService): McpSessionRegistry {
-  const sessions = new McpSessionRegistry();
+  // When the LAST MCP session of an agent closes — by explicit DELETE, the
+  // 30-min idle sweep, or the 45s liveness sweep (kill -9 / dropped TCP) —
+  // abort that agent's open calls so a crashed/abandoned agent process never
+  // leaves calls ringing or paused. cancelCallsByAgent skips calls with an
+  // active ai_wait lease (the agent's waiter is still alive mid-turn), so a
+  // long send_message_and_wait that outlived the idle window can't get its
+  // call cancelled — EXCEPT here the dead agent's leases are force-disposed
+  // first: a session whose heartbeat stopped has no live waiter, and a stale
+  // lease must never shield the call from the disconnect abort.
+  const sessions = new McpSessionRegistry(
+    (agentName) => {
+      logger.info({ agentName }, '[MCP] last session for agent closed; aborting open calls');
+      void voicebridge
+        .forceDisposeAiWaits(agentName)
+        .then(() => voicebridge.cancelCallsByAgent(agentName, 'agent_disconnected'))
+        .catch((err) => logger.error({ err, agentName }, '[MCP] cancelCallsByAgent failed after agent session close'));
+    },
+    (agentName) => voicebridge.hasOpenCalls(agentName),
+  );
   app.decorate('mcpSessions', sessions);
 
   app.all('/mcp', {
@@ -128,7 +154,13 @@ export function registerMcpEndpoint(app: FastifyInstance, voicebridge: VoiceBrid
         return reply.status(404).send({ error: 'SESSION_NOT_FOUND', message: 'Unknown or expired Mcp-Session-Id. Re-initialize the session.' });
       }
       session = existing;
-      sessions.touch(sessionId);
+      // notifications/ping refreshes only the liveness clock (kill -9 / dropped
+      // TCP detection); every other request is real activity as well.
+      if (isPingNotification(request.body)) {
+        sessions.heartbeat(sessionId);
+      } else {
+        sessions.touch(sessionId);
+      }
     } else {
       const created = createMcpSession(voicebridge);
       let connectOk = true;
@@ -139,7 +171,7 @@ export function registerMcpEndpoint(app: FastifyInstance, voicebridge: VoiceBrid
       if (!connectOk) {
         return reply.status(500).send({ error: 'INTERNAL', message: 'Failed to create MCP session.' });
       }
-      session = { ...created, lastActivityAt: Date.now() };
+      session = { ...created, lastActivityAt: Date.now(), lastHeartbeatAt: Date.now() };
     }
 
     if (!session) {
@@ -161,6 +193,7 @@ export function registerMcpEndpoint(app: FastifyInstance, voicebridge: VoiceBrid
           server: activeSession.server,
           transport: activeSession.transport,
           lastActivityAt: Date.now(),
+          lastHeartbeatAt: Date.now(),
           agentName: identity.agentName,
         });
         activeSession.transport.onclose = () => {
@@ -180,6 +213,20 @@ export function registerMcpEndpoint(app: FastifyInstance, voicebridge: VoiceBrid
   logger.info(
     { idleMs: config.mcp.sessionIdleMs, intervalMs: config.mcp.sessionSweepIntervalMs },
     '[MCP] idle session sweeper started',
+  );
+
+  // Liveness sweep: closes sessions whose heartbeat stopped (kill -9 / dropped
+  // TCP) when the agent still has open calls, so a hard-crashed agent's calls
+  // are aborted in ~45s instead of waiting for the 30-min idle sweep.
+  const livenessSweeper = setInterval(() => {
+    void sessions
+      .sweepDead(config.mcp.livenessTimeoutMs)
+      .catch((err) => logger.error({ err }, '[MCP] liveness sweep failed'));
+  }, config.mcp.livenessSweepIntervalMs);
+  livenessSweeper.unref();
+  logger.info(
+    { timeoutMs: config.mcp.livenessTimeoutMs, intervalMs: config.mcp.livenessSweepIntervalMs },
+    '[MCP] liveness sweeper started',
   );
 
   logger.info('[MCP] streamable HTTP endpoint registered at /mcp');

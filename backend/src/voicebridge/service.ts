@@ -25,15 +25,20 @@ import {
   publishCallPaused,
   publishCallEnded,
   publishCallCancelled,
+  publishCallAborted,
   publishCallDelayed,
 } from './calls/publisher.js';
 import type { SessionRepository, CallbackRepository } from './repositories/index.js';
 import type { LifecycleCoordinator } from './lifecycle-coordinator.js';
+import { sendFcmPush } from './fcm.js';
 import type { CleanupScheduler } from '../common/cleanup-scheduler.js';
 
 const COMPLETED_RETENTION_MS = 60 * 60 * 1000;
 const CANCELLED_RETENTION_MS = 5 * 60 * 1000;
 const STALE_ACTIVE_THRESHOLD_MS = 30 * 60 * 1000;
+
+/** Reason recorded on calls aborted when the owning agent's last MCP session closed. */
+export const ABORT_REASON_AGENT_DISCONNECTED = 'agent_disconnected';
 
 /**
  * Notifications queued while the phone was offline are only worth flushing
@@ -268,15 +273,23 @@ export class VoiceBridgeService {
   registerAiWait(callId: string, timeoutMs: number | null): () => void {
     const startedAt = now();
     const existing = this.aiWaitLeases.get(callId);
-    // null = turn-lease semantics (v2, ENGINE_V2): no server-side expiry — the
-    // lease stays active until the waiter disposes it (reply / call end /
-    // noactivity escalation). A newer registration must never shorten an
-    // in-flight wait: with overlapping waits the status stays active until the
-    // FURTHEST deadline, otherwise the banner would flip to "not responding"
-    // while an older (longer) wait is still running. ISO strings compare
-    // chronologically; null (no expiry) always wins.
+    // timeoutMs === null = turn-lease semantics (v2, ENGINE_V2): no client
+    // window — the lease stays active until the waiter disposes it (reply /
+    // call end / noactivity escalation) or the hard ceiling (maxTurnLeaseMs,
+    // default 15 min) passes, so a crashed waiter's lease can never shield a
+    // call from an agent-disconnect abort indefinitely. A live wait returns at
+    // the noactivity escalation (5 min default) well before the ceiling, so it
+    // never cuts a healthy conversation short. A newer registration must never
+    // shorten an in-flight wait: with overlapping waits the status stays
+    // active until the FURTHEST deadline, otherwise the banner would flip to
+    // "not responding" while an older (longer) wait is still running. ISO
+    // strings compare chronologically; activeUntil is always a real timestamp
+    // (never null) after this change.
+    const ceilingMs = config.v2.maxTurnLeaseMs;
     const candidateUntil =
-      timeoutMs === null ? null : new Date(Date.now() + Math.max(timeoutMs, 1000)).toISOString();
+      timeoutMs === null
+        ? new Date(Date.now() + ceilingMs).toISOString()
+        : new Date(Date.now() + Math.max(timeoutMs, 1000)).toISOString();
     const existingNewer =
       existing &&
       existing.count > 0 &&
@@ -435,7 +448,7 @@ export class VoiceBridgeService {
       // Idempotent: the phone's persisted answer retries must never re-notify
       // an already-answered or finished call.
       if (session.status === 'active') return session;
-      if (session.status === 'completed' || session.status === 'cancelled') return session;
+      if (session.status === 'completed' || session.status === 'cancelled' || session.status === 'aborted') return session;
 
       const wasPaused = session.status === 'paused';
       session.status = 'active';
@@ -574,7 +587,7 @@ export class VoiceBridgeService {
 
       // Idempotent for terminal states: retries from the phone's persisted
       // completion queue must never re-notify or rewrite a finished call.
-      if (session.status === 'completed' || session.status === 'cancelled') {
+      if (session.status === 'completed' || session.status === 'cancelled' || session.status === 'aborted') {
         logger.info({ callId, status: session.status }, 'Call session already terminal, no-op');
         return session;
       }
@@ -618,8 +631,8 @@ export class VoiceBridgeService {
         logger.info({ callId }, 'Call session already cancelled, no-op');
         return session;
       }
-      if (session.status === 'completed') {
-        logger.info({ callId }, 'Call already completed, ignoring cancel');
+      if (session.status === 'completed' || session.status === 'aborted') {
+        logger.info({ callId, status: session.status }, 'Call already terminal, ignoring cancel');
         return session;
       }
 
@@ -658,6 +671,103 @@ export class VoiceBridgeService {
       logger.info({ callId }, 'Call session cancelled');
       return session;
     });
+  }
+
+  /**
+   * Terminal state distinct from a user cancel: the owning agent vanished
+   * (its last MCP session closed or was idle-swept) while the call was open.
+   * Persisted as status 'aborted' and notified as call_aborted so the phone
+   * can show "AI disconnected" instead of a generic cancelled/failed call.
+   * Idempotent for terminal states, like cancelCall/completeCall.
+   */
+  async abortCall(callId: string, reason: string): Promise<VoiceCallSession | undefined> {
+    return withSessionLock(callId, async () => {
+      const session = await this.sessionRepo.findById(callId);
+      if (!session) return undefined;
+
+      if (session.status === 'aborted') {
+        logger.info({ callId }, 'Call session already aborted, no-op');
+        return session;
+      }
+      if (session.status === 'completed' || session.status === 'cancelled') {
+        logger.info({ callId, status: session.status }, 'Call already terminal, ignoring abort');
+        return session;
+      }
+
+      session.status = 'aborted';
+      session.completedAt = now();
+      session.retentionExpiresAt = new Date(Date.now() + CANCELLED_RETENTION_MS).toISOString();
+
+      await this.sessionRepo.save(session);
+      await this.callbackRepo.delete(session.userId);
+      // Same cleanup as completeCall/cancelCall: an aborted call needs no lease
+      // bookkeeping, and any scheduled resume/expiry timers no-op (handleResume
+      // re-checks status !== 'paused' before any side effect).
+      this.aiWaitLeases.delete(callId);
+      publishCallAborted(session.userId, callId, reason);
+      this.signalSessionChange(callId);
+      notifyPhone(session.userId, { type: 'call_aborted', callId, reason });
+      logger.info({ callId, reason }, 'Call session aborted');
+      return session;
+    });
+  }
+
+  /**
+   * Abort every open call owned by an agent whose last MCP session just closed.
+   * Covers pending (unanswered rings), active (in conversation) and paused
+   * (callback-scheduled) calls; a dead agent can neither answer a ring nor
+   * resume a callback, so all three are terminal immediately. Skips calls with
+   * an active ai_wait lease — a lease means the agent's waiter process is still
+   * alive mid-turn on that call, so aborting would kill a live conversation
+   * (the same guard the ring gate uses to consider the agent ready).
+   * Returns how many calls were aborted.
+   */
+  async cancelCallsByAgent(agentId: string, reason: string): Promise<number> {
+    const sessions = await this.sessionRepo.findByAgentId(agentId);
+    let aborted = 0;
+    for (const session of sessions) {
+      if (session.status !== 'pending' && session.status !== 'active' && session.status !== 'paused') continue;
+      if (this.getAiWaitStatus(session.id).active) continue;
+      await this.abortCall(session.id, reason);
+      aborted++;
+    }
+    if (aborted > 0) {
+      logger.info({ agentId, reason, aborted }, '[agent-disconnect] aborted open calls');
+    }
+    return aborted;
+  }
+
+  /**
+   * True when the agent owns any pending/active/paused call. Used by the MCP
+   * liveness sweep to decide whether a dead session needs closing NOW (it has
+   * calls to protect) or can wait for the 30-min idle sweep.
+   */
+  async hasOpenCalls(agentId: string): Promise<boolean> {
+    const sessions = await this.sessionRepo.findByAgentId(agentId);
+    return sessions.some(
+      (s) => s.status === 'pending' || s.status === 'active' || s.status === 'paused',
+    );
+  }
+
+  /**
+   * Drops every ai_wait lease held by the agent's calls. Called when the
+   * agent's last MCP session closed — including the liveness sweep, where the
+   * waiter process is dead and its dispose() will never run — so a stale lease
+   * can't shield the calls from cancelCallsByAgent. Returns how many leases
+   * were force-disposed.
+   */
+  async forceDisposeAiWaits(agentId: string): Promise<number> {
+    const sessions = await this.sessionRepo.findByAgentId(agentId);
+    let disposed = 0;
+    for (const session of sessions) {
+      if (this.aiWaitLeases.delete(session.id)) {
+        disposed++;
+      }
+    }
+    if (disposed > 0) {
+      logger.info({ agentId, disposed }, '[agent-disconnect] force-disposed ai_wait leases');
+    }
+    return disposed;
   }
 
   async getTranscript(callId: string): Promise<VoiceMessage[] | undefined> {
@@ -778,6 +888,15 @@ export function notifyPhone(userId: string, payload: Record<string, unknown>): b
   logger.info({ userId, msgType, phoneConnectionsSize: phoneConnections.size, hasConnection: phoneConnections.has(userId) }, '[notifyPhone] entered');
 
   publishNotificationRequested(userId, msgType, payload);
+
+  // Phase A: FCM push-to-wake is a SECOND ring-delivery attempt fired alongside
+  // the WS path — always-send, the phone dedupes against the WS/poll ring.
+  // Fire-and-forget: never awaited, never alters the return value below, and
+  // a fully silent no-op when FCM_ENABLED=false. The client's recentlyRung
+  // guard makes duplicate delivery harmless.
+  if (msgType === 'call_incoming' && config.fcm.enabled) {
+    void sendFcmPush(userId, payload);
+  }
 
   const ws = phoneConnections.get(userId);
   if (ws && ws.readyState === WebSocket.OPEN) {

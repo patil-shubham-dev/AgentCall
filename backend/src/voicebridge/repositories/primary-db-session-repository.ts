@@ -18,6 +18,12 @@ export class PrimaryDatabaseSessionRepository implements SessionRepository {
     return result;
   }
 
+  async findByAgentId(agentId: string): Promise<VoiceCallSession[]> {
+    const result = await this.db.findByAgentId(agentId);
+    logger.debug({ agentId, count: result.length }, '[PrimaryDatabaseSessionRepository] findByAgentId');
+    return result;
+  }
+
   async list(): Promise<VoiceCallSession[]> {
     const result = await this.db.list();
     logger.debug({ count: result.length }, '[PrimaryDatabaseSessionRepository] list');

@@ -9,6 +9,7 @@ import {
   CALL_RESUMED,
   CALL_DELETED,
   CALL_EXPIRED,
+  CALL_ABORTED,
   CALL_DELAYED,
 } from './events.js';
 import type {
@@ -20,6 +21,7 @@ import type {
   CallResumedPayload,
   CallDeletedPayload,
   CallExpiredPayload,
+  CallAbortedPayload,
   CallDelayedPayload,
 } from './events.js';
 
@@ -72,6 +74,9 @@ export const publishCallExpired = (
   pausedDurationMinutes: number,
 ): void =>
   publisher.publish<CallExpiredPayload>(CALL_EXPIRED, { userId, callId, reason, pausedDurationMinutes });
+
+export const publishCallAborted = (userId: string, callId: string, reason: string): void =>
+  publisher.publish<CallAbortedPayload>(CALL_ABORTED, { userId, callId, reason });
 
 export const publishCallDelayed = (
   userId: string,

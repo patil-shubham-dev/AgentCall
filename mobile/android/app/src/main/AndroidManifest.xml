@@ -60,6 +60,17 @@
             android:foregroundServiceType="dataSync"
             android:exported="false" />
 
+        <!-- Phase A (FCM push-to-wake): receives high-priority data pushes and
+             hands rings to SignalingForegroundService. Never exported; FCM
+             delivers through the Firebase SDK binding. -->
+        <service
+            android:name=".call.AgentCallMessagingService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
+
         <receiver
             android:name=".BootReceiver"
             android:exported="false">

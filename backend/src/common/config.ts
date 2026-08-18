@@ -42,6 +42,17 @@ export const config = {
     bodyLimit: parseIntSafe('BODY_LIMIT_BYTES', '1048576'),
   },
 
+  fcm: {
+    // Phase A: FCM push-to-wake as a SECOND ring-delivery path (always-send,
+    // client dedupes against WS/poll). Disabled = fully silent no-op — no
+    // tokens minted, no HTTP, no log lines per ring. The real service-account
+    // JSON (FIREBASE_SERVICE_ACCOUNT_PATH) and FCM_PROJECT_ID are only read
+    // lazily when enabled AND a ring is being pushed.
+    enabled: env('FCM_ENABLED', 'false') === 'true',
+    serviceAccountPath: env('FIREBASE_SERVICE_ACCOUNT_PATH', ''),
+    projectId: env('FCM_PROJECT_ID', ''),
+  },
+
   mcp: {
     // Safety-net wake interval for send_message_and_wait. Replies are now
     // delivered by an in-process session-change event (no poll floor); this
@@ -52,6 +63,14 @@ export const config = {
     // SESSION_NOT_FOUND and re-initialize, which is MCP's designed recovery.
     sessionIdleMs: parseIntSafe('MCP_SESSION_IDLE_MS', '1800000'),
     sessionSweepIntervalMs: parseIntSafe('MCP_SESSION_SWEEP_INTERVAL_MS', '60000'),
+    // Liveness (heartbeat) detection: a client that sends notifications/ping
+    // every HEARTBEAT_INTERVAL keeps its session alive under this shorter
+    // sweep; a session whose heartbeats stop (kill -9, dropped TCP) is closed
+    // after LIVENESS_TIMEOUT_MS and its agent's open calls are aborted. Much
+    // tighter than the 30-min idle sweep, which only catches a dead session
+    // when it has no open calls to protect.
+    livenessTimeoutMs: parseIntSafe('MCP_LIVENESS_TIMEOUT_MS', '45000'),
+    livenessSweepIntervalMs: parseIntSafe('MCP_LIVENESS_SWEEP_INTERVAL_MS', '5000'),
   },
 
   // v2 engine (roadmap M1, docs/v2). The v2 REST/SSE namespaces are additive
@@ -68,6 +87,12 @@ export const config = {
     // activity, the wait returns an escalation outcome instead of blocking
     // forever on a silent call. Advisory — never a hard conversation cap.
     noactivityEscalationMs: parseIntSafe('V2_NOACTIVITY_ESCALATION_MS', '300000'),
+    // Hard ceiling on the uncapped turn lease: even with timeout_seconds
+    // omitted (activeUntil would otherwise be null = no expiry), the lease
+    // self-expires after this long, so a crashed waiter's lease can never
+    // shield a call from an agent-disconnect abort indefinitely. A live wait
+    // returns at the noactivity escalation (5 min default) well before this.
+    maxTurnLeaseMs: parseIntSafe('V2_MAX_TURN_LEASE_MS', '900000'),
     // SSE heartbeat interval for GET /api/v2/calls/:id/events.
     sseHeartbeatMs: parseIntSafe('V2_SSE_HEARTBEAT_MS', '15000'),
     // How long a stored idempotency response is replayed (per spec: 24h).

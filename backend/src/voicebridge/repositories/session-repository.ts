@@ -3,6 +3,7 @@ import type { VoiceCallSession } from '../types.js';
 export interface SessionRepository {
   findById(callId: string): Promise<VoiceCallSession | undefined>;
   findByUserId(userId: string): Promise<VoiceCallSession[]>;
+  findByAgentId(agentId: string): Promise<VoiceCallSession[]>;
   list(): Promise<VoiceCallSession[]>;
   create(session: VoiceCallSession): Promise<void>;
   save(session: VoiceCallSession): Promise<void>;
@@ -22,6 +23,16 @@ export class InMemorySessionRepository implements SessionRepository {
     const results: VoiceCallSession[] = [];
     for (const session of this.sessions.values()) {
       if (session.userId === userId) {
+        results.push(session);
+      }
+    }
+    return results;
+  }
+
+  async findByAgentId(agentId: string): Promise<VoiceCallSession[]> {
+    const results: VoiceCallSession[] = [];
+    for (const session of this.sessions.values()) {
+      if (session.agentId === agentId) {
         results.push(session);
       }
     }

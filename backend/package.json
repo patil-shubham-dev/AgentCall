@@ -23,6 +23,7 @@
     "@modelcontextprotocol/sdk": "^1.30.0",
     "dotenv": "^16.4.0",
     "fastify": "^4.28.0",
+    "google-auth-library": "^9.15.1",
     "pg": "^8.22.0",
     "pino": "^9.1.0",
     "pino-pretty": "^11.1.0",

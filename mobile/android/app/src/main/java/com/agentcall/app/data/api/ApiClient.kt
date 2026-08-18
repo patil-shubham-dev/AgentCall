@@ -36,6 +36,26 @@ object ApiClient {
     var phoneToken: String? = null
 
     private const val API_PORT = 4000
+    private const val PREFS_HOST = "agentcall_host"
+    private const val KEY_SERVER_HOST = "server_host"
+
+    // The backend host must survive process death (kill -9, system kill after
+    // a reboot, OOM). Without persistence, a START_STICKY-restarted foreground
+    // service reverts to DEFAULT_HOST and points at the wrong backend — e.g.
+    // FCM wakes the process for a ring, ringFromEvent validates against the
+    // production host, finds no such call, and silently drops the ring.
+    private var prefs: android.content.SharedPreferences? = null
+
+    fun init(context: android.content.Context) {
+        prefs = context.applicationContext.getSharedPreferences(PREFS_HOST, android.content.Context.MODE_PRIVATE)
+        serverHost = prefs?.getString(KEY_SERVER_HOST, null)
+            ?.takeIf { it.isNotBlank() }
+            ?: BuildConfig.DEFAULT_HOST
+    }
+
+    private fun persistHost() {
+        prefs?.edit()?.putString(KEY_SERVER_HOST, serverHost)?.apply()
+    }
 
     private fun isDomainHost(): Boolean = !serverHost.matches(Regex("^[\\d.]+$"))
 
@@ -53,12 +73,14 @@ object ApiClient {
 
     fun setServerHost(host: String) {
         serverHost = host.trim().ifBlank { BuildConfig.DEFAULT_HOST }
+        persistHost()
         phoneToken = null
         _retrofit = null
     }
 
     fun resetToDefault() {
         serverHost = BuildConfig.DEFAULT_HOST
+        persistHost()
         phoneToken = null
         _retrofit = null
     }
@@ -87,13 +109,23 @@ object ApiClient {
         .addInterceptor(loggingInterceptor)
         .addInterceptor { chain ->
             val original = chain.request()
+            // Retrofit proxies built before a host switch keep the old base
+            // URL, so rewrite the scheme/host/port from the current config on
+            // every request. Keeps Hilt-injected singletons (CallRepository,
+            // IncomingCallActivity, ...) pointing at the active server.
+            val newUrl = original.url.newBuilder()
+                .scheme(if (isDomainHost()) "https" else "http")
+                .host(serverHost)
+                .port(if (isDomainHost()) 443 else API_PORT)
+                .build()
             val token = phoneToken
             val request = if (token != null) {
                 original.newBuilder()
+                    .url(newUrl)
                     .header("Authorization", "Bearer $token")
                     .build()
             } else {
-                original
+                original.newBuilder().url(newUrl).build()
             }
             chain.proceed(request)
         }

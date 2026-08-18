@@ -527,6 +527,59 @@ not a nice-to-have.
 
 ---
 
+### Item 18 — Deferred abort re-check when an agent session closes mid-lease
+
+**Status:** `[NEW]` (tracked 2026-08-15; not urgent — see Why) · **Why:** a crash/close of
+the agent's **last** MCP session while a `send_message_and_wait` lease is active leaves the
+call in limbo: `cancelCallsByAgent` correctly skips it (the lease means the waiter is still
+alive), but nothing re-triggers the abort after the lease expires — the call then dies via
+the stale/pause sweeps (up to 30 min) instead of an immediate `aborted` with the "AI
+disconnected" surface. Bounded and non-leaking (the lease always dies ≤ 5 min via the
+noactivity escalation), but slow and with the generic terminal event.
+
+**Current state (verified 2026-08-15):**
+- `service.ts` `cancelCallsByAgent(agentId, reason)` skips any open call with an active
+  ai_wait lease (`getAiWaitStatus(session.id).active`, `service.ts:723`) — the same guard
+  the ring gate uses. This is the correct skip; the gap is the missing follow-up.
+- The wait loop (and therefore the lease) always terminates ≤ ~5 min after wait start via
+  the unconditional `config.v2.noactivityEscalationMs` escalation, and the handler's
+  `finally` disposes the lease — so a crashed agent's lease cannot protect a call forever.
+- The abort trigger fires only once, in `mcp/endpoint.ts:100-107` when the **last** session
+  of an agent closes (`McpSessionRegistry` `onAgentGone`, both explicit DELETE and idle
+  sweep). Nothing re-runs it after a lease expires.
+
+**Design decisions:**
+- When `cancelCallsByAgent` skips a call because of an active lease, schedule a **deferred
+  re-check** at the lease's expiry moment (≈ `lastActiveAt + noactivityEscalationMs`, or the
+  lease `activeUntil` when one exists) that re-invokes the same abort for that call.
+- The re-check is a plain `setTimeout`-style timer in the voicebridge (unref'd), keyed by
+  callId and idempotent: when it fires, if the call is still open (pending/active/paused)
+  and still has no active lease, `abortCall(callId, 'agent_disconnected')` runs; otherwise
+  it no-ops (terminal status is a no-op by design). Cleanup: cancel the timer if the call
+  reaches a terminal state before expiry.
+- Keep the scope tight: this only fixes the *timing* of the abort for lease-skipped calls.
+  It does not change the lease semantics, the escalation, or the skip guard itself.
+
+**Implementation steps:**
+1. In `cancelCallsByAgent`, collect skipped callIds (lease-active) instead of just `continue`.
+2. Add a small pending-abort map (`callId → timer`) on the service; for each skipped call,
+   schedule `abortCall(callId, reason)` at `now + leaseRemainingMs` (fallback
+   `noactivityEscalationMs`), and clear the entry in `abortCall`/`completeCall`/`cancelCall`
+   terminal paths (or when the re-check fires and finds the call terminal/lease-active).
+3. Wire the timer cleanup into any shutdown path that already clears `aiWaitLeases`.
+4. Tests: clean DELETE mid-wait → call becomes `aborted` shortly after the lease expiry
+   (fake timers), not via the stale sweep; lease-skipped call that answers before expiry
+   never aborts; existing `agent-disconnect-abort.test.ts` stays green.
+
+**Verification:** new unit tests above; full backend suite green (`tsc --noEmit` + ESLint +
+Vitest). No mobile change required — the phone already renders `call_aborted`/`aborted`.
+
+**Risks:** a second timer per lease-skipped call — trivial count (bounded by open calls);
+keep it unref'd so it never holds the process. Race with `handleResume` is already guarded
+(status `!== 'paused'` re-check runs before any side effect).
+
+---
+
 ## 3. Cross-cutting gates (apply to every item)
 
 1. **No destructive ops.** No `git reset --hard`, no deleting files/branches, no DB drops on
@@ -548,6 +601,21 @@ not a nice-to-have.
 ---
 
 ## 4. Session log
+
+- **2026-08-15** — **Agent-disconnect abort (Item: "aborted" terminal state) implemented**:
+  new persisted `CallStatus 'aborted'` + `call.aborted` event plane entry, `abortCall` and
+  `cancelCallsByAgent(agentId, reason)` (covers pending + active + paused, skips calls with
+  an active ai_wait lease) in `voicebridge/service.ts`; `findByAgentId` added to all five
+  session-repository layers (DB via JSONB `data->>'agentId'`); MCP session teardown wired
+  through `McpSessionRegistry.onAgentGone` → abort on last-session close (explicit DELETE
+  + idle sweep). Phone: `call_aborted` parsed → `CallEvent.CallAborted` → "The AI
+  disconnected. Call ended." TTS + `saveCallEnded("aborted")` + distinct "AI
+  disconnected — the call ended" UI copy + Red500/WifiOff history label. 12 new backend
+  tests; full suite 261 green + the 12 DB-gated suites green against real Postgres 15
+  (273). Follow-up (Item 18, `[NEW]` not urgent): deferred abort re-check for a lease
+  skipped by `cancelCallsByAgent` when the agent's last session closes mid-wait. New
+  `v1-session-repo.integration.test.ts` (8 tests) validates `findByAgentId`'s JSONB query
+  against real Postgres. Suite now **281 tests / 34 files** green with `DATABASE_URL`.
 
 - **2026-08-13 (session 4)** — **Item 16 (v2 M2 realtime core) implemented**: TTS provider
   seam (`providers.ts`), engine streaming lifecycle + barge-in + `turn.lease` (`call-service.ts`),

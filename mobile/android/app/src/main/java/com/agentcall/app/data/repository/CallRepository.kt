@@ -1,5 +1,6 @@
 package com.agentcall.app.data.repository
 
+import com.agentcall.app.data.api.ApiClient
 import com.agentcall.app.data.api.ApiService
 import com.agentcall.app.data.database.dao.AiProfileDao
 import com.agentcall.app.data.database.dao.CallRecordDao
@@ -9,6 +10,7 @@ import com.agentcall.app.data.database.entity.CallRecordEntity
 import com.agentcall.app.data.database.entity.TranscriptMessageEntity
 import com.agentcall.app.call.agentSlug
 import com.agentcall.app.data.model.ActiveCall
+import com.agentcall.app.data.model.CallResponse
 import com.agentcall.app.data.model.TranscriptMessage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
@@ -174,6 +176,32 @@ class CallRepository @Inject constructor(
             withContext(Dispatchers.IO) { api.getCall(callId) }.status
         } catch (_: Exception) {
             null
+        }
+    }
+
+    suspend fun getCallDetails(callId: String): CallResponse? {
+        return try {
+            withContext(Dispatchers.IO) { api.getCall(callId) }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    // Phase A (FCM push-to-wake): register this device's Firebase token so the
+    // backend can push rings via FCM alongside the WS/poll path. Requires the
+    // phone token for auth; safe to call on every token refresh (idempotent).
+    suspend fun registerFcmToken(fcmToken: String) {
+        ApiClient.ensurePhoneToken()
+        withContext(Dispatchers.IO) {
+            api.registerFcmToken(com.agentcall.app.data.model.FcmTokenRequest(fcmToken))
+        }
+    }
+
+    suspend fun fetchTranscriptRemote(callId: String): List<TranscriptMessage> {
+        return try {
+            withContext(Dispatchers.IO) { api.getTranscript(callId) }.messages
+        } catch (_: Exception) {
+            emptyList()
         }
     }
 

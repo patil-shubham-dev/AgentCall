@@ -35,6 +35,7 @@ sealed class VoiceBridgeEvent {
     data class CallEnded(val callId: String) : VoiceBridgeEvent()
     data class CallCancelled(val callId: String) : VoiceBridgeEvent()
     data class CallExpired(val callId: String, val reason: String) : VoiceBridgeEvent()
+    data class CallAborted(val callId: String, val reason: String) : VoiceBridgeEvent()
     data class Connected(val userId: String) : VoiceBridgeEvent()
     data class Error(val code: String, val message: String) : VoiceBridgeEvent()
     data class AiWaitStatus(
@@ -52,7 +53,7 @@ class SignalingClient @Inject constructor(
     private val app: Application,
 ) {
     private val client = OkHttpClient.Builder()
-        .pingInterval(20, TimeUnit.SECONDS)
+        .pingInterval(60, TimeUnit.SECONDS)
         .build()
     private var webSocket: WebSocket? = null
     private var connectionJob: Job? = null
@@ -71,9 +72,27 @@ class SignalingClient @Inject constructor(
     @Volatile
     private var connectGeneration = 0
 
+    /** When the socket was last opened; used to detect short-lived connections. */
+    @Volatile
+    private var openedAtMs = 0L
+
+    /**
+     * Consecutive sockets that died within [SHORT_LIVED_MS] of opening.
+     * A deployment whose proxy kills idle sockets produces a connect→die→
+     * reconnect storm (reconnectAttempt resets to 0 on every onOpen, so the
+     * attempt cap never trips). The streak survives the reset and escalates
+     * the backoff until the WS is parked entirely — the fallback poll covers
+     * rings at a slow, battery-friendly cadence meanwhile.
+     */
+    @Volatile
+    private var shortLivedStreak = 0
+
     companion object {
         private const val MAX_RECONNECT_ATTEMPTS = 20
         private const val MIN_RECONNECT_DELAY_MS = 2000L
+        private const val MAX_BACKOFF_MS = 300_000L
+        private const val SHORT_LIVED_MS = 60_000L
+        private const val MAX_SHORT_LIVED_STREAK = 4
     }
 
     private val _events = MutableSharedFlow<VoiceBridgeEvent>(replay = 1, extraBufferCapacity = 64)
@@ -93,7 +112,6 @@ class SignalingClient @Inject constructor(
         currentUserId = userId
         reconnectAttempt = 0
         userDisconnected = false
-        _connectionState.value = ConnectionState.CONNECTING
         connectionJob?.cancel()
         registerNetworkCallback()
         SignalingForegroundService.start(app)
@@ -139,7 +157,6 @@ class SignalingClient @Inject constructor(
             reconnectAttempt = 0
             connectGeneration++
             connectionJob = scope.launch {
-                _connectionState.value = ConnectionState.CONNECTING
                 connectInternal("CALLER=onNetworkAvailable")
             }
         }
@@ -149,6 +166,16 @@ class SignalingClient @Inject constructor(
         val gen = connectGeneration
         Log.d(TAG, "[TRACE] connectInternal() called from=$caller state=${_connectionState.value} attempt=$reconnectAttempt")
         if (userDisconnected) return
+        if (_connectionState.value == ConnectionState.CONNECTED || _connectionState.value == ConnectionState.CONNECTING) {
+            // A close-triggered reconnect that runs while a newer socket is
+            // already live would close that socket and cascade into an endless
+            // connect/reconnect loop (observed: 2.4s reconnect storm). Deliberate
+            // reconnects (Settings, network loss) go through disconnect() first,
+            // so skipping here only drops redundant attempts.
+            Log.d(TAG, "[WS] connectInternal skipped — already ${_connectionState.value}")
+            return
+        }
+        _connectionState.value = ConnectionState.CONNECTING
         if (reconnectAttempt >= MAX_RECONNECT_ATTEMPTS) {
             Log.e(TAG, "[WS] max reconnect attempts reached ($MAX_RECONNECT_ATTEMPTS)")
             _connectionState.value = ConnectionState.DISCONNECTED
@@ -179,6 +206,7 @@ class SignalingClient @Inject constructor(
                     return
                 }
                 Log.d(TAG, "[WS] opened userId=$currentUserId")
+                openedAtMs = System.currentTimeMillis()
                 reconnectAttempt = 0
                 wasEverConnected = true
                 _connectionState.value = ConnectionState.CONNECTED
@@ -198,11 +226,7 @@ class SignalingClient @Inject constructor(
                         ApiClient.phoneToken = null
                     }
                     reconnectAttempt++
-                    _connectionState.value = ConnectionState.RECONNECTING
-                    val delayMs = calculateBackoff(reconnectAttempt)
-                    Log.d(TAG, "[WS] reconnect attempt $reconnectAttempt in ${delayMs}ms (caller=onFailure)")
-                    delay(delayMs)
-                    connectInternal("CALLER=onFailure")
+                    if (scheduleReconnect("CALLER=onFailure")) return@launch
                 }
             }
 
@@ -213,12 +237,8 @@ class SignalingClient @Inject constructor(
                     if (code == 4001) {
                         ApiClient.phoneToken = null
                     }
-                    _connectionState.value = ConnectionState.RECONNECTING
                     reconnectAttempt++
-                    val delayMs = calculateBackoff(reconnectAttempt)
-                    Log.d(TAG, "[WS] reconnect in ${delayMs}ms (caller=onClosed)")
-                    delay(delayMs)
-                    connectInternal("CALLER=onClosed")
+                    if (scheduleReconnect("CALLER=onClosed")) return@launch
                 }
             }
         }
@@ -227,13 +247,45 @@ class SignalingClient @Inject constructor(
         webSocket = client.newWebSocket(request, listener)
     }
 
+    /**
+     * Computes the reconnect delay and schedules it. Detects sockets that die
+     * shortly after opening (a deployment that cannot hold a websocket) and
+     * escalates the backoff via [shortLivedStreak]; once the streak passes
+     * [MAX_SHORT_LIVED_STREAK] the WS is parked until the next explicit
+     * connect()/network event — the foreground service's slow fallback poll
+     * takes over ring delivery, so parking costs nothing but battery life.
+     * Returns true when a reconnect was scheduled (or the WS is parked).
+     */
+    private suspend fun scheduleReconnect(caller: String): Boolean {
+        val livedMs = if (openedAtMs > 0) System.currentTimeMillis() - openedAtMs else Long.MAX_VALUE
+        openedAtMs = 0
+        if (livedMs < SHORT_LIVED_MS) {
+            shortLivedStreak++
+        } else {
+            shortLivedStreak = 0
+        }
+        if (shortLivedStreak >= MAX_SHORT_LIVED_STREAK) {
+            Log.w(
+                TAG,
+                "[WS] $shortLivedStreak sockets died quickly — parking websocket; fallback poll takes over rings (caller=$caller)",
+            )
+            _connectionState.value = ConnectionState.DISCONNECTED
+            return true
+        }
+        _connectionState.value = ConnectionState.RECONNECTING
+        val delayMs = calculateBackoff(reconnectAttempt + shortLivedStreak)
+        Log.d(TAG, "[WS] reconnect attempt $reconnectAttempt (streak=$shortLivedStreak) in ${delayMs}ms (caller=$caller)")
+        delay(delayMs)
+        connectInternal("CALLER=$caller")
+        return true
+    }
+
     private fun calculateBackoff(attempt: Int): Long {
         val baseMs = MIN_RECONNECT_DELAY_MS
-        val maxMs = 30000L
-        val shift = (attempt - 1).coerceIn(0, 5)
+        val shift = (attempt - 1).coerceIn(0, 8)
         val exponential = baseMs * (1L shl shift)
         val jitter = (0..500).random()
-        return (exponential + jitter).coerceAtMost(maxMs)
+        return (exponential + jitter).coerceAtMost(MAX_BACKOFF_MS)
     }
 
     private suspend fun handleMessage(text: String) {
@@ -268,8 +320,14 @@ class SignalingClient @Inject constructor(
                 }
                 "ai_message" -> {
                     val callId = payload?.getString("callId") ?: return
-                    val messageObj = payload.optJSONObject("message")
-                    val content = messageObj?.getString("content") ?: return
+                    val messageObj = payload.optJSONObject("message") ?: return
+                    val content = messageObj.optString("content").takeIf { it.isNotBlank() }
+                    if (content == null) {
+                        // Status-shaped messages (e.g. missed-call notices) carry
+                        // no text — drop them instead of killing the whole push.
+                        Log.w(TAG, "[WS] dropping ai_message without text callId=$callId msgId=${messageObj.optString("id", "?")}")
+                        return
+                    }
                     val messageId = messageObj.getString("id")
                     Log.d(TAG, "[WS] ai_message callId=$callId text=${content.take(100)}")
                     _events.emit(VoiceBridgeEvent.AiMessage(callId, messageId, content))
@@ -300,6 +358,15 @@ class SignalingClient @Inject constructor(
                     val reason = payload.optString("reason", "ring_ttl_expired")
                     Log.d(TAG, "[WS] call_expired callId=$callId reason=$reason")
                     _events.emit(VoiceBridgeEvent.CallExpired(callId, reason))
+                }
+                "call_aborted" -> {
+                    // The owning agent's last MCP session closed mid-call
+                    // (crash/disconnect), not a user cancel: distinct terminal
+                    // event so the UI can say "AI disconnected".
+                    val callId = payload?.getString("callId") ?: return
+                    val reason = payload.optString("reason", "agent_disconnected")
+                    Log.d(TAG, "[WS] call_aborted callId=$callId reason=$reason")
+                    _events.emit(VoiceBridgeEvent.CallAborted(callId, reason))
                 }
                 "ai_wait_status" -> {
                     val callId = payload?.getString("callId") ?: return

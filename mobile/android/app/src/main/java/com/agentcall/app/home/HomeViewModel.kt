@@ -99,8 +99,16 @@ class HomeViewModel @Inject constructor(
         }
 
         // A new agent profile (or a first sync) refreshes its status chip.
+        // Profiles come from Room, not the socket — the grid must render even
+        // while the WS is CONNECTING/RECONNECTING (prod proxy drops sockets),
+        // so the loading skeleton clears as soon as local data is available.
         viewModelScope.launch {
-            profiles.collect { refreshAgentStatuses() }
+            profiles.collect { list ->
+                refreshAgentStatuses()
+                if (_uiState.value.isLoading) {
+                    _uiState.value = _uiState.value.copy(isLoading = false)
+                }
+            }
         }
 
         viewModelScope.launch {

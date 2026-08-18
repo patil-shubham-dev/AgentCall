@@ -11,6 +11,8 @@ sealed class CallEvent {
     data class UserTextFailed(val messageId: String, val text: String) : CallEvent()
     data object CallAnswered : CallEvent()
     data object CallEnded : CallEvent()
+    /** The agent's process disconnected mid-call — show "AI disconnected", not a generic end. */
+    data class CallAborted(val reason: String) : CallEvent()
     data object AiSpeakingStarted : CallEvent()
     data object AiSpeakingFinished : CallEvent()
     data class AiWaitStatusChanged(

@@ -132,6 +132,11 @@ interface ApiService {
     @POST("phone/register")
     suspend fun registerPhone(): PhoneRegisterResponse
 
+    // Phase A (FCM push-to-wake): register the device's Firebase token so the
+    // backend can push rings via FCM alongside the WS/poll path.
+    @POST("phone/fcm-token")
+    suspend fun registerFcmToken(@Body body: FcmTokenRequest): FcmTokenResponse
+
     @POST("calls/{callId}/user-text")
     suspend fun sendUserText(
         @Path("callId") callId: String,

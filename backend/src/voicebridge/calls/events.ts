@@ -6,6 +6,7 @@ export const CALL_CANCELLED = 'call.cancelled';
 export const CALL_RESUMED = 'call.resumed';
 export const CALL_DELETED = 'call.deleted';
 export const CALL_EXPIRED = 'call.expired';
+export const CALL_ABORTED = 'call.aborted';
 export const CALL_DELAYED = 'call.delayed';
 export const CALL_EVENT_VERSION = 1;
 
@@ -55,6 +56,12 @@ export interface CallExpiredPayload {
   callId: string;
   reason: string;
   pausedDurationMinutes: number;
+}
+
+export interface CallAbortedPayload {
+  userId: string;
+  callId: string;
+  reason: string;
 }
 
 export type CallDelayReason = 'agent_offline' | 'agent_busy';

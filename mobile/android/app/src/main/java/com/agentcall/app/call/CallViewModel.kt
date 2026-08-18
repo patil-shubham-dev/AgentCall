@@ -8,8 +8,11 @@ import com.agentcall.app.call.state.CallMachineEvent
 import com.agentcall.app.call.state.CallStateMachine
 import com.agentcall.app.data.api.ApiClient
 import com.agentcall.app.data.api.ApiService
+import com.agentcall.app.data.api.CreateCallRequest
 import com.agentcall.app.data.repository.CallRepository
+import android.util.Log
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -33,6 +36,9 @@ data class CallContextInfo(
     val reason: String = "",
     val options: List<String> = emptyList(),
 )
+
+private const val TAG = "CallViewModel"
+private const val DEFAULT_OUTGOING_SUMMARY = "User called you for a conversation."
 
 /**
  * Explicit call-phase machine (doc REAL_CALL_IMPROVEMENTS §6.2):
@@ -75,6 +81,7 @@ class CallViewModel @Inject constructor(
     private val repository: CallRepository,
     private val signalingClient: SignalingClient,
     private val audioManager: CallAudioManager,
+    @ApplicationContext private val appContext: Context,
 ) : ViewModel() {
 
     private var messageCounter = 0
@@ -106,21 +113,75 @@ class CallViewModel @Inject constructor(
             phase = machine.state.phase,
             statusText = if (isOutgoing) "Calling..." else "Connecting...",
         )
+        if (!isOutgoing) {
+            // The backend already confirmed the answer over REST before this
+            // screen opened; on deployments whose push socket never delivers,
+            // call_answered will never arrive — confirm ACTIVE locally so the
+            // timer, transcript fallback and controls engage. The backend can
+            // flip pending→active a beat after the answer POST lands, so retry
+            // briefly instead of reading status once and giving up (a single
+            // read can race the answer and leave the call stuck in CONNECTING,
+            // which also disables the transcript poll).
+            viewModelScope.launch {
+                var attempt = 0
+                while (attempt < 5 && machine.state.phase != CallPhase.ACTIVE) {
+                    attempt++
+                    val st = repository.getCallStatus(callId)
+                    android.util.Log.w("AgentCall", "ACTIVE-CONFIRM attempt=$attempt status=$st phase=${machine.state.phase}")
+                    if (st == "active") {
+                        applyMachineEvent(CallMachineEvent.CALL_ANSWERED)
+                        android.util.Log.w("AgentCall", "ACTIVE-CONFIRM after=${machine.state.phase}")
+                        _uiState.value = _uiState.value.copy(statusText = "Connected")
+                        break
+                    }
+                    delay(2_000)
+                }
+            }
+        }
 
         viewModelScope.launch {
+            var effectiveCallId = callId
             try {
                 val api: ApiService = ApiClient.create()
-                val call = api.getCall(callId)
+                if (isOutgoing) {
+                    val created = api.createCall(
+                        CreateCallRequest(
+                            agentId = agentName.agentSlug(),
+                            summary = contextSummary?.takeIf { it.isNotBlank() } ?: DEFAULT_OUTGOING_SUMMARY,
+                            reason = "input_required",
+                            origin = "user",
+                        )
+                    )
+                    effectiveCallId = created.callId
+                    _uiState.value = _uiState.value.copy(callId = effectiveCallId)
+                    // Start the voice session at dial time: CallEvent.CallAnswered
+                    // is only bridged to the UI by CallService's collector, and
+                    // for outgoing calls nothing else starts it before ACTIVE —
+                    // the old ACTIVE-triggered start could never fire (circular).
+                    appContext.startService(Intent(appContext, CallService::class.java).apply {
+                        action = CallService.ACTION_START_CALL
+                        putExtra(CallService.EXTRA_CALL_ID, effectiveCallId)
+                        putExtra(CallService.EXTRA_CALLER_NAME, agentName)
+                        putExtra(
+                            CallService.EXTRA_CONTEXT_SUMMARY,
+                            contextSummary?.takeIf { it.isNotBlank() } ?: DEFAULT_OUTGOING_SUMMARY,
+                        )
+                    })
+                }
+                val call = api.getCall(effectiveCallId)
                 val summary = contextSummary?.takeIf { it.isNotBlank() }
                     ?: call.context?.summary?.takeIf { it.isNotBlank() }
                     ?: call.result?.userResponse
                     ?: call.result?.transcriptSummary
                     ?: "AI needs your input."
-                val terminal = call.status == "ended" || call.status == "cancelled" || call.status == "expired"
+                val terminal = call.status == "ended" || call.status == "cancelled" || call.status == "expired" || call.status == "aborted"
                 if (terminal) machine.onEvent(CallMachineEvent.CALL_ENDED)
                 // Backlog item 9: per-agent quick replies override the
                 // server-supplied call options when the profile owns chips.
-                val profile = runCatching { repository.getProfileByName(agentName) }.getOrNull()
+                // Keyed by the call's agent id (authoritative, e.g. "LiveOwnerA"),
+                // not the display name ("AI Agent") the ring/UI may carry.
+                val profileLookupName = call.agentId?.takeIf { it.isNotBlank() } ?: agentName
+                val profile = runCatching { repository.getProfileByName(profileLookupName) }.getOrNull()
                 val profileChips = CallRepository.parseQuickReplies(profile?.quickReplies)
                 _uiState.value = _uiState.value.copy(
                     isConnected = !terminal,
@@ -141,12 +202,24 @@ class CallViewModel @Inject constructor(
                 if (isOutgoing && !terminal) {
                     audioManager.requestFocus()
                 }
-            } catch (_: Exception) {
-                _uiState.value = _uiState.value.copy(
-                    isConnected = true,
-                    statusText = if (isOutgoing) "Calling..." else "Connected",
-                    callContext = CallContextInfo(summary = contextSummary ?: "AI needs your input."),
-                )
+            } catch (e: Exception) {
+                Log.w(TAG, "[connect] setup failed callId=$effectiveCallId outgoing=$isOutgoing", e)
+                if (isOutgoing) {
+                    machine.onEvent(CallMachineEvent.CALL_ENDED)
+                    _uiState.value = _uiState.value.copy(
+                        callId = effectiveCallId,
+                        isConnected = false,
+                        phase = machine.state.phase,
+                        statusText = "Call failed",
+                        callContext = CallContextInfo(summary = contextSummary ?: DEFAULT_OUTGOING_SUMMARY),
+                    )
+                } else {
+                    _uiState.value = _uiState.value.copy(
+                        isConnected = true,
+                        statusText = "Connected",
+                        callContext = CallContextInfo(summary = contextSummary ?: "AI needs your input."),
+                    )
+                }
             }
         }
 
@@ -173,6 +246,16 @@ class CallViewModel @Inject constructor(
                         _uiState.value = _uiState.value.copy(
                             isConnected = false,
                             statusText = "Call ended",
+                        )
+                    }
+                    is CallEvent.CallAborted -> {
+                        // The agent's process disconnected mid-call — distinct
+                        // copy from a normal end/cancel so the user knows the
+                        // AI didn't hang up on them.
+                        applyMachineEvent(CallMachineEvent.CALL_ENDED)
+                        _uiState.value = _uiState.value.copy(
+                            isConnected = false,
+                            statusText = "AI disconnected — the call ended",
                         )
                     }
                     is CallEvent.AiSpeakingStarted -> setAiSpeaking(true)
@@ -235,7 +318,7 @@ class CallViewModel @Inject constructor(
         viewModelScope.launch {
             val terminal = try {
                 val status = ApiClient.create<ApiService>().getCall(callId).status
-                status == "ended" || status == "cancelled" || status == "expired"
+                status == "ended" || status == "cancelled" || status == "expired" || status == "aborted"
             } catch (_: Exception) {
                 false
             }
@@ -390,6 +473,71 @@ class CallViewModel @Inject constructor(
             waveformLevels = levels,
             peakWaveformLevel = levels.maxOrNull() ?: 0.08f,
         )
+        maybePollTranscript()
+    }
+
+    private var lastTranscriptPollMs = 0L
+    private var lastTerminalCheckMs = 0L
+    private val seenTranscriptKeys = mutableSetOf<String>()
+
+    // WS-down fallback: while the signaling socket is not connected, AI
+    // messages pushed over it never arrive. Poll the transcript REST endpoint
+    // and render the missing AI bubbles (deduped by role+content+createdAt).
+    // When the WS is up this is a no-op — the push path stays the single
+    // message source.
+    private fun maybePollTranscript() {
+        val now = System.currentTimeMillis()
+        if (now - lastTranscriptPollMs < 4_000L) return
+        lastTranscriptPollMs = now
+        if (signalingClient.connectionState.value == SignalingClient.ConnectionState.CONNECTED) return
+        val current = _uiState.value
+        if (current.callId.isBlank()) return
+        if (current.phase != CallPhase.ACTIVE && current.phase != CallPhase.RECONNECTING) return
+        viewModelScope.launch {
+            // WS-down fallback terminal check (throttled to 20s): with the
+            // socket parked the backend can complete a call with no push ever
+            // arriving, leaving the UI on "AI speaking" with the screen and
+            // foreground service running indefinitely. Poll the status the
+            // same way the transcript is polled and end the session locally.
+            if (now - lastTerminalCheckMs >= 20_000L) {
+                lastTerminalCheckMs = now
+                val terminal = runCatching {
+                    val status = repository.getCallStatus(current.callId)
+                    status == "ended" || status == "cancelled" || status == "expired" || status == "aborted"
+                }.getOrDefault(false)
+                if (terminal) {
+                    applyMachineEvent(CallMachineEvent.CALL_ENDED)
+                    _uiState.value = _uiState.value.copy(
+                        isConnected = false,
+                        statusText = "Call ended",
+                        isAiSpeaking = false,
+                    )
+                    appContext.startService(Intent(appContext, CallService::class.java).apply {
+                        action = CallService.ACTION_END_CALL
+                        putExtra(CallService.EXTRA_CALL_ID, current.callId)
+                    })
+                    return@launch
+                }
+            }
+            val msgs = repository.fetchTranscriptRemote(current.callId)
+            msgs.forEach { m ->
+                if (m.role != "ai" || m.content.isBlank()) return@forEach
+                val key = "ai|${m.content}|${m.createdAt}"
+                if (seenTranscriptKeys.add(key)) {
+                    addAiMessage(m.content)
+                    // The WS-down fallback path never pushes ai_message, so the
+                    // voice session would stay silent and "Repeat last" would
+                    // have nothing recorded. Forward the polled message to
+                    // CallService so it is spoken and remembered (idempotent:
+                    // CallService only speaks, dedupe lives in this set).
+                    appContext.startService(Intent(appContext, CallService::class.java).apply {
+                        action = CallService.ACTION_SPEAK
+                        putExtra(CallService.EXTRA_CALL_ID, current.callId)
+                        putExtra(CallService.EXTRA_TEXT, m.content)
+                    })
+                }
+            }
+        }
     }
 
     fun disconnect() {

@@ -203,10 +203,10 @@ class IncomingCallActivity : ComponentActivity() {
                 if (showCall) {
                     ActiveCallScreen(callId = currentCallId, context = this@IncomingCallActivity,
                         contextSummary = currentContextSummary.takeIf { it.isNotBlank() },
-                        onEndCall = {
+                        onEndCall = { cid ->
                             startService(Intent(this@IncomingCallActivity, CallService::class.java).apply {
                                 action = CallService.ACTION_END_CALL
-                                putExtra(CallService.EXTRA_CALL_ID, currentCallId)
+                                putExtra(CallService.EXTRA_CALL_ID, cid)
                             })
                             finish()
                         })

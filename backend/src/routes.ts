@@ -5,6 +5,7 @@ import type { MetricsCollector } from './common/metrics-collector.js';
 import type { DatabaseHealthMonitor } from './common/db-health-monitor.js';
 import type { CleanupScheduler } from './common/cleanup-scheduler.js';
 import { createPhoneToken, validatePhoneToken } from './voicebridge/phone-tokens.js';
+import { registerFcmToken } from './voicebridge/fcm-tokens.js';
 import { getConnectedPhoneCount } from './voicebridge/service.js';
 import type { VoiceBridgeService } from './voicebridge/service.js';
 import type { CreateCallInput } from './voicebridge/types.js';
@@ -568,6 +569,37 @@ export function registerRoutes(app: FastifyInstance, opts: RouteOptions): void {
     const userId = user_id ?? 'solo-user';
     const token = await createPhoneToken(userId);
     return { status: 'ok', token, user_id: userId };
+  });
+
+  // Phase A (FCM push-to-wake): the app registers its FCM device token here,
+  // authenticated by its phone token (the auth hook resolves the Bearer token
+  // to userId). Stored even when FCM_ENABLED=false (harmless, send path is a
+  // silent no-op then) so flipping the flag needs zero app changes.
+  app.post('/api/v1/phone/fcm-token', {
+    config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
+  }, async (request, reply) => {
+    const auth = (request as FastifyRequest & { auth: AuthContext }).auth;
+    if (!auth?.authenticated) {
+      return reply.status(401).send({ error: 'UNAUTHORIZED', message: 'Phone token required' });
+    }
+    // Key the FCM token by the PHONE's real userId, not the auth-role
+    // identity. Dev mode overrides every request to userId='service', which
+    // would register the device under a user that notifyPhone never looks up
+    // (the phone WS registers as its own user_id, e.g. solo-user) — a silent
+    // gap where every ring skips FCM. Resolve the userId bound to the
+    // presented phone token; fall back to the auth identity only when the
+    // caller is not a phone (service token, etc.).
+    const bearer = (request.headers.authorization ?? '').replace(/^Bearer\s+/i, '');
+    const phoneUserId = bearer ? await validatePhoneToken(bearer).catch(() => null) : null;
+    const userId = phoneUserId ?? auth.userId;
+    const { fcm_token } = request.body as { fcm_token?: string };
+    const token = String(fcm_token ?? '').trim();
+    if (!token || token.length > 512) {
+      return reply.status(400).send({ error: 'VALIDATION_ERROR', message: 'fcm_token is required (max 512 chars)' });
+    }
+    await registerFcmToken(userId, token);
+    app.log.info({ userId, tokenPreview: token.slice(0, 12) }, '[fcm-tokens] token registered');
+    return { status: 'ok', user_id: userId };
   });
 
   // ── AI keys (multi-client identity) ──────────────────────────

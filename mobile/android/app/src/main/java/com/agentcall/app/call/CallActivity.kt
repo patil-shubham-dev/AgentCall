@@ -82,15 +82,17 @@ class CallActivity : ComponentActivity() {
                     contextSummary = intent.getStringExtra(CallService.EXTRA_CONTEXT_SUMMARY),
                     agentName = callerName,
                     isOutgoing = isOutgoing,
-                    onEndCall = {
+                    onEndCall = { cid ->
                         startService(Intent(this@CallActivity, CallService::class.java).apply {
                             action = CallService.ACTION_END_CALL
+                            putExtra(CallService.EXTRA_CALL_ID, cid)
                         })
                         finish()
                     },
-                    onCancelCall = {
+                    onCancelCall = { cid ->
                         startService(Intent(this@CallActivity, CallService::class.java).apply {
                             action = CallService.ACTION_CANCEL_CALL
+                            putExtra(CallService.EXTRA_CALL_ID, cid)
                         })
                         finish()
                     })
@@ -103,8 +105,8 @@ class CallActivity : ComponentActivity() {
 fun ActiveCallScreen(
     callId: String,
     context: Context,
-    onEndCall: () -> Unit,
-    onCancelCall: () -> Unit = onEndCall,
+    onEndCall: (String) -> Unit,
+    onCancelCall: (String) -> Unit = onEndCall,
     contextSummary: String? = null,
     agentName: String = "AI Agent",
     isOutgoing: Boolean = false,
@@ -172,13 +174,9 @@ fun ActiveCallScreen(
             startRingback()
         } else if (state.phase == CallPhase.ACTIVE && isOutgoing) {
             stopRingback(ringbackPlayer)
-            // The agent picked up: start the real session (ANSWER + greeting).
-            context.startService(Intent(context, CallService::class.java).apply {
-                action = CallService.ACTION_START_CALL
-                putExtra(CallService.EXTRA_CALL_ID, state.callId)
-                putExtra(CallService.EXTRA_CALLER_NAME, state.agentName)
-                putExtra(CallService.EXTRA_CONTEXT_SUMMARY, state.callContext.summary)
-            })
+            // The voice session (ANSWER + greeting) is started by
+            // CallViewModel at dial time with the real backend call id;
+            // starting it again here would double the TTS/collector.
         }
     }
 
@@ -508,11 +506,15 @@ fun ActiveCallScreen(
                         )
                         Button(
                             onClick = {
+                                // state.callId carries the real backend id for
+                                // outgoing calls (set after createCall); the
+                                // intent extra is only the provisional uuid.
+                                val cid = state.callId.ifBlank { callId }
                                 if (isOutgoing && state.phase != CallPhase.ACTIVE) {
                                     // Outgoing calls can be cancelled while ringing.
-                                    onCancelCall()
+                                    onCancelCall(cid)
                                 } else {
-                                    onEndCall()
+                                    onEndCall(cid)
                                 }
                             },
                             modifier = Modifier.size(56.dp).scale(pressScale), shape = CircleShape,
