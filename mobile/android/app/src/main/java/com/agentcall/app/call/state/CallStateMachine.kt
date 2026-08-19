@@ -4,12 +4,9 @@ import com.agentcall.app.call.CallPhase
 
 /**
  * Pure call-phase state machine (backlog item 12) — no Android dependencies,
- * so the highest-risk transitions (ringback never stopping, stuck
- * RECONNECTING) are unit-testable.
+ * so the highest-risk transitions (stuck RECONNECTING) are unit-testable.
  *
- * The machine owns the phase and two derived flags:
- * - [CallMachineState.ringbackShouldStop]: true on the OUTGOING -> ACTIVE
- *   edge, the signal the UI needs to kill the looping ringback.
+ * The machine owns the phase and one derived flag:
  * - [CallMachineState.timerRunning]: the in-call timer only ticks while a
  *   live conversation is active; reconnect pauses it, terminal states stop it.
  *
@@ -17,7 +14,6 @@ import com.agentcall.app.call.CallPhase
  * finished call can never resurrect into ACTIVE.
  */
 enum class CallMachineEvent {
-    START_OUTGOING,
     START_INCOMING,
     CALL_ANSWERED,
     FIRST_AI_MESSAGE,
@@ -32,7 +28,6 @@ enum class CallMachineEvent {
 data class CallMachineState(
     val phase: CallPhase = CallPhase.CONNECTING,
     val timerRunning: Boolean = false,
-    val ringbackShouldStop: Boolean = false,
 )
 
 class CallStateMachine(initial: CallMachineState = CallMachineState()) {
@@ -45,23 +40,16 @@ class CallStateMachine(initial: CallMachineState = CallMachineState()) {
         val s = state
         if (s.phase == CallPhase.ENDED) return s
         state = when (event) {
-            CallMachineEvent.START_OUTGOING -> s.copy(
-                phase = CallPhase.OUTGOING,
-                timerRunning = false,
-                ringbackShouldStop = false,
-            )
             CallMachineEvent.START_INCOMING -> s.copy(
                 phase = CallPhase.CONNECTING,
                 timerRunning = false,
-                ringbackShouldStop = false,
             )
             CallMachineEvent.CALL_ANSWERED, CallMachineEvent.FIRST_AI_MESSAGE -> when (s.phase) {
                 // The first backend confirmation (call_answered or an ai_message)
-                // promotes an outgoing call — the ringback stops right here.
-                CallPhase.OUTGOING, CallPhase.CONNECTING, CallPhase.RECONNECTING -> s.copy(
+                // promotes the call to active.
+                CallPhase.CONNECTING, CallPhase.RECONNECTING -> s.copy(
                     phase = CallPhase.ACTIVE,
                     timerRunning = true,
-                    ringbackShouldStop = s.phase == CallPhase.OUTGOING,
                 )
                 else -> s
             }
@@ -82,7 +70,6 @@ class CallStateMachine(initial: CallMachineState = CallMachineState()) {
             -> s.copy(
                 phase = CallPhase.ENDED,
                 timerRunning = false,
-                ringbackShouldStop = true,
             )
         }
         return state

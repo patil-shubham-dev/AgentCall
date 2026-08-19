@@ -175,6 +175,9 @@ export class VoiceBridgeService {
       options: session.context.options,
       priority: session.priority,
       ...(isCallback ? { isCallback: true } : {}),
+      // The MCP client that requested the call (ChatGPT, Claude, OpenCode...);
+      // the phone shows it as a caller badge. Absent for older/polled calls.
+      ...(session.clientInfo ? { clientInfo: session.clientInfo } : {}),
       // Ring validity window: the phone drops the event if expiresAt has
       // passed by the time it processes it (defense in depth against stale
       // queued pushes and reconnect bursts).
@@ -382,6 +385,7 @@ export class VoiceBridgeService {
         summary: input.summary,
         options: input.options,
       },
+      clientInfo: input.clientInfo,
       messages: [
         {
           id: newId(),
@@ -405,13 +409,9 @@ export class VoiceBridgeService {
     logger.info({ callId: session.id, userId: session.userId, elapsed: Date.now() - start }, '[createCall] before ring gate');
     // Phase-2 gate: push the ring now if the agent is online/ready, otherwise
     // defer (bounded retries, then the pending-TTL sweep cancels the call).
-    // User-initiated (outbound) calls skip the gate: the calling phone must
-    // not ring itself; it waits for the AI to answer instead.
-    if (input.origin !== 'user') {
-      await this.attemptRing(session.id, MAX_RING_RETRIES);
-    } else {
-      logger.info({ callId: session.id }, '[createCall] user-origin call; ring gate skipped');
-    }
+    // Every call is agent-originated — the phone's outbound path was removed —
+    // so the gate always applies.
+    await this.attemptRing(session.id, MAX_RING_RETRIES);
     logger.info({ callId: session.id, elapsed: Date.now() - start }, '[createCall] after ring gate');
 
     logger.info({ callId: session.id, elapsed: Date.now() - start }, 'Call session created');

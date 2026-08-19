@@ -99,7 +99,7 @@ const CALL_EVENTS: Record<string, z.ZodType> = {
     policy: z.object({
       ring_timeout_ms: z.number().optional(),
       silence_after_ms: z.number().optional(),
-      no_answer_action: z.enum(['keep_ringing', 'fail', 'voicemail']).optional(),
+      no_answer_action: z.enum(['keep_ringing', 'fail']).optional(),
     }).optional(),
     priority: z.enum(['low', 'normal', 'high', 'urgent']).optional(),
   }),

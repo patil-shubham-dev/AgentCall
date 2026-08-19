@@ -23,8 +23,6 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -38,14 +36,11 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.*
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.agentcall.app.data.api.ApiClient
@@ -53,7 +48,9 @@ import com.agentcall.app.data.api.ApiService
 import com.agentcall.app.settings.CallerTuneManager
 import com.agentcall.app.settings.MessageTemplates
 import com.agentcall.app.settings.QuietHoursManager
+import com.agentcall.app.ui.composables.ActionCircle
 import com.agentcall.app.ui.composables.AmbientBackground
+import com.agentcall.app.ui.ClientBadge
 import com.agentcall.app.ui.theme.*
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.Dispatchers
@@ -77,8 +74,9 @@ class IncomingCallActivity : ComponentActivity() {
     private var showMicPermissionDenied by mutableStateOf(false)
     private var pendingCallIntent: Intent? = null
     private var currentCallId by mutableStateOf("")
-    private var currentCallerName by mutableStateOf("AI Agent")
-    private var currentContextSummary by mutableStateOf("")
+private var currentCallerName by mutableStateOf("AI Agent")
+private var currentContextSummary by mutableStateOf("")
+private var currentClientInfoName by mutableStateOf<String?>(null)
     private var currentTimeoutSeconds by mutableStateOf(60)
     private var ownsRing = false
     private var ringResolved = false
@@ -121,10 +119,9 @@ class IncomingCallActivity : ComponentActivity() {
             return
         }
         try {
-            // Backlog item 7: per-agent tune (keyed by the slugged agent id,
-            // matching the profile rows), falling back to the global tune and
-            // then the system default.
-            val uri: Uri = callerTuneManager.getUriForAgent(currentCallerName.agentSlug())
+            // One global tune for every incoming call (Settings > Caller Tune),
+            // falling back to the system default.
+            val uri: Uri = callerTuneManager.uri
             val mp = MediaPlayer().apply {
                 setDataSource(this@IncomingCallActivity, uri)
                 isLooping = true
@@ -184,6 +181,7 @@ class IncomingCallActivity : ComponentActivity() {
         currentCallId = intent.getStringExtra("call_id") ?: run { isProcessing.set(false); finish(); return }
         currentCallerName = intent.getStringExtra("caller_name") ?: "AI Agent"
         currentContextSummary = intent.getStringExtra("context_summary") ?: ""
+        currentClientInfoName = intent.getStringExtra("client_info_name")
         quietRing = quietHoursManager.isQuietNow(currentCallerName)
         Log.i(TAG, "[LAUNCH] IncomingCallActivity created callId=$currentCallId via=$launchSource quiet=$quietRing")
 
@@ -214,6 +212,7 @@ class IncomingCallActivity : ComponentActivity() {
                     IncomingCallScreen(
                         callerName = currentCallerName,
                         contextSummary = currentContextSummary,
+                        clientInfoName = currentClientInfoName,
                         quiet = quietRing,
                         onAnswer = {
                             stopRinger()
@@ -244,22 +243,6 @@ class IncomingCallActivity : ComponentActivity() {
                                 action = CallService.ACTION_CANCEL_CALL
                                 putExtra(CallService.EXTRA_CALL_ID, currentCallId)
                                 putExtra(CallService.EXTRA_TEXT, quietDeclineNote())
-                            })
-                            isProcessing.set(false)
-                            finish()
-                        },
-                        onVoicemail = {
-                            // Backlog item 5: same cancel transport as decline,
-                            // but the note is the user's voicemail — the AI
-                            // reads it as a user message in its session.
-                            stopRinger()
-                            ringResolved = true
-                            SignalingForegroundService.notifyRingResolved(this@IncomingCallActivity)
-                            CallService.cancelIncomingNotification(this@IncomingCallActivity)
-                            startService(Intent(this@IncomingCallActivity, CallService::class.java).apply {
-                                action = CallService.ACTION_CANCEL_CALL
-                                putExtra(CallService.EXTRA_CALL_ID, currentCallId)
-                                putExtra(CallService.EXTRA_TEXT, MessageTemplates.voicemailMessage(this@IncomingCallActivity))
                             })
                             isProcessing.set(false)
                             finish()
@@ -302,6 +285,7 @@ class IncomingCallActivity : ComponentActivity() {
         currentCallId = callId
         currentCallerName = intent.getStringExtra("caller_name") ?: "AI Agent"
         currentContextSummary = intent.getStringExtra("context_summary") ?: ""
+        currentClientInfoName = intent.getStringExtra("client_info_name")
         // Re-evaluate DND state for the new call (a second call can arrive
         // while the activity is alive).
         quietRing = quietHoursManager.isQuietNow(currentCallerName)
@@ -376,8 +360,8 @@ fun IncomingCallScreen(
     onAnswer: () -> Unit,
     onDecline: () -> Unit,
     onLater: (Int) -> Unit,
-    onVoicemail: () -> Unit = {},
     quiet: Boolean = false,
+    clientInfoName: String? = null,
 ) {
     var showLaterPicker by remember { mutableStateOf(false) }
     var selectedMinutes by remember { mutableIntStateOf(10) }
@@ -421,7 +405,7 @@ fun IncomingCallScreen(
             density = 1.5f,
         )
 
-        Column(modifier = Modifier.fillMaxSize().padding(32.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        Column(modifier = Modifier.fillMaxSize().padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             Spacer(modifier = Modifier.weight(0.12f))
 
             Surface(shape = RoundedCornerShape(100.dp), color = Indigo400.copy(alpha = 0.12f)) {
@@ -479,30 +463,33 @@ fun IncomingCallScreen(
                     drawCircle(color = Indigo400.copy(alpha = 0.05f * (1f - ring3)), radius = ringRadius)
                 }
 
-                Canvas(modifier = Modifier.size(140.dp)) {
-                    val sweep = 30f + glowSweep * 20f
-                    val rotation = glowSweep * 360f
-                    drawArc(color = Indigo400.copy(alpha = 0.2f),
-                        startAngle = rotation, sweepAngle = sweep, useCenter = false,
-                        style = Stroke(width = 2.5f),
-                        topLeft = Offset(4f, 4f),
-                        size = androidx.compose.ui.geometry.Size(size.width - 8f, size.height - 8f))
-                }
-
-                Box(modifier = Modifier.size(110.dp).clip(CircleShape)
+                // Avatar 120dp with a thin countdown progress arc around it;
+            // the rotating sweep arc gives way to the meaningful readout.
+                Box(modifier = Modifier.size(120.dp).clip(CircleShape)
                     .background(Brush.linearGradient(listOf(Indigo500, GradientBrandEnd))),
                     contentAlignment = Alignment.Center) {
-                    Canvas(modifier = Modifier.size(110.dp)) {
+                    Canvas(modifier = Modifier.size(120.dp)) {
                         drawCircle(color = Color.White.copy(alpha = 0.08f + glowSweep * 0.08f),
                             radius = size.minDimension / 2 * 0.85f)
                     }
-                    Icon(Icons.Default.Call, "Incoming call", modifier = Modifier.size(54.dp), tint = Slate50)
+                    Icon(Icons.Default.Call, "Incoming call", modifier = Modifier.size(60.dp), tint = Slate50)
+                }
+                Canvas(modifier = Modifier.size(128.dp)) {
+                    val progress = secondsLeft / timeoutSeconds.toFloat()
+                    drawArc(color = Slate400.copy(alpha = 0.55f),
+                        startAngle = -90f, sweepAngle = 360f * progress, useCenter = false,
+                        style = Stroke(width = 2.dp.toPx()),
+                        topLeft = Offset(4f, 4f),
+                        size = androidx.compose.ui.geometry.Size(size.width - 8f, size.height - 8f))
                 }
             }
 
             Spacer(modifier = Modifier.height(20.dp))
-            Text(callerName, style = MaterialTheme.typography.headlineSmall,
-                color = MaterialTheme.colorScheme.onBackground, fontWeight = FontWeight.Bold)
+            Text(callerName, style = MaterialTheme.typography.headlineMedium,
+                color = MaterialTheme.colorScheme.onBackground)
+
+            Spacer(modifier = Modifier.height(8.dp))
+            ClientBadge(clientInfoName = clientInfoName)
 
             Spacer(modifier = Modifier.height(16.dp))
 
@@ -602,29 +589,23 @@ fun IncomingCallScreen(
                 }
             } else {
                 Row(horizontalArrangement = Arrangement.spacedBy(18.dp), verticalAlignment = Alignment.CenterVertically) {
-                    ActionButton(
+                    ActionCircle(
                         icon = Icons.AutoMirrored.Filled.PhoneForwarded,
                         label = "Decline", iconTint = Red400, labelColor = Red400,
-                        bgColor = GlassRed, size = 60.dp, onClick = onDecline,
+                        bgColor = GlassRed, size = 64.dp, onClick = onDecline,
                     )
 
-                    ActionButton(
+                    ActionCircle(
                         icon = Icons.Default.Call, label = "Answer",
                         iconTint = Slate50, labelColor = Green400,
-                        bgColor = Color.Transparent, size = 72.dp, onClick = onAnswer,
+                        bgColor = Color.Transparent, size = 76.dp, onClick = onAnswer,
                         isSolid = true, solidColor = Green500,
                     )
 
-                    ActionButton(
-                        icon = Icons.Default.RecordVoiceOver, label = "Voicemail",
-                        iconTint = Indigo300, labelColor = Indigo300,
-                        bgColor = GlassWhite, size = 60.dp, onClick = onVoicemail,
-                    )
-
-                    ActionButton(
+                    ActionCircle(
                         icon = Icons.Default.Schedule, label = "Later",
                         iconTint = Indigo300, labelColor = Indigo300,
-                        bgColor = GlassWhite, size = 60.dp,
+                        bgColor = GlassWhite, size = 64.dp,
                         onClick = { showLaterPicker = true },
                     )
                 }
@@ -637,68 +618,11 @@ fun IncomingCallScreen(
                     textAlign = TextAlign.Center)
                 Spacer(modifier = Modifier.height(4.dp))
                 Text("Auto-decline in ${secondsLeft}s",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                    style = MonoLabel,
+                    color = Slate400,
                     textAlign = TextAlign.Center)
             }
             Spacer(modifier = Modifier.weight(0.05f))
         }
-    }
-}
-
-@Composable
-private fun ActionButton(
-    icon: ImageVector, label: String, iconTint: Color, labelColor: Color,
-    bgColor: Color, size: Dp, onClick: () -> Unit,
-    isSolid: Boolean = false, solidColor: Color = Green500,
-) {
-    val interactionSource = remember { MutableInteractionSource() }
-    val isPressed by interactionSource.collectIsPressedAsState()
-    val pressScale by animateFloatAsState(
-        targetValue = if (isPressed) 0.92f else 1f,
-        animationSpec = spring(dampingRatio = 0.5f, stiffness = 800f), label = "pressScale"
-    )
-    val pressElevation by animateDpAsState(
-        targetValue = if (isPressed) 4.dp else 8.dp,
-        animationSpec = spring(dampingRatio = 0.6f, stiffness = 600f), label = "pressElevation"
-    )
-
-    val labelInteractionSource = remember { MutableInteractionSource() }
-
-    // The whole row (circle + label) is the tap target. Taps on the circle are
-    // consumed by the inner Button/Surface (it wins hit-testing on the up
-    // event), so only taps on the label fall through to this clickable — both
-    // fire the same onClick. Without this, the label text below the circle was
-    // dead space users tapped expecting an action.
-    Column(
-        modifier = Modifier.clickable(
-            interactionSource = labelInteractionSource,
-            indication = null,
-            onClick = onClick,
-        ),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        if (isSolid) {
-            Button(
-                onClick = onClick, modifier = Modifier.size(size).scale(pressScale),
-                shape = CircleShape, colors = ButtonDefaults.buttonColors(containerColor = solidColor),
-                contentPadding = PaddingValues(0.dp), interactionSource = interactionSource,
-                elevation = ButtonDefaults.buttonElevation(defaultElevation = pressElevation),
-            ) {
-                Icon(icon, label, modifier = Modifier.size(size * 0.44f), tint = iconTint)
-            }
-        } else {
-            Surface(
-                onClick = onClick, shape = CircleShape, color = bgColor,
-                tonalElevation = 0.dp, interactionSource = interactionSource,
-                shadowElevation = pressElevation,
-            ) {
-                Box(modifier = Modifier.size(size).scale(pressScale), contentAlignment = Alignment.Center) {
-                    Icon(icon, label, modifier = Modifier.size(size * 0.44f), tint = iconTint)
-                }
-            }
-        }
-        Text(label, style = MaterialTheme.typography.labelMedium, color = labelColor, fontWeight = FontWeight.Medium)
     }
 }

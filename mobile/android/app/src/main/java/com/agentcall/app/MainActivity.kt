@@ -8,6 +8,8 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -17,6 +19,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -124,10 +127,10 @@ fun MainApp(
         bottomBar = {
             if (showBottomBar) {
                 Surface(
-                    modifier = Modifier.fillMaxWidth(),
-                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.95f),
+                    modifier = Modifier.fillMaxWidth()
+                        .border(1.dp, Slate700, RectangleShape),
+                    color = Slate850.copy(alpha = 0.95f),
                     tonalElevation = 0.dp,
-                    shadowElevation = 8.dp,
                 ) {
                     Row(
                         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
@@ -135,9 +138,8 @@ fun MainApp(
                     ) {
                         navItems.forEachIndexed { index, item ->
                             val isSelected = selectedIndex == index
-                            val selectedColor = if (MaterialTheme.extendedColors.isDark) Indigo400 else Indigo600
-                            val unselectedColor = MaterialTheme.colorScheme.onSurfaceVariant
-                            val selectedBg = if (MaterialTheme.extendedColors.isDark) GlassIndigo else Color(0x146366F1)
+                            val selectedColor = if (MaterialTheme.extendedColors.isDark) Phosphor else Indigo600
+                            val unselectedColor = Slate400
 
                             Surface(
                                 onClick = {
@@ -148,8 +150,9 @@ fun MainApp(
                                         restoreState = true
                                     }
                                 },
-                                shape = RoundedCornerShape(16.dp),
-                                color = if (isSelected) selectedBg else Color.Transparent,
+                                shape = RoundedCornerShape(4.dp),
+                                color = if (isSelected) Slate750 else Color.Transparent,
+                                border = if (isSelected) BorderStroke(1.dp, Slate600) else null,
                                 tonalElevation = 0.dp,
                             ) {
                                 Row(
@@ -162,13 +165,13 @@ fun MainApp(
                                     Icon(
                                         imageVector = item.icon,
                                         contentDescription = item.label,
-                                        modifier = Modifier.size(22.dp),
+                                        modifier = Modifier.size(24.dp),
                                         tint = if (isSelected) selectedColor else unselectedColor,
                                     )
                                     if (isSelected) {
                                         Spacer(modifier = Modifier.width(6.dp))
                                         Text(
-                                            text = item.label,
+                                            text = item.label.uppercase(),
                                             style = MaterialTheme.typography.labelMedium,
                                             color = selectedColor,
                                             fontWeight = FontWeight.SemiBold,

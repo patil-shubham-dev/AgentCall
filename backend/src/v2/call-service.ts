@@ -34,7 +34,7 @@ export interface TranscriptSegment {
 export interface V2Policy {
   ring_timeout_ms?: number;
   silence_after_ms?: number;
-  no_answer_action?: 'keep_ringing' | 'fail' | 'voicemail';
+  no_answer_action?: 'keep_ringing' | 'fail';
 }
 
 /** Schema version stamped on every emitted event (event-model §5). */

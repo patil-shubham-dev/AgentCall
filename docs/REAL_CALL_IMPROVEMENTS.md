@@ -365,6 +365,12 @@ button (ACTION_CANCEL_CALL while `phase != ACTIVE`).
 
 ### 6.4 Outgoing call flow
 
+**Removed (2026-08-19):** the outbound call flow was killed end-to-end — the UI Call
+button, `OutgoingCallLauncher`, `CallPhase.OUTGOING`, the app-side `createCall`, and the
+backend `origin: 'user'` branch (REST validation + ring-gate skip in `service.ts`). Every
+call is now agent-originated through the MCP `create_call` tool; the ring gate always
+applies. Historical design below is kept for context only.
+
 - Profile "Call" button → new `CallService.ACTION_OUTGOING_CALL` start: optimistic local
   session (id `out:<uuid>`), CallActivity in `OUTGOING_CALLING`, ringback tone
   (`RingtoneManager.getDefaultUri(TYPE_RINGTONE)` loop or a bundled tone; must stop on
@@ -476,7 +482,7 @@ Update this table as work lands. One row per change; link the commit.
 
 ### Session log
 - **2026-08-12 (backlog)** — Post-Phase-3 improvement items (missed-call history, home status
-  chip, summaries, voicemail, quiet hours, per-agent ringtones/quick replies, FSM tests,
+  chip, summaries, quiet hours, per-agent ringtones/quick replies, FSM tests,
   battery audit, v2 audio items) are tracked in
   [`IMPROVEMENT_BACKLOG.md`](./IMPROVEMENT_BACKLOG.md) — read that first for future work.
 - **2026-08-11** â€” doc created; diagnosis confirmed (4 root causes); prior 19-issue batch

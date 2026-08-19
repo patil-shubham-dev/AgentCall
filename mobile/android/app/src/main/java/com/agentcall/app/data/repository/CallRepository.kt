@@ -2,6 +2,7 @@ package com.agentcall.app.data.repository
 
 import com.agentcall.app.data.api.ApiClient
 import com.agentcall.app.data.api.ApiService
+import com.agentcall.app.data.api.AiKeyRenameRequest
 import com.agentcall.app.data.database.dao.AiProfileDao
 import com.agentcall.app.data.database.dao.CallRecordDao
 import com.agentcall.app.data.database.dao.TranscriptMessageDao
@@ -15,11 +16,41 @@ import com.agentcall.app.data.model.TranscriptMessage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
-import kotlinx.serialization.builtins.ListSerializer
-import kotlinx.serialization.builtins.serializer
-import kotlinx.serialization.json.Json
+import retrofit2.HttpException
 import javax.inject.Inject
 import javax.inject.Singleton
+
+/**
+ * A cross-boundary operation (delete/rename/ring matching) that depends on the
+ * server-side AI key failed. [message] is safe to show the user verbatim.
+ */
+class AgentSyncException(message: String) : Exception(message)
+
+/**
+ * Result of attempting to delete an agent. The server-side revoke runs first
+ * and always wins: local data is only removed after it succeeded.
+ */
+sealed interface DeleteOutcome {
+    /** Key revoked on the server, local history + profile removed. */
+    data object RevokedAndDeleted : DeleteOutcome
+
+    /**
+     * The server confirms no key exists for this agent (zero name matches, or
+     * a 404 revoking a bound key id) — there is nothing left to revoke, so
+     * the caller may offer a local-only removal.
+     */
+    data object NoServerKey : DeleteOutcome
+
+    /** Revoke failed (network, auth, ambiguity) — nothing was deleted. */
+    data class Failed(val message: String) : DeleteOutcome
+}
+
+/** Result of resolving a key id by display name. */
+private sealed interface KeyIdLookup {
+    data class Exact(val keyId: String) : KeyIdLookup
+    data object None : KeyIdLookup
+    data object Ambiguous : KeyIdLookup
+}
 
 @Singleton
 class CallRepository @Inject constructor(
@@ -30,15 +61,116 @@ class CallRepository @Inject constructor(
 ) {
     fun getAllProfiles(): Flow<List<AiProfileEntity>> = profileDao.getAllProfiles()
 
-    suspend fun getOrCreateProfile(agentId: String, name: String): AiProfileEntity {
+    /**
+     * Find the server-side key id for a display name. Throws on network
+     * failure (the caller decides how to treat it); returns [KeyIdLookup.None]
+     * or [KeyIdLookup.Ambiguous] for genuine results so callers never guess.
+     */
+    private suspend fun lookupKeyIdByName(name: String): KeyIdLookup {
+        ApiClient.ensurePhoneToken()
+        val matches = withContext(Dispatchers.IO) { api.listAiKeys() }.keys.filter { it.name == name }
+        return when {
+            matches.size == 1 -> KeyIdLookup.Exact(matches[0].keyId)
+            matches.isEmpty() -> KeyIdLookup.None
+            else -> KeyIdLookup.Ambiguous
+        }
+    }
+
+    /**
+     * Backfill keyId bindings for profiles created before the binding
+     * existed. Unambiguous names only — a name matching several keys stays
+     * unbound rather than guessing (see delete/rename hard-error paths).
+     */
+    suspend fun reconcileProfileKeyIds() {
+        val unbound = profileDao.getProfiles().filter { it.keyId == null }
+        if (unbound.isEmpty()) return
+        val keys = runCatching {
+            ApiClient.ensurePhoneToken()
+            withContext(Dispatchers.IO) { api.listAiKeys() }.keys
+        }.getOrNull() ?: return
+        for (profile in unbound) {
+            val matches = keys.filter { it.name == profile.name }
+            if (matches.size == 1) profileDao.updateKeyId(profile.id, matches[0].keyId)
+        }
+    }
+
+    suspend fun getOrCreateProfile(agentId: String, name: String, keyId: String? = null): AiProfileEntity {
         val existing = profileDao.getProfile(agentId)
-        if (existing != null) return existing
-        val profile = AiProfileEntity(id = agentId, name = name)
+        if (existing != null) {
+            if (keyId != null && existing.keyId == null) {
+                profileDao.updateKeyId(agentId, keyId)
+            }
+            return existing
+        }
+        val profile = AiProfileEntity(id = agentId, name = name, keyId = keyId)
         profileDao.upsert(profile)
         return profile
     }
 
+    /**
+     * Ensure the profile exists and return the canonical profile id the ring
+     * should record history under. Handles the rename case: if the agent was
+     * renamed server-side, the slug lookup misses, but the keyId lookup finds
+     * the existing profile and updates its name instead of creating a
+     * duplicate. Falls back to slug creation when the server can't be reached
+     * or the name is ambiguous — a ring must never be blocked by this.
+     */
+    suspend fun ensureProfileExists(agentId: String, name: String): String {
+        profileDao.getProfile(agentId)?.let { return it.id }
+        val keyId = runCatching { lookupKeyIdByName(name) }.getOrNull()
+        return when (keyId) {
+            is KeyIdLookup.Exact -> {
+                val byKey = profileDao.getProfileByKeyId(keyId.keyId)
+                if (byKey != null) {
+                    if (byKey.name != name) profileDao.renameProfile(byKey.id, name)
+                    byKey.id
+                } else {
+                    getOrCreateProfile(agentId, name, keyId.keyId).id
+                }
+            }
+            else -> getOrCreateProfile(agentId, name, null).id
+        }
+    }
+
+    /**
+     * Rename the agent everywhere: server first (so the join stays consistent),
+     * then locally. Fails hard with a user-safe message if the key can't be
+     * resolved or the server rename fails — the local name is never changed
+     * behind the server's back (that was the duplicate-profile bug).
+     */
     suspend fun renameProfile(id: String, newName: String) {
+        val profile = profileDao.getProfile(id)
+            ?: throw AgentSyncException("This agent no longer exists locally")
+        val keyId = profile.keyId ?: when (val lookup = lookupKeyIdByName(profile.name)) {
+            is KeyIdLookup.Exact -> lookup.keyId
+            KeyIdLookup.None -> throw AgentSyncException(
+                "Couldn't rename \"${profile.name}\": no matching key exists on the server " +
+                    "(it may have been deleted). Nothing was renamed."
+            )
+            KeyIdLookup.Ambiguous -> throw AgentSyncException(
+                "Couldn't rename \"${profile.name}\": multiple keys share that name. " +
+                    "Rename it from Settings instead."
+            )
+        }
+        try {
+            withContext(Dispatchers.IO) {
+                api.renameAiKey(keyId, AiKeyRenameRequest(newName))
+            }
+        } catch (e: HttpException) {
+            if (e.code() == 409) {
+                throw AgentSyncException(
+                    "Another agent is already named \"$newName\". Pick a different name."
+                )
+            }
+            throw AgentSyncException(
+                "Couldn't rename \"${profile.name}\" on the server: ${e.message ?: "unknown error"}. Nothing was renamed."
+            )
+        } catch (e: Exception) {
+            throw AgentSyncException(
+                "Couldn't rename \"${profile.name}\" on the server: ${e.message ?: "unknown error"}. Nothing was renamed."
+            )
+        }
+        if (profile.keyId == null) profileDao.updateKeyId(id, keyId)
         profileDao.renameProfile(id, newName)
     }
 
@@ -47,16 +179,12 @@ class CallRepository @Inject constructor(
     fun getCallsForProfile(agentId: String): Flow<List<CallRecordEntity>> =
         callDao.getCallsForProfile(agentId)
 
-    suspend fun ensureProfileExists(agentId: String, name: String) {
-        getOrCreateProfile(agentId, name)
-    }
-
     /**
      * Backlog item 1: create the history row the moment a ring starts, so a
      * decline note, an expiry, or an answer all have a record to update.
      * Without this, unanswered rings would never appear in history at all
      * (saveCallEnded no-ops on a missing row) and the transcript FK would
-     * reject the decline/voicemail note insert.
+     * reject the decline note insert.
      */
     suspend fun markCallRinging(callId: String, agentId: String, callerName: String, startedAt: Long) {
         callDao.upsert(
@@ -205,27 +333,79 @@ class CallRepository @Inject constructor(
         }
     }
 
-    // ── Per-agent ringtone + quick replies (backlog items 7 & 9) ──────────
-
-    suspend fun setProfileRingtone(agentId: String, uri: String?, label: String?) {
-        profileDao.updateRingtone(agentId, uri, label)
-    }
-
-    suspend fun setProfileQuickReplies(agentId: String, chips: List<String>) {
-        val clean = chips.map { it.trim() }.filter { it.isNotBlank() }.distinct().take(MAX_QUICK_REPLIES)
-        profileDao.updateQuickReplies(agentId, if (clean.isEmpty()) null else json.encodeToString(ListSerializer(String.serializer()), clean))
-    }
-
-    companion object {
-        const val MAX_QUICK_REPLIES = 4
-        private val json = Json { ignoreUnknownKeys = true }
-
-        /** Parse stored JSON chips; bad data degrades to an empty list. */
-        fun parseQuickReplies(raw: String?): List<String> {
-            if (raw.isNullOrBlank()) return emptyList()
-            return runCatching {
-                json.decodeFromString(ListSerializer(String.serializer()), raw)
-            }.getOrDefault(emptyList())
+    /**
+     * Permanently remove an agent: revoke its backend AI key, then delete its
+     * local history (transcripts first, then calls, then the profile row).
+     *
+     * Revocation is keyed by the stable server-side key id and runs FIRST —
+     * if the key can't be found or revoked, nothing is deleted locally. Delete
+     * never pretends success when the server side didn't actually happen.
+     *
+     * Returns [DeleteOutcome.NoServerKey] when the server confirms no key
+     * exists at all (zero name matches for an unbound profile, or a 404 while
+     * revoking a bound key id) — the caller can then offer a local-only
+     * removal, because there is nothing left to revoke.
+     */
+    suspend fun deleteAgent(profile: AiProfileEntity): DeleteOutcome {
+        // Block before anything else: an agent with an open call must not be
+        // deleted, or the live call's history row would be wiped and the call
+        // would end unrecorded (saveCallEnded no-ops on a missing row). The
+        // check is server-side (GET /agents/:id/status → current_call_id), so
+        // it stays true regardless of whether the app is foregrounded. If the
+        // status can't be determined we fail CLOSED — never delete into the
+        // unknown, never a silent no-op.
+        val status = try {
+            ApiClient.ensurePhoneToken()
+            withContext(Dispatchers.IO) { api.getAgentStatus(profile.name) }
+        } catch (e: Exception) {
+            return DeleteOutcome.Failed(
+                "Couldn't check if \"${profile.name}\" is in a call — try again. Nothing was deleted."
+            )
         }
+        if (status.currentCallId != null) {
+            return DeleteOutcome.Failed(
+                "Can't delete — this agent has an active call. Try again once the call ends."
+            )
+        }
+
+        val keyId = profile.keyId ?: when (val lookup = lookupKeyIdByName(profile.name)) {
+            is KeyIdLookup.Exact -> lookup.keyId
+            KeyIdLookup.None -> return DeleteOutcome.NoServerKey
+            KeyIdLookup.Ambiguous -> return DeleteOutcome.Failed(
+                "Couldn't revoke \"${profile.name}\": multiple keys share that name. " +
+                    "Delete it from Settings instead. Nothing was deleted."
+            )
+        }
+        try {
+            withContext(Dispatchers.IO) { api.deleteAiKey(keyId) }
+        } catch (e: HttpException) {
+            if (e.code() == 404) return DeleteOutcome.NoServerKey
+            return DeleteOutcome.Failed(
+                "Couldn't revoke the key on the server: ${e.message ?: "unknown error"}. Nothing was deleted."
+            )
+        } catch (e: Exception) {
+            return DeleteOutcome.Failed(
+                "Couldn't revoke the key on the server: ${e.message ?: "unknown error"}. Nothing was deleted."
+            )
+        }
+        if (profile.keyId == null) profileDao.updateKeyId(profile.id, keyId)
+        deleteLocal(profile.id)
+        return DeleteOutcome.RevokedAndDeleted
+    }
+
+    /**
+     * Remove a profile and its history from this device without any server
+     * call. Only reachable after the server confirmed the key no longer
+     * exists ([DeleteOutcome.NoServerKey]) — for a still-live key this would
+     * orphan the server-side credential.
+     */
+    suspend fun deleteAgentLocalOnly(profile: AiProfileEntity) {
+        deleteLocal(profile.id)
+    }
+
+    private suspend fun deleteLocal(profileId: String) {
+        transcriptDao.deleteForAgent(profileId)
+        callDao.deleteForAgent(profileId)
+        profileDao.deleteById(profileId)
     }
 }

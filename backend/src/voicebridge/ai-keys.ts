@@ -149,6 +149,24 @@ export async function resolveAiKey(token: string): Promise<ResolvedAiKey | null>
   return null;
 }
 
+/**
+ * The stable id of the key currently carrying this display name, if any.
+ * Feeds the unique-name rule: a name may belong to at most one key (POST
+ * create and PATCH rename both reject a name that another key already has).
+ * Excludes no id — callers comparing against their own key handle that.
+ */
+export async function findKeyIdByName(name: string): Promise<string | null> {
+  if (dbPool) {
+    try {
+      const result = await dbPool.query<{ id: string }>(`SELECT id FROM ${TABLE} WHERE name = $1`, [name]);
+      return result.rows[0]?.id ?? null;
+    } catch (cause) {
+      throw new Error(`Failed to look up AI key by name: ${cause instanceof Error ? cause.message : String(cause)}`);
+    }
+  }
+  return Array.from(memoryKeys.values()).find((entry) => entry.name === name)?.id ?? null;
+}
+
 export async function listAiKeys(): Promise<AiKeyInfo[]> {
   if (dbPool) {
     try {
@@ -180,6 +198,26 @@ export async function deleteAiKey(id: string): Promise<boolean> {
     }
   }
   return memoryKeys.delete(id);
+}
+
+/**
+ * Rename a key by its stable id. The display name feeds the agent identity
+ * for subsequent MCP sessions (sessions snapshot their agentName at
+ * creation, so in-flight sessions keep the old name until reconnect).
+ */
+export async function renameAiKey(id: string, newName: string): Promise<boolean> {
+  if (dbPool) {
+    try {
+      const result = await dbPool.query(`UPDATE ${TABLE} SET name = $1 WHERE id = $2`, [newName, id]);
+      return (result.rowCount ?? 0) > 0;
+    } catch (cause) {
+      throw new Error(`Failed to rename AI key: ${cause instanceof Error ? cause.message : String(cause)}`);
+    }
+  }
+  const entry = memoryKeys.get(id);
+  if (!entry) return false;
+  entry.name = newName;
+  return true;
 }
 
 /**

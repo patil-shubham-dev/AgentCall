@@ -44,7 +44,7 @@
   "policy": {
     "ring_timeout_ms": 30000,                  // no hard cap: configurable; 0 = ring forever (advisory only)
     "silence_after_ms": 5000,                  // → silence.detected
-    "no_answer_action": "keep_ringing"         // keep_ringing|fail|voicemail
+    "no_answer_action": "keep_ringing"         // keep_ringing|fail
   },
   "priority": "normal"                          // low|normal|high|urgent
 }

@@ -217,7 +217,7 @@ class CallService : Service() {
                 val note = intent.getStringExtra(EXTRA_TEXT)?.takeIf { it.isNotBlank() }
                 if (note != null) {
                     savePendingNote(id, note)
-                    // Local transcript: the decline/voicemail note shows in
+                    // Local transcript: the decline note shows in
                     // history before the backend syncs it (backlog item 5).
                     // Written once per action; saveTranscriptLocally later
                     // replaces the local copy with server truth, so a retried
@@ -846,6 +846,7 @@ class CallService : Service() {
             callerName: String,
             summary: String,
             quiet: Boolean = false,
+            clientInfoName: String? = null,
         ) {
             val mgr = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             val canUseFullScreen = Build.VERSION.SDK_INT < 34 || mgr.canUseFullScreenIntent()
@@ -859,6 +860,7 @@ class CallService : Service() {
                 putExtra("call_id", callId)
                 putExtra("caller_name", callerName)
                 putExtra("context_summary", summary)
+                clientInfoName?.let { putExtra("client_info_name", it) }
                 flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
             }
             val pi = PendingIntent.getActivity(context, callId.hashCode(), intent,

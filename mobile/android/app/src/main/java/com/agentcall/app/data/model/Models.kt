@@ -4,13 +4,6 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 @Serializable
-data class CreateCallResponse(
-    @SerialName("call_id") val callId: String,
-    val status: String,
-    @SerialName("created_at") val createdAt: String? = null,
-)
-
-@Serializable
 data class CallResponse(
     @SerialName("call_id") val callId: String,
     val status: String,
@@ -23,6 +16,14 @@ data class CallResponse(
     val result: CallResult? = null,
     @SerialName("message_count") val messageCount: Int? = null,
     @SerialName("ai_wait") val aiWait: AiWaitStatus? = null,
+    @SerialName("client_info") val clientInfo: ClientInfo? = null,
+)
+
+/** MCP client that requested the call — the "via ..." caller badge. */
+@Serializable
+data class ClientInfo(
+    val name: String = "",
+    val version: String? = null,
 )
 
 @Serializable

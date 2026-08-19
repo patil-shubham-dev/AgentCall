@@ -12,6 +12,7 @@ import androidx.compose.animation.core.*
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
@@ -24,6 +25,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.PhoneForwarded
+import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.automirrored.filled.VolumeDown
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.*
@@ -35,7 +37,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.*
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.isShiftPressed
@@ -43,7 +44,6 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalFocusManager
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.input.ImeAction
@@ -53,7 +53,11 @@ import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.agentcall.app.ui.composables.ActionCircle
 import com.agentcall.app.ui.composables.AmbientBackground
+import com.agentcall.app.ui.composables.GradientAvatar
+import com.agentcall.app.ui.composables.Notice
+import com.agentcall.app.ui.ClientBadge
 import com.agentcall.app.ui.theme.*
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.delay
@@ -64,7 +68,6 @@ class CallActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val callId = intent.getStringExtra("call_id") ?: run { finish(); return }
-        val isOutgoing = intent.getBooleanExtra("outgoing", false)
         val callerName = intent.getStringExtra("caller_name") ?: "AI Agent"
         // Voice-first: keep the screen lit for the duration of the call.
         window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -81,17 +84,9 @@ class CallActivity : ComponentActivity() {
                     context = this@CallActivity,
                     contextSummary = intent.getStringExtra(CallService.EXTRA_CONTEXT_SUMMARY),
                     agentName = callerName,
-                    isOutgoing = isOutgoing,
                     onEndCall = { cid ->
                         startService(Intent(this@CallActivity, CallService::class.java).apply {
                             action = CallService.ACTION_END_CALL
-                            putExtra(CallService.EXTRA_CALL_ID, cid)
-                        })
-                        finish()
-                    },
-                    onCancelCall = { cid ->
-                        startService(Intent(this@CallActivity, CallService::class.java).apply {
-                            action = CallService.ACTION_CANCEL_CALL
                             putExtra(CallService.EXTRA_CALL_ID, cid)
                         })
                         finish()
@@ -106,10 +101,8 @@ fun ActiveCallScreen(
     callId: String,
     context: Context,
     onEndCall: (String) -> Unit,
-    onCancelCall: (String) -> Unit = onEndCall,
     contextSummary: String? = null,
     agentName: String = "AI Agent",
-    isOutgoing: Boolean = false,
     viewModel: CallViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -120,68 +113,8 @@ fun ActiveCallScreen(
     val focusManager = LocalFocusManager.current
 
     LaunchedEffect(callId) {
-        viewModel.connect(callId, contextSummary, agentName, isOutgoing)
+        viewModel.connect(callId, contextSummary, agentName)
         while (true) { delay(250); viewModel.tick() }
-    }
-
-    // Outgoing: ringback until the first confirmation (call_answered /
-    // ai_message), then hand off to the real voice session.
-    var ringbackPlayer by remember { mutableStateOf<android.media.MediaPlayer?>(null) }
-    var ringbackStarted by remember { mutableStateOf(false) }
-
-    fun startRingback() {
-        if (ringbackStarted) return
-        ringbackStarted = true
-        val player = try {
-            android.media.MediaPlayer().apply {
-                setAudioAttributes(
-                    android.media.AudioAttributes.Builder()
-                        .setUsage(android.media.AudioAttributes.USAGE_VOICE_COMMUNICATION)
-                        .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                        .build()
-                )
-                setDataSource(context, android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_RINGTONE))
-                isLooping = true
-                setOnErrorListener { _, _, _ -> true }
-            }
-        } catch (e: Exception) {
-            null
-        }
-        ringbackPlayer = player
-        if (player != null) {
-            try {
-                player.prepare()
-                player.start()
-            } catch (_: Exception) {
-                player.release()
-                ringbackPlayer = null
-            }
-        }
-    }
-
-    fun stopRingback(ringback: android.media.MediaPlayer?) {
-        try {
-            ringback?.stop()
-            ringback?.release()
-        } catch (_: Exception) {
-        }
-        ringbackPlayer = null
-        ringbackStarted = false
-    }
-
-    LaunchedEffect(state.phase) {
-        if (state.phase == CallPhase.OUTGOING) {
-            startRingback()
-        } else if (state.phase == CallPhase.ACTIVE && isOutgoing) {
-            stopRingback(ringbackPlayer)
-            // The voice session (ANSWER + greeting) is started by
-            // CallViewModel at dial time with the real backend call id;
-            // starting it again here would double the TTS/collector.
-        }
-    }
-
-    DisposableEffect(Unit) {
-        onDispose { stopRingback(ringbackPlayer) }
     }
 
     LaunchedEffect(state.messages.size) {
@@ -227,60 +160,52 @@ fun ActiveCallScreen(
                         fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     Text(state.statusText, style = MaterialTheme.typography.labelSmall,
                         color = if (state.isConnected) Green500 else Amber400)
+                    // Which MCP client requested the call (ChatGPT, Claude...).
+                    state.callContext.clientInfoName?.let { name ->
+                        Spacer(modifier = Modifier.height(2.dp))
+                        ClientBadge(clientInfoName = name)
+                    }
                 }
                 Text(
                     if (state.phase == CallPhase.ACTIVE) {
                         timerText
                     } else {
                         when (state.phase) {
-                            CallPhase.OUTGOING -> "Ringing…"
                             CallPhase.CONNECTING -> "Connecting…"
                             else -> timerText
                         }
                     },
-                    fontSize = 18.sp, fontFamily = FontFamily.Monospace,
-                    fontWeight = FontWeight.Light, color = Slate50, letterSpacing = 1.sp)
+                    style = MonoTitle, color = Slate50)
             }
 
             // Reconnecting banner: the session stays live while the link heals.
+            // Genuine warning → amber, per the design read.
             AnimatedVisibility(visible = state.phase == CallPhase.RECONNECTING,
                 enter = slideInVertically(animationSpec = spring(dampingRatio = 0.8f)) + fadeIn(),
                 exit = slideOutVertically() + fadeOut()) {
-                Surface(
+                Notice(
+                    text = "Reconnecting — the call stays live",
+                    lampColor = Amber400,
+                    containerColor = Amber400.copy(alpha = 0.12f),
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
-                    shape = RoundedCornerShape(12.dp), color = Amber400.copy(alpha = 0.12f),
-                ) {
-                    Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Box(modifier = Modifier.size(8.dp).clip(CircleShape).background(Amber400))
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            "Reconnecting — the call stays live",
-                            style = MaterialTheme.typography.labelMedium, color = Amber300,
-                        )
-                    }
-                }
+                )
             }
 
+            // Informational banners (agent offline / not responding): quiet
+            // indigo surface + slate lamp — status, not alarm.
             AnimatedVisibility(visible = state.aiResponding == false,
                 enter = slideInVertically(animationSpec = spring(dampingRatio = 0.8f)) + fadeIn(),
                 exit = slideOutVertically() + fadeOut()) {
-                Surface(
+                Notice(
+                    text = if (state.agentOnline == false) {
+                        "Agent is offline — your reply will be saved when they reconnect"
+                    } else {
+                        "AI is not currently responding — your reply will be saved"
+                    },
+                    lampColor = Slate400,
+                    containerColor = Indigo900.copy(alpha = 0.6f),
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
-                    shape = RoundedCornerShape(12.dp), color = Amber400.copy(alpha = 0.12f),
-                ) {
-                    Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Box(modifier = Modifier.size(8.dp).clip(CircleShape).background(Amber400))
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            if (state.agentOnline == false) {
-                                "Agent is offline — your reply will be saved when they reconnect"
-                            } else {
-                                "AI is not currently responding — your reply will be saved"
-                            },
-                            style = MaterialTheme.typography.labelMedium, color = Amber300,
-                        )
-                    }
-                }
+                )
             }
 
             AnimatedVisibility(visible = showContext && state.callContext.summary.isNotBlank(),
@@ -428,7 +353,7 @@ fun ActiveCallScreen(
                             ),
                             enabled = textInput.isNotBlank(),
                         ) {
-                            Icon(Icons.Default.Send, "Send")
+                            Icon(Icons.AutoMirrored.Filled.Send, "Send")
                         }
                     }
 
@@ -453,16 +378,16 @@ fun ActiveCallScreen(
                         Spacer(modifier = Modifier.height(8.dp))
                     }
 
-                    // Control buttons row
+                    // Control buttons row — four ActionCircle, 48dp
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceEvenly,
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        CallControl(
+                        ActionCircle(
                             icon = if (state.isRecording) Icons.Default.StopCircle else Icons.Default.Mic,
                             label = if (state.isRecording) "Stop" else "Record",
-                            tint = if (state.isRecording) Red400 else Slate50,
+                            iconTint = if (state.isRecording) Red400 else Slate50,
                             bgColor = if (state.isRecording) GlassRed else GlassWhite,
                             onClick = {
                                 context.startService(Intent(context, CallService::class.java).apply {
@@ -472,23 +397,23 @@ fun ActiveCallScreen(
                                 viewModel.setRecording(!state.isRecording)
                             })
 
-                        CallControl(
+                        ActionCircle(
                             icon = if (state.isMuted) Icons.Default.MicOff else Icons.Default.Mic,
                             label = if (state.isMuted) "Unmute" else "Mute",
-                            tint = if (state.isMuted) Indigo400 else Slate50,
+                            iconTint = if (state.isMuted) Indigo400 else Slate50,
                             bgColor = if (state.isMuted) GlassIndigo else GlassWhite,
                             onClick = { viewModel.setMuted(context, !state.isMuted) })
 
-                        CallControl(
+                        ActionCircle(
                             icon = if (state.isSpeakerOn) Icons.AutoMirrored.Filled.VolumeUp else Icons.AutoMirrored.Filled.VolumeDown,
                             label = "Speaker",
-                            tint = if (state.isSpeakerOn) Indigo400 else Slate50,
+                            iconTint = if (state.isSpeakerOn) Indigo400 else Slate50,
                             bgColor = if (state.isSpeakerOn) GlassIndigo else GlassWhite,
                             onClick = { viewModel.toggleSpeaker() })
 
-                        CallControl(
+                        ActionCircle(
                             icon = Icons.Default.Replay, label = "Repeat",
-                            tint = Slate50, bgColor = GlassWhite, onClick = {
+                            iconTint = Slate50, bgColor = GlassWhite, onClick = {
                                 context.startService(Intent(context, CallService::class.java).apply {
                                     action = CallService.ACTION_REPEAT_LAST
                                 })
@@ -497,42 +422,47 @@ fun ActiveCallScreen(
 
                     Spacer(modifier = Modifier.height(8.dp))
 
-                    // End Call Button
+                    // End Call Button — 56dp red circle with a soft red halo
                     Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
-                        var isPressed by remember { mutableStateOf(false) }
+                        val endInteraction = remember { MutableInteractionSource() }
+                        val isPressed by endInteraction.collectIsPressedAsState()
                         val pressScale by animateFloatAsState(
                             targetValue = if (isPressed) 0.92f else 1f,
                             animationSpec = spring(dampingRatio = 0.5f, stiffness = 800f), label = "endCallPress"
                         )
-                        Button(
-                            onClick = {
-                                // state.callId carries the real backend id for
-                                // outgoing calls (set after createCall); the
-                                // intent extra is only the provisional uuid.
-                                val cid = state.callId.ifBlank { callId }
-                                if (isOutgoing && state.phase != CallPhase.ACTIVE) {
-                                    // Outgoing calls can be cancelled while ringing.
-                                    onCancelCall(cid)
-                                } else {
-                                    onEndCall(cid)
-                                }
-                            },
-                            modifier = Modifier.size(56.dp).scale(pressScale), shape = CircleShape,
-                            colors = ButtonDefaults.buttonColors(containerColor = Red500),
-                            contentPadding = PaddingValues(0.dp),
-                            interactionSource = remember { MutableInteractionSource() },
-                        ) {
-                            Icon(
-                                if (isOutgoing && state.phase != CallPhase.ACTIVE)
-                                    Icons.Default.PhoneDisabled
-                                else Icons.AutoMirrored.Filled.PhoneForwarded,
-                                if (isOutgoing && state.phase != CallPhase.ACTIVE) "Cancel" else "End",
-                                modifier = Modifier.size(24.dp), tint = Slate50,
+                        val haloAlpha by rememberInfiniteTransition(label = "endHalo").animateFloat(
+                            0.15f, 0.35f,
+                            infiniteRepeatable(tween(1600, easing = EaseInOutSine), RepeatMode.Reverse),
+                            label = "endHaloAlpha"
+                        )
+                        Box(contentAlignment = Alignment.Center) {
+                            Box(
+                                modifier = Modifier
+                                    .size(72.dp)
+                                    .border(1.5.dp, Red400.copy(alpha = haloAlpha), CircleShape)
                             )
+                            Button(
+                                onClick = {
+                                    // state.callId carries the real backend id;
+                                    // the intent extra is only the provisional uuid.
+                                    val cid = state.callId.ifBlank { callId }
+                                    onEndCall(cid)
+                                },
+                                modifier = Modifier.size(56.dp).scale(pressScale), shape = CircleShape,
+                                colors = ButtonDefaults.buttonColors(containerColor = Red500),
+                                contentPadding = PaddingValues(0.dp),
+                                interactionSource = endInteraction,
+                            ) {
+                                Icon(
+                                    Icons.AutoMirrored.Filled.PhoneForwarded,
+                                    "End",
+                                    modifier = Modifier.size(24.dp), tint = Slate50,
+                                )
+                            }
                         }
                         Spacer(modifier = Modifier.height(2.dp))
                         Text(
-                            if (isOutgoing && state.phase != CallPhase.ACTIVE) "Cancel" else "End",
+                            "End",
                             style = MaterialTheme.typography.labelSmall, color = Red400, fontWeight = FontWeight.Medium,
                         )
                     }
@@ -603,19 +533,7 @@ private fun MessageBubble(msg: ChatBubble, isAi: Boolean, onRetry: (() -> Unit)?
             horizontalArrangement = if (isAi) Arrangement.Start else Arrangement.End,
         ) {
             if (isAi) {
-                val avatarGradient = Brush.linearGradient(listOf(GradientBrandStart, GradientBrandEnd))
-                Surface(
-                    modifier = Modifier.size(32.dp),
-                    shape = CircleShape,
-                    color = Color.Transparent,
-                ) {
-                    Box(
-                        modifier = Modifier.size(28.dp).clip(CircleShape).background(avatarGradient),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Icon(Icons.Default.SmartToy, "AI avatar", modifier = Modifier.size(16.dp), tint = Slate50)
-                    }
-                }
+                GradientAvatar(size = 32.dp)
                 Spacer(modifier = Modifier.width(8.dp))
             }
 
@@ -676,13 +594,7 @@ private fun TypingIndicator() {
         modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        val avatarGradient = Brush.linearGradient(listOf(GradientBrandStart, GradientBrandEnd))
-        Surface(modifier = Modifier.size(28.dp), shape = CircleShape, color = Color.Transparent) {
-            Box(modifier = Modifier.size(28.dp).clip(CircleShape).background(avatarGradient),
-                contentAlignment = Alignment.Center) {
-                Icon(Icons.Default.SmartToy, "AI", modifier = Modifier.size(14.dp), tint = Slate50)
-            }
-        }
+        GradientAvatar(size = 28.dp, contentDescription = "AI")
         Spacer(modifier = Modifier.width(8.dp))
         Surface(shape = RoundedCornerShape(4.dp, 16.dp, 16.dp, 16.dp), color = Slate800) {
             Row(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
@@ -723,30 +635,5 @@ private fun WaveformBar(levels: List<Float>, isActive: Boolean, isRecording: Boo
                 cornerRadius = androidx.compose.ui.geometry.CornerRadius(barWidth / 2),
             )
         }
-    }
-}
-
-@Composable
-private fun CallControl(
-    icon: ImageVector, label: String, tint: Color, bgColor: Color,
-    onClick: () -> Unit,
-) {
-    val interactionSource = remember { MutableInteractionSource() }
-    val isPressed by interactionSource.collectIsPressedAsState()
-    val pressScale by animateFloatAsState(
-        targetValue = if (isPressed) 0.88f else 1f,
-        animationSpec = spring(dampingRatio = 0.5f, stiffness = 800f), label = "callControlPress"
-    )
-
-    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Surface(
-            onClick = onClick, shape = CircleShape, color = bgColor,
-            tonalElevation = 0.dp, interactionSource = interactionSource,
-        ) {
-            Box(modifier = Modifier.size(48.dp).scale(pressScale), contentAlignment = Alignment.Center) {
-                Icon(icon, label, modifier = Modifier.size(22.dp), tint = tint)
-            }
-        }
-        Text(label, style = MaterialTheme.typography.labelSmall, color = Slate400)
     }
 }

@@ -6,6 +6,7 @@ import {
   listAiKeys,
   listAiKeyStatuses,
   deleteAiKey,
+  renameAiKey,
   hashKey,
 } from '../voicebridge/ai-keys.js';
 
@@ -42,6 +43,14 @@ describe('ai-keys registry (memory mode)', () => {
     expect(await deleteAiKey(created.id)).toBe(true);
     expect(await resolveAiKey(created.key)).toBeNull();
     expect(await deleteAiKey('missing-id')).toBe(false);
+  });
+
+  it('renames a key by its stable id; identity resolves to the new name', async () => {
+    const created = await createAiKey('Old Name');
+    expect(await renameAiKey(created.id, 'New Name')).toBe(true);
+    expect((await listAiKeys()).find((k) => k.id === created.id)?.name).toBe('New Name');
+    expect(await resolveAiKey(created.key)).toEqual({ id: created.id, name: 'New Name' });
+    expect(await renameAiKey('missing-id', 'Anything')).toBe(false);
   });
 
   it('names are sanitized by the caller; registry stores what it is given', async () => {

@@ -29,4 +29,7 @@ interface CallRecordDao {
 
     @Query("UPDATE call_records SET transcriptFetched = 1 WHERE callId = :callId")
     suspend fun markTranscriptFetched(callId: String)
+
+    @Query("DELETE FROM call_records WHERE agentId = :agentId")
+    suspend fun deleteForAgent(agentId: String)
 }

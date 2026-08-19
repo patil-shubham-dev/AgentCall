@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- Debug-only overlay: lets adb launch the call screens for UI testing.
+         Release builds keep both activities non-exported (manifest default). -->
+    <application>
+        <activity
+            android:name=".call.IncomingCallActivity"
+            android:exported="true" />
+        <activity
+            android:name=".call.CallActivity"
+            android:exported="true" />
+    </application>
+
+</manifest>

@@ -9,6 +9,7 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { config } from '../common/config.js';
 import { logger } from '../common/logger.js';
 import { DEFAULT_AGENT_NAME, resolveAiKey } from '../voicebridge/ai-keys.js';
+import type { ClientInfo } from '../voicebridge/types.js';
 import { createTools } from './tools.js';
 import { mcpIdentityStorage, type McpIdentity } from './identity.js';
 import { McpSessionRegistry, type McpManagedSession } from './session-registry.js';
@@ -20,6 +21,30 @@ const ALLOWED_CORS_ORIGINS = new Set([
   'https://claude.ai',
   ...config.security.corsAllowedOrigins.split(',').map((s) => s.trim()).filter(Boolean),
 ]);
+
+/**
+ * MCP clients identify themselves in the initialize request:
+ * { jsonrpc, id, method: 'initialize', params: { clientInfo: {name, version} } }.
+ * Read it defensively (missing/badly-typed clientInfo degrades to null) and
+ * tolerate batches. This is the phone's "caller badge" source of truth.
+ */
+function extractClientInfo(body: unknown): ClientInfo | null {
+  if (Array.isArray(body)) {
+    for (const message of body) {
+      const info = extractClientInfo(message);
+      if (info) return info;
+    }
+    return null;
+  }
+  const candidate = body as { method?: unknown; params?: { clientInfo?: unknown } } | null;
+  if (!candidate || candidate.method !== 'initialize') return null;
+  const ci = candidate.params?.clientInfo as { name?: unknown; version?: unknown } | undefined;
+  if (!ci || typeof ci.name !== 'string' || ci.name.trim().length === 0) return null;
+  return {
+    name: ci.name.trim(),
+    ...(typeof ci.version === 'string' && ci.version.length > 0 ? { version: ci.version } : {}),
+  };
+}
 
 function extractToken(request: FastifyRequest): string | null {
   const header = request.headers.authorization;
@@ -171,7 +196,14 @@ export function registerMcpEndpoint(app: FastifyInstance, voicebridge: VoiceBrid
       if (!connectOk) {
         return reply.status(500).send({ error: 'INTERNAL', message: 'Failed to create MCP session.' });
       }
-      session = { ...created, lastActivityAt: Date.now(), lastHeartbeatAt: Date.now() };
+      // The initialize handshake (which names the client) is the first request
+      // on a fresh session, so capture clientInfo from this very body.
+      session = {
+        ...created,
+        lastActivityAt: Date.now(),
+        lastHeartbeatAt: Date.now(),
+        clientInfo: extractClientInfo(request.body) ?? undefined,
+      };
     }
 
     if (!session) {
@@ -181,8 +213,15 @@ export function registerMcpEndpoint(app: FastifyInstance, voicebridge: VoiceBrid
 
     logger.debug({ sessionId: activeSession.transport.sessionId, identity: identity.agentName, via: identity.via }, '[MCP] request');
 
+    // The session knows the client better than the auth token does: merge the
+    // initialize-handshake clientInfo into the per-request identity so every
+    // tool call on this session carries the caller badge.
+    const decoratedIdentity: McpIdentity = activeSession.clientInfo
+      ? { ...identity, clientInfo: activeSession.clientInfo }
+      : identity;
+
     reply.hijack();
-    await mcpIdentityStorage.run(identity, async () => {
+    await mcpIdentityStorage.run(decoratedIdentity, async () => {
       await activeSession.transport.handleRequest(request.raw, reply.raw, request.body);
     });
 
@@ -195,6 +234,7 @@ export function registerMcpEndpoint(app: FastifyInstance, voicebridge: VoiceBrid
           lastActivityAt: Date.now(),
           lastHeartbeatAt: Date.now(),
           agentName: identity.agentName,
+          clientInfo: activeSession.clientInfo,
         });
         activeSession.transport.onclose = () => {
           sessions.delete(generated);

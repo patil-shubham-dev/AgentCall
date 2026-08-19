@@ -3,10 +3,9 @@ package com.agentcall.app.home
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -20,20 +19,21 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.agentcall.app.data.api.AiKeyItem
 import com.agentcall.app.data.database.entity.AiProfileEntity
 import com.agentcall.app.ui.composables.AmbientBackground
 import com.agentcall.app.ui.composables.GradientAvatar
+import com.agentcall.app.ui.composables.Plate
+import com.agentcall.app.ui.composables.SectionLabel
+import com.agentcall.app.ui.composables.StatusPill
 import com.agentcall.app.ui.theme.*
 import kotlinx.coroutines.delay
 import kotlin.math.sin
@@ -50,6 +50,8 @@ fun HomeScreen(
     val agentStatus by viewModel.agentStatus.collectAsStateWithLifecycle()
 
     val snackbarHostState = remember { SnackbarHostState() }
+    var pendingDelete by remember { mutableStateOf<AiProfileEntity?>(null) }
+    val orphanTarget by viewModel.orphanDeleteTarget.collectAsStateWithLifecycle()
 
     LaunchedEffect(Unit) {
         viewModel.snackbarEvents.collect { message ->
@@ -60,8 +62,6 @@ fun HomeScreen(
     val infiniteTransition = rememberInfiniteTransition(label = "homePulse")
     val waitingPulse by infiniteTransition.animateFloat(0f, 1f,
         infiniteRepeatable(tween(2000, easing = EaseInOutSine), RepeatMode.Reverse), label = "waitingPulse")
-    val waitingScale by infiniteTransition.animateFloat(1f, 1.06f,
-        infiniteRepeatable(tween(2500, easing = EaseInOutSine), RepeatMode.Reverse), label = "waitingScale")
 
     val particles = remember {
         List(12) { i ->
@@ -98,7 +98,7 @@ fun HomeScreen(
                     val px = particle.x * size.width + sin(particleAnim * 2f * kotlin.math.PI.toFloat() * particle.speed) * 30f
                     val py = particle.y * size.height - particleAnim * size.height * 0.08f
                     drawCircle(
-                        color = Indigo400.copy(alpha = 0.08f * (1f - particleAnim)),
+                        color = Phosphor.copy(alpha = 0.08f * (1f - particleAnim)),
                         radius = particle.size,
                         center = Offset(px, py),
                     )
@@ -109,56 +109,41 @@ fun HomeScreen(
                 Spacer(modifier = Modifier.height(16.dp))
 
                 Row(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp),
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
+                        Text("AGENTCALL",
+                            style = MaterialTheme.typography.headlineMedium,
+                            color = MaterialTheme.colorScheme.onBackground)
+                        Spacer(modifier = Modifier.height(2.dp))
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text("AgentCall",
-                                style = MaterialTheme.typography.headlineMedium,
-                                color = MaterialTheme.colorScheme.onBackground)
+                            Text(state.statusText,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
                             Spacer(modifier = Modifier.width(8.dp))
                             Text("v1.0",
-                                style = MaterialTheme.typography.labelSmall,
+                                style = MonoLabel,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
-                        Spacer(modifier = Modifier.height(2.dp))
-                        Text(state.statusText,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
 
-                    val badgeColor = when {
-                        state.isReconnecting -> Amber400
-                        state.isConnected -> Green400
-                        else -> MaterialTheme.colorScheme.onSurfaceVariant
-                    }
-
-                    Surface(
-                        shape = RoundedCornerShape(100.dp),
-                        color = badgeColor.copy(alpha = 0.12f),
-                        tonalElevation = 0.dp,
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Box(modifier = Modifier.size(8.dp).clip(CircleShape)
-                                .background(badgeColor.copy(alpha = 0.5f + waitingPulse * 0.5f)))
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(
-                                when {
-                                    state.isReconnecting -> "Reconnecting"
-                                    state.isConnected -> "Connected"
-                                    else -> "Offline"
-                                },
-                                style = MaterialTheme.typography.labelSmall,
-                                color = badgeColor, fontWeight = FontWeight.Medium)
-                        }
-                    }
+                    StatusPill(
+                        label = when {
+                            state.isReconnecting -> "RECONNECTING"
+                            state.isConnected -> "CONNECTED"
+                            else -> "OFFLINE"
+                        },
+                        lampColor = when {
+                            state.isReconnecting -> Amber400
+                            state.isConnected -> Green400
+                            else -> LampOff
+                        },
+                        pulse = state.isReconnecting || state.isConnected,
+                    )
                 }
 
-                Spacer(modifier = Modifier.height(20.dp))
+                Spacer(modifier = Modifier.height(24.dp))
 
                 when {
                     state.isLoading -> LoadingSkeleton()
@@ -168,37 +153,95 @@ fun HomeScreen(
                         profiles = profiles,
                         aiStatus = aiStatus,
                         agentStatus = agentStatus,
-                        waitingScale = waitingScale,
-                        waitingPulse = waitingPulse,
                         onProfileClicked = onProfileClicked,
+                        onProfileLongPressed = { pendingDelete = it },
                     )
                 }
             }
         }
     }
+
+    pendingDelete?.let { target ->
+        AlertDialog(
+            onDismissRequest = { pendingDelete = null },
+            title = { Text("Delete ${target.name} permanently?", color = Slate50) },
+            text = {
+                Text(
+                    "This permanently revokes ${target.name}'s key on the server and " +
+                        "cannot be undone. The agent will no longer be able to call you, " +
+                        "and its call history is deleted from this device.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = Slate400,
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        viewModel.deleteAgent(target)
+                        pendingDelete = null
+                    },
+                ) {
+                    Text("Delete permanently", color = Red400, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingDelete = null }) {
+                    Text("Cancel", color = Slate400)
+                }
+            },
+        )
+    }
+
+    // The server confirmed this profile's key no longer exists (deleted in
+    // Settings, or a leftover from before the keyId fix) — nothing left to
+    // revoke, so offer a local-only removal instead of failing.
+    orphanTarget?.let { target ->
+        AlertDialog(
+            onDismissRequest = { viewModel.dismissOrphan() },
+            title = { Text("${target.name} no longer exists on the server", color = Slate50) },
+            text = {
+                Text(
+                    "The key behind this agent is already gone from the server, so " +
+                        "there's nothing left to revoke. You can remove its profile and " +
+                        "call history from this device only, or keep it.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = Slate400,
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = { viewModel.removeOrphan(target) },
+                ) {
+                    Text("Remove from this device only", color = Red400, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { viewModel.dismissOrphan() }) {
+                    Text("Keep it", color = Slate400)
+                }
+            },
+        )
+    }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun AiProfileGrid(
     profiles: List<AiProfileEntity>,
     aiStatus: Map<String, AiKeyItem>,
     agentStatus: Map<String, com.agentcall.app.data.api.AgentStatusResponse>,
-    waitingScale: Float,
-    waitingPulse: Float,
     onProfileClicked: (String) -> Unit,
+    onProfileLongPressed: (AiProfileEntity) -> Unit,
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
-        Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp)) {
-            Text("Your AI Agents",
-                style = MaterialTheme.typography.titleSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                fontWeight = FontWeight.SemiBold, letterSpacing = 0.5.sp)
+        Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp)) {
+            SectionLabel(title = "YOUR AI AGENTS")
         }
-        Spacer(modifier = Modifier.height(8.dp))
+        Spacer(modifier = Modifier.height(10.dp))
 
         LazyVerticalGrid(
             columns = GridCells.Fixed(2),
-            modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
+            modifier = Modifier.fillMaxSize().padding(horizontal = 20.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
             contentPadding = PaddingValues(bottom = 80.dp),
@@ -221,6 +264,7 @@ private fun AiProfileGrid(
                         aiKey = aiStatus[profile.name],
                         lastSeenText = formatLastSeen(agentStatus[profile.name]?.lastSeenAt),
                         onClick = { onProfileClicked(profile.id) },
+                        onLongPress = { onProfileLongPressed(profile) },
                     )
                 }
             }
@@ -228,21 +272,15 @@ private fun AiProfileGrid(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun AiProfileCard(
     profile: AiProfileEntity,
     aiKey: AiKeyItem?,
     onClick: () -> Unit,
+    onLongPress: () -> Unit,
     lastSeenText: String? = null,
 ) {
-    val interactionSource = remember { MutableInteractionSource() }
-    val isPressed by interactionSource.collectIsPressedAsState()
-    val pressScale by animateFloatAsState(
-        targetValue = if (isPressed) 0.96f else 1f,
-        animationSpec = spring(dampingRatio = 0.5f, stiffness = 800f), label = "cardPress"
-    )
-
-    val lastCallText = profile.lastCalledAt?.let { formatRelativeTime(it) } ?: "No calls yet"
     val presence = aiKey?.toPresence()
     val statusColor = when (presence) {
         AiPresence.BUSY -> Amber400
@@ -252,41 +290,47 @@ private fun AiProfileCard(
     val statusText = when (presence) {
         AiPresence.BUSY -> "Busy"
         AiPresence.ONLINE -> "Online"
-        AiPresence.OFFLINE -> "Offline"
-        else -> lastCallText
+        else -> "Offline"
+    }
+    // Line 3 is always present: the recency story of this agent. Offline shows
+    // last-seen; otherwise the last call — or "No calls yet" when it never called.
+    val recencyLine = when {
+        presence == AiPresence.OFFLINE && lastSeenText != null -> lastSeenText
+        else -> profile.lastCalledAt?.let { "Last call ${formatRelativeTime(it)}" } ?: "No calls yet"
     }
 
-    Surface(
-        onClick = onClick,
-        modifier = Modifier.fillMaxWidth().scale(pressScale),
-        shape = RoundedCornerShape(16.dp),
-        color = Slate800.copy(alpha = 0.6f),
-        tonalElevation = 0.dp,
-        interactionSource = interactionSource,
+    Plate(
+        onClick = null,
+        modifier = Modifier
+            .fillMaxWidth()
+            .combinedClickable(onClick = onClick, onLongClick = onLongPress),
+        containerShape = RoundedCornerShape(Radii.Plate),
+        containerColor = Slate800.copy(alpha = 0.9f),
     ) {
         Column(
-            modifier = Modifier.padding(20.dp).fillMaxWidth(),
+            modifier = Modifier.padding(16.dp).fillMaxWidth(),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             GradientAvatar(size = 64.dp)
             Spacer(modifier = Modifier.height(10.dp))
-            Text(profile.name, style = MaterialTheme.typography.titleMedium,
-                color = Slate50, fontWeight = FontWeight.Medium)
+            Text(profile.name.uppercase(), style = MaterialTheme.typography.titleMedium,
+                color = Slate50, fontWeight = FontWeight.SemiBold)
             Spacer(modifier = Modifier.height(4.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(modifier = Modifier.size(6.dp).clip(CircleShape)
-                    .background(statusColor.copy(alpha = 0.8f)))
+                Box(contentAlignment = Alignment.Center) {
+                    Box(modifier = Modifier.size(11.dp).clip(CircleShape)
+                        .background(statusColor.copy(alpha = if (presence == AiPresence.ONLINE) 0.15f else 0f)))
+                    Box(modifier = Modifier.size(7.dp).clip(CircleShape)
+                        .background(if (presence == AiPresence.ONLINE || presence == AiPresence.BUSY) statusColor else LampOff))
+                }
                 Spacer(modifier = Modifier.width(6.dp))
                 Text(statusText, style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    color = if (presence == AiPresence.ONLINE || presence == AiPresence.BUSY) statusColor
+                            else MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            // Backlog item 2: an offline agent shows its last-seen time so the
-            // user knows WHY it didn't pick up.
-            if (presence == AiPresence.OFFLINE && lastSeenText != null) {
-                Spacer(modifier = Modifier.height(2.dp))
-                Text(lastSeenText, style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f))
-            }
+            Spacer(modifier = Modifier.height(2.dp))
+            Text(recencyLine, style = MonoBody,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f))
         }
     }
 }
@@ -351,18 +395,11 @@ private fun EmptyProfilesContent(waitingPulse: Float) {
             textAlign = TextAlign.Center,
             modifier = Modifier.padding(start = 32.dp, top = 6.dp, end = 32.dp))
         Spacer(modifier = Modifier.height(8.dp))
-        Surface(shape = RoundedCornerShape(100.dp), color = GlassIndigo) {
-            Row(
-                modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Box(modifier = Modifier.size(6.dp).clip(CircleShape)
-                    .background(Indigo400.copy(alpha = 0.6f + waitingPulse * 0.4f)))
-                Spacer(modifier = Modifier.width(6.dp))
-                Text("Connected and waiting for incoming calls",
-                    style = MaterialTheme.typography.labelSmall, color = Indigo300)
-            }
-        }
+        StatusPill(
+            label = "Connected and waiting for incoming calls",
+            lampColor = Green400,
+            pulse = true,
+        )
     }
 }
 

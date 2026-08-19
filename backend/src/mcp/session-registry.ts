@@ -1,6 +1,7 @@
 import { logger } from '../common/logger.js';
 import type { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import type { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import type { ClientInfo } from '../voicebridge/types.js';
 
 export interface McpManagedSession {
   server: Server;
@@ -11,6 +12,8 @@ export interface McpManagedSession {
    *  sweep keys off this to detect kill -9 / dropped TCP within ~45s. */
   lastHeartbeatAt: number;
   agentName?: string;
+  /** Captured from the initialize handshake; surfaces as the caller badge. */
+  clientInfo?: ClientInfo;
 }
 
 /**

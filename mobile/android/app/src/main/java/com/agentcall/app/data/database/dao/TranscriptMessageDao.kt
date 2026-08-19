@@ -17,4 +17,7 @@ interface TranscriptMessageDao {
 
     @Query("DELETE FROM transcript_messages WHERE callId = :callId")
     suspend fun deleteForCall(callId: String)
+
+    @Query("DELETE FROM transcript_messages WHERE callId IN (SELECT callId FROM call_records WHERE agentId = :agentId)")
+    suspend fun deleteForAgent(agentId: String)
 }

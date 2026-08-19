@@ -10,6 +10,7 @@ import com.agentcall.app.data.api.ApiService
 import com.agentcall.app.data.api.AiKeyItem
 import com.agentcall.app.data.database.entity.AiProfileEntity
 import com.agentcall.app.data.repository.CallRepository
+import com.agentcall.app.data.repository.DeleteOutcome
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -70,6 +71,14 @@ class HomeViewModel @Inject constructor(
     private val _snackbarEvents = MutableSharedFlow<String>(extraBufferCapacity = 4)
     val snackbarEvents: SharedFlow<String> = _snackbarEvents.asSharedFlow()
 
+    /**
+     * Set when the user tried to delete a profile whose key no longer exists
+     * on the server (zero matches or a 404). The Home screen shows a
+     * local-only removal dialog while this is non-null.
+     */
+    private val _orphanDeleteTarget = MutableStateFlow<AiProfileEntity?>(null)
+    val orphanDeleteTarget: StateFlow<AiProfileEntity?> = _orphanDeleteTarget.asStateFlow()
+
     private var eventsJob: kotlinx.coroutines.Job? = null
 
     init {
@@ -123,6 +132,7 @@ class HomeViewModel @Inject constructor(
                         ApiClient.create<ApiService>().listAiKeys()
                     }.onSuccess { response ->
                         _aiStatus.value = response.keys.associateBy { it.name }
+                        repository.reconcileProfileKeyIds()
                     }.isSuccess
                     failureStreak = if (ok) 0 else failureStreak + 1
                     delay(backoffMs[failureStreak.coerceIn(0, backoffMs.lastIndex)])
@@ -178,6 +188,55 @@ class HomeViewModel @Inject constructor(
             delay(300)
             connect()
         }
+    }
+
+    /**
+     * Permanently delete an agent: revoke its backend AI key (so the agent
+     * can no longer authenticate), then remove its profile + call history.
+     * The profile row disappears from the grid immediately (Room flow). If
+     * the server-side revocation fails, nothing is deleted and the exact
+     * reason is shown — never a silent partial delete. When the server
+     * confirms the key is already gone (nothing left to revoke), the user is
+     * offered the local-only removal dialog instead of an error.
+     */
+    fun deleteAgent(profile: AiProfileEntity) {
+        viewModelScope.launch {
+            try {
+                when (val outcome = repository.deleteAgent(profile)) {
+                    DeleteOutcome.RevokedAndDeleted -> {
+                        _aiStatus.value = _aiStatus.value - profile.name
+                        _agentStatus.value = _agentStatus.value - profile.name
+                    }
+                    DeleteOutcome.NoServerKey -> _orphanDeleteTarget.value = profile
+                    is DeleteOutcome.Failed ->
+                        _snackbarEvents.tryEmit(outcome.message)
+                }
+            } catch (e: Exception) {
+                _snackbarEvents.tryEmit(e.message ?: "Couldn't delete ${profile.name} — try again")
+            }
+        }
+    }
+
+    /**
+     * Remove an orphaned profile (server already confirmed its key is gone)
+     * from this device only. No server call is made.
+     */
+    fun removeOrphan(profile: AiProfileEntity) {
+        _orphanDeleteTarget.value = null
+        viewModelScope.launch {
+            try {
+                repository.deleteAgentLocalOnly(profile)
+                _aiStatus.value = _aiStatus.value - profile.name
+                _agentStatus.value = _agentStatus.value - profile.name
+                _snackbarEvents.tryEmit("Removed ${profile.name} from this device")
+            } catch (e: Exception) {
+                _snackbarEvents.tryEmit(e.message ?: "Couldn't remove ${profile.name} — try again")
+            }
+        }
+    }
+
+    fun dismissOrphan() {
+        _orphanDeleteTarget.value = null
     }
 
     /**

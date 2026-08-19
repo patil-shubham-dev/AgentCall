@@ -11,11 +11,20 @@ data class AiProfileEntity(
     val updatedAt: Long = System.currentTimeMillis(),
     val callCount: Int = 0,
     val lastCalledAt: Long? = null,
-    // Migration 1 -> 2 (backlog items 7 & 9): per-agent ringtone and
-    // quick-reply chips live on the profile row. quickReplies is a JSON
-    // string array (max 4 chips); parse defensively — bad JSON must degrade
-    // to no chips, never crash.
+    /**
+     * Kept mapped for schema-stability only — the per-agent ringtone and
+     * quick-reply features were removed from the UI, but MIGRATION_1_2 added
+     * these columns and MIGRATION_2_3 re-adds them so every upgrade path
+     * (v1→v3, v2-with-columns, fresh-v2) converges on the same v3 schema.
+     * Nothing reads or writes them.
+     */
     val ringtoneUri: String? = null,
     val ringtoneLabel: String? = null,
     val quickReplies: String? = null,
+    /**
+     * Stable server-side identifier of the AI key this profile is bound to.
+     * Null for profiles created before the binding existed — reconciled
+     * lazily (see CallRepository.reconcileProfileKeyIds).
+     */
+    val keyId: String? = null,
 )

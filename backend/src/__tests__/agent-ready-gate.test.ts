@@ -379,32 +379,3 @@ describe('Phase-2 gate: call.delayed observability event', () => {
     expect(received[0].payload.reason).toBe('agent_busy');
   });
 });
-
-describe('Phase-3 outgoing calls (user origin)', () => {
-  it('skips the ring gate for user-origin calls: no ring push, no retries', async () => {
-    const ws = new WebSocket();
-    const repo = new InMemorySessionRepository();
-    const svc = new VoiceBridgeService(repo, new InMemoryCallbackRepository());
-    svc.setAgentPresenceProvider(() => new Set<string>());
-    const scheduler = new CleanupScheduler();
-    const retries: Array<() => void> = [];
-    vi.spyOn(scheduler, 'schedule').mockImplementation((_id: string, _at: number, cb: () => void) => {
-      retries.push(cb);
-    });
-    svc.setRingRetryScheduler(scheduler);
-    serviceModule.registerPhone('user-outgoing', ws);
-
-    const session = await svc.createCall({
-      userId: 'user-outgoing',
-      agentId: 'AI Agent',
-      reason: 'clarification',
-      summary: 'User wants to talk',
-      origin: 'user',
-    });
-    await flush();
-
-    expect(ws.send).not.toHaveBeenCalled();
-    expect(retries).toHaveLength(0);
-    expect(await repo.findById(session.id)).toMatchObject({ status: 'pending' });
-  });
-});

@@ -57,7 +57,7 @@ const createCallSchema = z.object({
     .object({
       ring_timeout_ms: z.number().int().min(0).optional(),
       silence_after_ms: z.number().int().min(0).optional(),
-      no_answer_action: z.enum(['keep_ringing', 'fail', 'voicemail']).optional(),
+      no_answer_action: z.enum(['keep_ringing', 'fail']).optional(),
     })
     .optional(),
   priority: z.enum(['low', 'normal', 'high', 'urgent']).optional(),

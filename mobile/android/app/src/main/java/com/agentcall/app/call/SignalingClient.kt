@@ -30,6 +30,7 @@ sealed class VoiceBridgeEvent {
         val callerName: String,
         val createdAtMs: Long? = null,
         val expiresAtMs: Long? = null,
+        val clientInfoName: String? = null,
     ) : VoiceBridgeEvent()
     data class CallAnswered(val callId: String) : VoiceBridgeEvent()
     data class CallEnded(val callId: String) : VoiceBridgeEvent()
@@ -308,6 +309,9 @@ class SignalingClient @Inject constructor(
                     val callerName = payload.optString("callerName", "AI Agent")
                     val createdAtMs = payload.optString("createdAt", "").toEpochMsOrNull()
                     val expiresAtMs = payload.optString("expiresAt", "").toEpochMsOrNull()
+                    // Which MCP client requested the call — caller badge (Item 5).
+                    // Absent for older pushes: no badge, no crash.
+                    val clientInfoName = payload.optJSONObject("clientInfo")?.optString("name")?.takeIf { it.isNotBlank() }
                     // Defense in depth: a queued push whose ring window already
                     // expired (server queue TTL or clock skew) is stale — it
                     // must never ring.
@@ -316,7 +320,7 @@ class SignalingClient @Inject constructor(
                         return
                     }
                     Log.d(TAG, "[WS] call_incoming callId=$callId reason=$reason callerName=$callerName")
-                    _events.emit(VoiceBridgeEvent.CallIncoming(callId, reason, summary, callerName, createdAtMs, expiresAtMs))
+                    _events.emit(VoiceBridgeEvent.CallIncoming(callId, reason, summary, callerName, createdAtMs, expiresAtMs, clientInfoName))
                 }
                 "ai_message" -> {
                     val callId = payload?.getString("callId") ?: return

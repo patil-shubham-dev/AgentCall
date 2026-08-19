@@ -16,7 +16,6 @@ object MessageTemplates {
     private const val PREFS_NAME = "call_message_templates"
     private const val KEY_DECLINE = "decline_message"
     private const val KEY_LATER = "later_template"
-    private const val KEY_VOICEMAIL = "voicemail_message"
 
     val DECLINE_DEFAULT = "The user declined this call and is unavailable right now. " +
         "Please call me back when you're available: finish any task that doesn't need my " +
@@ -26,13 +25,6 @@ object MessageTemplates {
     val LATER_DEFAULT = "The user wants you to call back in {X} minutes. Please call me " +
         "back when the time is up: keep making progress on subtasks that don't need my " +
         "input, then call back and continue."
-
-    // Backlog item 5: "leave a voicemail" decline variant. Delivered through
-    // the same cancel path (ACTION_CANCEL_CALL + EXTRA_TEXT) so the persisted
-    // retry machinery carries it — no new transport.
-    val VOICEMAIL_DEFAULT = "The user missed your call and left this voicemail: " +
-        "\u201CI'm not free right now — please call me back when you're available and " +
-        "continue what you were working on.\u201D"
 
     // Backlog item 1: the "Call back" action on a missed-call row reuses the
     // outgoing-call flow; this prompt is carried as the outgoing call's
@@ -47,10 +39,6 @@ object MessageTemplates {
 
     /** The prompt carried by a missed-call "Call back" outgoing call. */
     fun callbackPrompt(context: Context): String = CALLBACK_PROMPT
-
-    fun voicemailMessage(context: Context): String {
-        return prefs(context).getString(KEY_VOICEMAIL, VOICEMAIL_DEFAULT) ?: VOICEMAIL_DEFAULT
-    }
 
     /**
      * Quiet-hours decline note (backlog item 6). The user's phone is silent
@@ -83,20 +71,12 @@ object MessageTemplates {
         prefs(context).edit().putString(KEY_LATER, text).commit()
     }
 
-    fun setVoicemailMessage(context: Context, text: String) {
-        prefs(context).edit().putString(KEY_VOICEMAIL, text).commit()
-    }
-
     fun resetDecline(context: Context) {
         prefs(context).edit().remove(KEY_DECLINE).commit()
     }
 
     fun resetLater(context: Context) {
         prefs(context).edit().remove(KEY_LATER).commit()
-    }
-
-    fun resetVoicemail(context: Context) {
-        prefs(context).edit().remove(KEY_VOICEMAIL).commit()
     }
 
     private const val KEY_QUIET_HOURS_TEMPLATE = "quiet_hours_template"

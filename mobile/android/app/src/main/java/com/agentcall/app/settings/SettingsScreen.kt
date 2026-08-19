@@ -3,6 +3,7 @@ package com.agentcall.app.settings
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -15,9 +16,11 @@ import androidx.compose.material.icons.automirrored.filled.AltRoute
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -47,6 +50,8 @@ import com.agentcall.app.data.api.AiKeyCreateRequest
 import com.agentcall.app.data.api.AiKeyCreateResponse
 import com.agentcall.app.data.api.AiKeyItem
 import com.agentcall.app.ui.composables.AmbientBackground
+import com.agentcall.app.ui.composables.Plate
+import com.agentcall.app.ui.composables.SectionLabel
 import com.agentcall.app.ui.theme.*
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
@@ -179,6 +184,15 @@ class SettingsViewModel @Inject constructor(
                 }
                 _createdKey.value = created
                 onDone()
+            } catch (e: retrofit2.HttpException) {
+                // 409 = unique-name rule (POST /api/v1/ai/keys rejects a name
+                // another key already has) — surface it as a real instruction,
+                // not an opaque "HTTP 409 Conflict".
+                _aiKeysError.value = if (e.code() == 409) {
+                    "An agent with this name already exists — pick a different name."
+                } else {
+                    e.message ?: "Failed to create AI key"
+                }
             } catch (e: Exception) {
                 _aiKeysError.value = e.message ?: "Failed to create AI key"
             } finally {
@@ -225,7 +239,6 @@ fun SettingsScreen(
     val context = LocalContext.current
     var declineTemplate by remember { mutableStateOf(MessageTemplates.declineMessage(context)) }
     var laterTemplate by remember { mutableStateOf(MessageTemplates.laterTemplateRaw(context)) }
-    var voicemailTemplate by remember { mutableStateOf(MessageTemplates.voicemailMessage(context)) }
 
     var showAddAiDialog by remember { mutableStateOf(false) }
     var keyToDelete by remember { mutableStateOf<AiKeyItem?>(null) }
@@ -251,13 +264,13 @@ fun SettingsScreen(
                     text = "Settings",
                     style = MaterialTheme.typography.headlineMedium,
                     color = MaterialTheme.colorScheme.onBackground,
-                    modifier = Modifier.padding(horizontal = 24.dp),
+                    modifier = Modifier.padding(horizontal = 20.dp),
                 )
                 Text(
                     text = "Configure your connection",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 24.dp),
+                    modifier = Modifier.padding(horizontal = 20.dp),
                 )
             }
         }
@@ -267,13 +280,16 @@ fun SettingsScreen(
                 .fillMaxSize()
                 .verticalScroll(rememberScrollState()),
         ) {
-            Spacer(modifier = Modifier.height(8.dp))
-
             // ── Server Connection ────────────────────────
             SettingsSection(title = "SERVER CONNECTION") {
                 GlassCard {
                     Column(modifier = Modifier.padding(16.dp)) {
-                        // Status row
+                        // Status row — 12dp lamp + mono readout, then hairline
+                        val lampColor = when (connectionStatus) {
+                            "Connected" -> Green400
+                            "Connecting...", "Reconnecting..." -> Amber400
+                            else -> LampOff
+                        }
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             val dotAnim by rememberInfiniteTransition(label = "connDot").animateFloat(
                                 0f, 1f,
@@ -282,11 +298,11 @@ fun SettingsScreen(
                             )
                             Box(
                                 modifier = Modifier
-                                    .size(10.dp)
+                                    .size(12.dp)
                                     .clip(CircleShape)
                                     .background(
-                                        if (connectionStatus == "Connected") Green500.copy(alpha = 0.5f + dotAnim * 0.5f)
-                                        else Amber400.copy(alpha = 0.5f + dotAnim * 0.5f)
+                                        if (lampColor != LampOff) lampColor.copy(alpha = 0.5f + dotAnim * 0.5f)
+                                        else LampOff
                                     ),
                             )
                             Spacer(modifier = Modifier.width(10.dp))
@@ -298,12 +314,17 @@ fun SettingsScreen(
                             Spacer(modifier = Modifier.weight(1f))
                             Text(
                                 text = connectionStatus,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = if (connectionStatus == "Connected") Green400 else Amber400,
-                                fontWeight = FontWeight.Medium,
+                                style = MonoLabel,
+                                color = if (lampColor == LampOff) {
+                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                } else {
+                                    lampColor
+                                },
                             )
                         }
 
+                        Spacer(modifier = Modifier.height(12.dp))
+                        HorizontalDivider(color = Slate700.copy(alpha = 0.6f))
                         Spacer(modifier = Modifier.height(12.dp))
 
                         Text(
@@ -513,7 +534,7 @@ fun SettingsScreen(
             }
 
             // ── Call Messages ────────────────────────────
-            SettingsSection(title = "CALL MESSAGES") {
+            CollapsibleSettingsSection(title = "CALL MESSAGES") {
                 GlassCard {
                     Column(modifier = Modifier.padding(16.dp)) {
                         var declineSaved by remember { mutableStateOf(false) }
@@ -570,29 +591,6 @@ fun SettingsScreen(
                             if (laterSaved) {
                                 delay(2000)
                                 laterSaved = false
-                            }
-                        }
-                        Spacer(modifier = Modifier.height(16.dp))
-                        var voicemailSaved by remember { mutableStateOf(false) }
-                        TemplateEditor(
-                            title = "Voicemail message",
-                            subtitle = "Sent to the AI when you leave a voicemail instead of declining",
-                            value = voicemailTemplate,
-                            onValueChange = { voicemailTemplate = it },
-                            onSave = {
-                                MessageTemplates.setVoicemailMessage(context, voicemailTemplate)
-                                voicemailSaved = true
-                            },
-                            onReset = {
-                                voicemailTemplate = MessageTemplates.VOICEMAIL_DEFAULT
-                                MessageTemplates.resetVoicemail(context)
-                            },
-                            saved = voicemailSaved,
-                        )
-                        LaunchedEffect(voicemailSaved) {
-                            if (voicemailSaved) {
-                                delay(2000)
-                                voicemailSaved = false
                             }
                         }
                     }
@@ -719,7 +717,7 @@ fun SettingsScreen(
             }
 
             // ── Network Info ──────────────────────────────
-            SettingsSection(title = "NETWORK INFO") {
+            CollapsibleSettingsSection(title = "NETWORK INFO") {
                 GlassCard {
                     Column(modifier = Modifier.padding(4.dp)) {
                         InfoRow(
@@ -778,7 +776,7 @@ fun SettingsScreen(
             }
 
             // ── About ─────────────────────────────────────
-            SettingsSection(title = "ABOUT") {
+            CollapsibleSettingsSection(title = "ABOUT") {
                 GlassCard {
                     Column(modifier = Modifier.padding(4.dp)) {
                         InfoRow(
@@ -875,6 +873,27 @@ private fun CreatedKeyCard(
     val headerSnippet = "claude mcp add --transport http $mcpUrl " +
         "--header \"Authorization: Bearer ${created.key}\""
     val urlSnippet = "$mcpUrl?key=${created.key}"
+    // Ready-to-paste MCP config blocks. "$schema" needs ${'$'} escaping inside
+    // the Kotlin template; the URL + key interpolate directly.
+    val desktopJson = """{
+  "mcpServers": {
+    "agentcall": {
+      "url": "$mcpUrl",
+      "headers": { "Authorization": "Bearer ${created.key}" }
+    }
+  }
+}"""
+    val opencodeJson = """{
+  "${'$'}schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "agentcall": {
+      "type": "remote",
+      "url": "$mcpUrl",
+      "enabled": true,
+      "headers": { "Authorization": "Bearer ${created.key}" }
+    }
+  }
+}"""
 
     fun copy(text: String) {
         val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
@@ -924,6 +943,24 @@ private fun CreatedKeyCard(
             )
             KeySnippet(text = urlSnippet, copyLabel = "Copy", onCopy = { copy(urlSnippet) })
 
+            Spacer(modifier = Modifier.height(10.dp))
+            Text(
+                text = "claude_desktop_config.json (Claude Desktop)",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontWeight = FontWeight.SemiBold,
+            )
+            KeySnippet(text = desktopJson, copyLabel = "Copy JSON", onCopy = { copy(desktopJson) }, maxLines = 10)
+
+            Spacer(modifier = Modifier.height(10.dp))
+            Text(
+                text = "opencode.json (OpenCode)",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontWeight = FontWeight.SemiBold,
+            )
+            KeySnippet(text = opencodeJson, copyLabel = "Copy JSON", onCopy = { copy(opencodeJson) }, maxLines = 10)
+
             Spacer(modifier = Modifier.height(12.dp))
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                 TextButton(onClick = onDismiss) {
@@ -939,6 +976,7 @@ private fun KeySnippet(
     text: String,
     copyLabel: String,
     onCopy: () -> Unit,
+    maxLines: Int = 4,
 ) {
     Surface(
         shape = RoundedCornerShape(8.dp),
@@ -949,7 +987,7 @@ private fun KeySnippet(
                 text = text,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 4,
+                maxLines = maxLines,
             )
             Spacer(modifier = Modifier.height(6.dp))
             TextButton(onClick = onCopy, modifier = Modifier.padding(0.dp)) {
@@ -963,27 +1001,58 @@ private fun KeySnippet(
 
 @Composable
 private fun SettingsSection(title: String, content: @Composable () -> Unit) {
-    Column(modifier = Modifier.padding(horizontal = 16.dp)) {
-        Text(
-            text = title,
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            fontWeight = FontWeight.SemiBold,
-            letterSpacing = 1.2.sp,
-            modifier = Modifier.padding(start = 4.dp, bottom = 8.dp, top = 12.dp),
-        )
+    Column(modifier = Modifier.padding(horizontal = 20.dp)) {
+        Spacer(modifier = Modifier.height(24.dp))
+        SectionLabel(title = title)
+        Spacer(modifier = Modifier.height(10.dp))
         content()
+    }
+}
+
+/**
+ * Section label row with a chevron; the plate below expands/collapses
+ * smoothly. Collapsed by default (Call Messages, Network Info, About).
+ */
+@Composable
+private fun CollapsibleSettingsSection(title: String, content: @Composable () -> Unit) {
+    var expanded by rememberSaveable { mutableStateOf(false) }
+    val chevronRotation by animateFloatAsState(
+        targetValue = if (expanded) 180f else 0f,
+        animationSpec = tween(200),
+        label = "chevron",
+    )
+    Column(modifier = Modifier.padding(horizontal = 20.dp)) {
+        Spacer(modifier = Modifier.height(24.dp))
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(Radii.Pill))
+                .clickable { expanded = !expanded }
+                .padding(vertical = 14.dp, horizontal = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            SectionLabel(title = title, modifier = Modifier.weight(1f))
+            Icon(
+                imageVector = Icons.Default.ExpandMore,
+                contentDescription = if (expanded) "Collapse $title" else "Expand $title",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(20.dp).rotate(chevronRotation),
+            )
+        }
+        Spacer(modifier = Modifier.height(10.dp))
+        AnimatedVisibility(
+            visible = expanded,
+            enter = fadeIn() + expandVertically(),
+            exit = fadeOut() + shrinkVertically(),
+        ) {
+            content()
+        }
     }
 }
 
 @Composable
 private fun GlassCard(content: @Composable () -> Unit) {
-    Surface(
-        shape = RoundedCornerShape(16.dp),
-        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f),
-        tonalElevation = 2.dp,
-        shadowElevation = 4.dp,
-    ) {
+    Plate(containerShape = RoundedCornerShape(Radii.Panel)) {
         content()
     }
 }

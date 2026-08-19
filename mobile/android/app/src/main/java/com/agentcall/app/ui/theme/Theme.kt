@@ -11,30 +11,50 @@ import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
 
+// ── THE CONTROL BOARD — direction contract ──
+// THESIS: The app is an industrial control panel — the user is the operator
+// on watch, agents are equipment on the line, a call lights the board. It
+// refuses the category default of dark navy, purple gradients and glass.
+// OWN-WORLD: machined graphite panels with brushed-aluminum hairlines, LED
+// status lamps (green lit / amber busy / red destructive / unlit idle),
+// phosphor-cyan readouts, mono data, Black-weight industrial caps, per-agent
+// identity ribbons. Flat machined plates, minimal radii, no glassmorphism.
+// STORY: status is readable at a glance by lamp; the server line, agent
+// presence and live calls read like instrument state.
+// FIRST VIEWPORT: graphite Home — AGENTCALL plate header, line-status lamp,
+// 2x2 grid of agent plates with lamps, engraved names, mono last-seen,
+// machined Home/Settings keys.
+// FORM: direction "The Control Board", seed key 8a6269ca, code-led (no comp;
+// ambition carried by this contract, audited on device screenshots).
+// FINISH: unreviewed and undocumented is unfinished; this build ends with
+// the finish review, the verdict, DESIGN.md, and every shipping raster
+// carrying its provenance.
+
 // ── Dark Color Scheme ───────────────────────
 private val DarkColorScheme = darkColorScheme(
     primary = Indigo500,
     onPrimary = Slate50,
-    primaryContainer = Indigo700,
+    primaryContainer = Indigo800,
     onPrimaryContainer = Indigo200,
-    secondary = Indigo400,
+    secondary = Phosphor,
     onSecondary = Slate950,
     tertiary = Amber400,
     onTertiary = Slate950,
-    background = Slate900,
+    background = Slate850,
     onBackground = Slate50,
     surface = Slate800,
     onSurface = Slate50,
-    surfaceVariant = Slate700,
+    surfaceVariant = Slate750,
     onSurfaceVariant = Slate400,
     error = Red500,
     onError = Slate50,
     errorContainer = Red600,
+    onErrorContainer = Slate50,
     outline = Slate600,
     outlineVariant = Slate700,
     inverseSurface = Slate200,
     inverseOnSurface = Slate900,
-    inversePrimary = Indigo600,
+    inversePrimary = Indigo400,
     surfaceTint = Indigo500,
 )
 

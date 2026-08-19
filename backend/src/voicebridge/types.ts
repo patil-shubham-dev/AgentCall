@@ -15,6 +15,11 @@ export interface VoiceMessage {
   createdAt: string;
 }
 
+export interface ClientInfo {
+  name: string;
+  version?: string;
+}
+
 export interface VoiceCallSession {
   id: string;
   userId: string;
@@ -27,6 +32,8 @@ export interface VoiceCallSession {
     summary: string;
     options?: string[];
   };
+  /** The MCP client/harness that created the call (ChatGPT, Claude, ...). */
+  clientInfo?: ClientInfo;
   messages: VoiceMessage[];
   result?: {
     transcriptSummary?: string;
@@ -45,8 +52,6 @@ export interface VoiceCallSession {
   retentionExpiresAt?: string;
 }
 
-export type CallOrigin = 'agent' | 'user';
-
 export interface CreateCallInput {
   userId: string;
   agentId: string;
@@ -55,12 +60,8 @@ export interface CreateCallInput {
   taskId?: string;
   options?: string[];
   priority?: CallPriority;
-  /**
-   * Who initiated the call. 'user' = outbound call from the phone app:
-   * the ring gate is skipped entirely — ringing the calling phone itself
-   * would be wrong — and the call waits for the AI to answer.
-   */
-  origin?: CallOrigin;
+  /** MCP client that requested the call (name/version from initialize). */
+  clientInfo?: ClientInfo;
 }
 
 

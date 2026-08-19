@@ -13,9 +13,11 @@ import type { SessionRepository, CallbackRepository } from './voicebridge/reposi
 import {
   createAiKey,
   deleteAiKey,
+  findKeyIdByName,
   listAiKeyStatuses,
   isAiKeyOnlineByName,
   listAiKeys,
+  renameAiKey,
   resolveAiKey,
   DEFAULT_AGENT_NAME,
 } from './voicebridge/ai-keys.js';
@@ -222,8 +224,7 @@ export function registerRoutes(app: FastifyInstance, opts: RouteOptions): void {
     const taskId = (body.context as Record<string, unknown> | undefined)?.task_id as string | undefined;
     const options = (body.context as Record<string, unknown> | undefined)?.options as string[] | undefined;
     const priority = body.priority as string ?? 'normal';
-    const origin = body.origin as string ?? body.caller as string ?? 'agent';
-    logger.debug({ userId, agentId, summary, reason, taskId, options, priority, origin, elapsed: Date.now() - start }, '[CALLS] step 2 - parsed fields');
+    logger.debug({ userId, agentId, summary, reason, taskId, options, priority, elapsed: Date.now() - start }, '[CALLS] step 2 - parsed fields');
 
     if (!summary) {
       return reply.status(400).send({ error: 'VALIDATION_ERROR', message: 'summary is required in context' });
@@ -234,15 +235,10 @@ export function registerRoutes(app: FastifyInstance, opts: RouteOptions): void {
       return reply.status(400).send({ error: 'VALIDATION_ERROR', message: `reason must be one of: ${validReasons.join(', ')}` });
     }
 
-    if (origin !== 'agent' && origin !== 'user') {
-      return reply.status(400).send({ error: 'VALIDATION_ERROR', message: 'origin must be "agent" or "user"' });
-    }
-
     logger.debug({ elapsed: Date.now() - start }, '[CALLS] step 3 - before createCall');
     const session = await voicebridge.createCall({
       userId, agentId, reason: reason as CreateCallInput['reason'],
       summary, taskId, options, priority: priority as CreateCallInput['priority'],
-      origin: origin as 'agent' | 'user',
     });
     logger.debug({ callId: session.id, elapsed: Date.now() - start }, '[CALLS] step 4 - after createCall');
 
@@ -279,6 +275,9 @@ export function registerRoutes(app: FastifyInstance, opts: RouteOptions): void {
       result: session.result ?? null,
       ai_wait: opts.voicebridge.getAiWaitStatus(callId),
       message_count: session.messages.length,
+      // Which MCP client requested the call — the phone renders it as a caller
+      // badge. Null for calls from the (removed) outbound app flow / older pushes.
+      client_info: session.clientInfo ?? null,
     };
   });
 
@@ -614,6 +613,12 @@ export function registerRoutes(app: FastifyInstance, opts: RouteOptions): void {
     if (!name || name.length > 50) {
       return reply.status(400).send({ error: 'VALIDATION_ERROR', message: 'name is required (max 50 chars)' });
     }
+    // Unique-name rule: a display name may belong to at most one key, so a
+    // delete/rename keyed by name can never become ambiguous (the bug class
+    // the whole keyId fix is about). Duplicate → 409, no key created.
+    if (await findKeyIdByName(name)) {
+      return reply.status(409).send({ error: 'NAME_CONFLICT', message: 'An agent with this name already exists' });
+    }
     const created = await createAiKey(name);
     metrics?.incrementCounter('ai_keys.created');
     return reply.status(201).send({
@@ -699,6 +704,30 @@ export function registerRoutes(app: FastifyInstance, opts: RouteOptions): void {
     }
     metrics?.incrementCounter('ai_keys.deleted');
     return { status: 'deleted', key_id: keyId };
+  });
+
+  app.patch('/api/v1/ai/keys/:keyId', async (request, reply) => {
+    const auth = (request as FastifyRequest & { auth: AuthContext }).auth;
+    if (auth.role !== 'service' && auth.role !== 'user') {
+      return reply.status(403).send({ error: 'FORBIDDEN', message: 'Not permitted' });
+    }
+    const { keyId } = request.params as { keyId: string };
+    const name = String((request.body as Record<string, unknown> | undefined)?.name ?? '').trim();
+    if (!name || name.length > 50) {
+      return reply.status(400).send({ error: 'VALIDATION_ERROR', message: 'name is required (max 50 chars)' });
+    }
+    // Same unique-name rule as POST: renaming onto another key's name → 409.
+    // Renaming a key to its own current name stays a harmless no-op (200).
+    const existingId = await findKeyIdByName(name);
+    if (existingId && existingId !== keyId) {
+      return reply.status(409).send({ error: 'NAME_CONFLICT', message: 'An agent with this name already exists' });
+    }
+    const renamed = await renameAiKey(keyId, name);
+    if (!renamed) {
+      return reply.status(404).send({ error: 'NOT_FOUND', message: 'AI key not found' });
+    }
+    metrics?.incrementCounter('ai_keys.renamed');
+    return { key_id: keyId, name };
   });
 
   app.post('/api/v1/phone/register', async (request, reply) => {

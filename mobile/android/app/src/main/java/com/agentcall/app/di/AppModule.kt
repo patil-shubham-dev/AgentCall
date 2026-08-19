@@ -44,7 +44,7 @@ object AppModule {
         // quick replies). The destructive fallback stays DEBUG-only as a dev
         // convenience for mid-development schema changes — never a release
         // strategy.
-        builder.addMigrations(AgentCallDatabase.MIGRATION_1_2)
+        builder.addMigrations(AgentCallDatabase.MIGRATION_1_2, AgentCallDatabase.MIGRATION_2_3)
         if (BuildConfig.DEBUG) {
             builder.fallbackToDestructiveMigration()
         }

@@ -164,33 +164,6 @@ review is easy. Do NOT run `lintDebug` on this offline machine (it fails at
 
 ---
 
-### Item 5 — Voicemail on decline
-
-**Status:** `[DONE]` (2026-08-12 session 2; manual E2E pending) · **Why:** declining is the worst outcome for the caller — the agent never
-learns why; a voicemail lets the user leave intent and the agent acts on it next time.
-
-**Current state (verified):**
-- Decline (IncomingCallActivity.kt:225-231) sends `ACTION_CANCEL_CALL` + `EXTRA_TEXT = MessageTemplates.declineMessage(this)`.
-- `MessageTemplates.kt` exposes `declineMessage/laterMessage/laterTemplateRaw` + setters, SharedPreferences-backed (`settings/MessageTemplates.kt:29-59`).
-- Local message persistence + retry channels already exist (`KEY_PENDING_CANCELS`, `enqueueUserText`).
-
-**Design decisions:**
-- Add a third decline variant: **"Leave voicemail"** → new `MessageTemplates.voicemailMessage(context)` (default: "I missed your call — please call me back when you're available."), delivered through the **same cancel path** (`ACTION_CANCEL_CALL` + `EXTRA_TEXT`), so the existing `attemptCancel` + `savePendingNote` machinery carries it — no new transport.
-- Store the voicemail locally as a user message in the call's transcript (`saveUserTextMessage`-style) so it appears in history even before the agent syncs. `[VERIFY]` `CallRepository` has a suitable method (`saveUserTextMessage` exists per CallViewModel usage).
-- UX: voicemail button only while ringing (same row as decline), mic icon.
-
-**Implementation steps:**
-1. `MessageTemplates`: add `voicemailMessage` + persistence key + reset.
-2. `IncomingCallActivity`: third button (mic badge), wires `ACTION_CANCEL_CALL` + voicemail text; keep decline/later untouched.
-3. `CallRepository`: persist voicemail text into the call's transcript (guard against duplicate writes — voicemail is written once at cancel).
-4. Settings → templates: expose voicemail editing (matches existing template editors).
-
-**Verification:** unit — template default + edit round-trip; manual — decline with voicemail, check history transcript shows the message and backend receives `CANCEL` with the text.
-
-**Risks:** duplicate delivery if cancel retries — idempotency note: text arrives once per call id (existing retry uses `attemptCancel` which is idempotent; store-once flag keyed by callId).
-
----
-
 ### Item 6 — Quiet hours / per-agent DND
 
 **Status:** `[DONE]` (2026-08-12 session 2 — mobile-side per user decision; manual E2E pending) · **Why:** the biggest trust feature for a calling app — the product must
@@ -335,7 +308,7 @@ own its chips.
 5. **Mute**: toggle mute mid-call → agent TTS suppressed + notification reads "Muted"; unmute restores.
 6. **Speaker**: toggle → audio routes to speaker (verify via `setCommunicationDevice` after Item 11).
 7. **Reconnect**: airplane mode 10 s mid-call → banner "Reconnecting — the call stays live" → disable airplane mode → call resumes; if link stays dead → ENDED.
-8. **Decline paths**: decline / call-back-later / voicemail (Item 5) — each ends the ring and records correctly.
+8. **Decline paths**: decline / call-back-later — each ends the ring and records correctly.
 9. **Missed**: let ring TTL expire → silent missed notification (backgrounded) → history "Missed" → Call back works.
 10. **Battery**: end a call, wait 2 min, verify no wake lock / no TTS engine held (Item 13 checklist).
 
@@ -641,7 +614,6 @@ the calling AI via the decline/cancel note — no backend changes. **Item 1:** `
 missed-call notification when backgrounded → deep link to profile. **Item 2 (mobile half):**
 `ApiService.getAgentStatus` + `HomeViewModel.agentStatus` + "Last seen" chip. **Item 3:**
 summary derived from last AI message, sent with COMPLETE, persisted + rendered in history.
-**Item 5:** voicemail template + 4th ring button + local transcript write via the cancel path.
 **Item 7/9:** Room `Migration(1,2)` (`ringtoneUri`, `ringtoneLabel`, `quickReplies` — schema v2
 exported), per-agent tune resolution at ring time, ringtone picker + quick-replies editor on
 the profile screen, `CallViewModel` merges profile chips over server options. **Item 12:**
@@ -650,9 +622,9 @@ pure `CallStateMachine` extracted (`call/state/`), ViewModel delegates, JUnit ma
 `releaseCallResources()` + TTS idle shutdown (60 s, re-init on demand) + `callId` reset on
 end. **Item 17:** Phase A audit documented, Settings Privacy & Data section added. Verified:
 backend typecheck + lint + 164 tests green; `assembleDebug` green offline. **Review fix
-(Item 1 + 5 correctness):** the reviewer caught that unanswered rings created no
+(Item 1 correctness):** the reviewer caught that unanswered rings created no
 `call_records` row — `saveCallEnded("expired")` no-oped, the missed notification was
-silently dropped, and decline/voicemail note inserts hit the transcript FK. Fixed by
+silently dropped, and decline note inserts hit the transcript FK. Fixed by
 `CallRepository.markCallRinging` (row created when the ring starts) + handling
 `CallExpired`/`CallEnded`/`CallCancelled` in `SignalingForegroundService`, plus the
 `AgentStatus` chip now mints its phone token first and `onNewIntent` re-evaluates quiet

@@ -57,7 +57,7 @@ class SignalingForegroundService : Service() {
     private val recentlyRung = ArrayDeque<Pair<String, Long>>()
     // Ring metadata by callId (callerName to summary) — needed when the ring
     // later expires/cancels and the phone must record the outcome.
-    private val ringCallers = mutableMapOf<String, Pair<String, String>>()
+    private val ringCallers = mutableMapOf<String, Triple<String, String, String?>>()
     @Volatile private var foregroundStarted = false
     @Volatile private var lastFcmRegisterMs = 0L
 
@@ -73,7 +73,7 @@ class SignalingForegroundService : Service() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(disconnectReceiver, filter, RECEIVER_NOT_EXPORTED)
         } else {
-            registerReceiver(disconnectReceiver, filter)
+            registerReceiver(disconnectReceiver, filter, RECEIVER_NOT_EXPORTED)
         }
         eventsJob = scope.launch {
             signalingClient.events.collect { event ->
@@ -248,15 +248,19 @@ class SignalingForegroundService : Service() {
         }
         if (session != null && (session == "pending" || session == "active")) {
             val agentId = event.callerName.lowercase().replace("\\s+".toRegex(), "-")
-            callRepository.ensureProfileExists(agentId, event.callerName)
+            // Canonical profile id: survives server-side renames (the slug may
+            // point at a renamed agent's pre-rename profile, which ensure
+            // resolves by keyId). History must attach to the canonical id or a
+            // renamed agent's calls split across two profiles.
+            val profileId = callRepository.ensureProfileExists(agentId, event.callerName)
             // A ring is a call: create the history row now so decline notes,
             // expiry and answer all have a record to update (backlog item 1).
-            callRepository.markCallRinging(event.callId, agentId, event.callerName, event.createdAtMs ?: System.currentTimeMillis())
-            ring(event.callId, event.callerName, event.summary)
+            callRepository.markCallRinging(event.callId, profileId, event.callerName, event.createdAtMs ?: System.currentTimeMillis())
+            ring(event.callId, event.callerName, event.summary, event.clientInfoName)
         }
     }
 
-    private fun ring(callId: String, callerName: String, summary: String) {
+    private fun ring(callId: String, callerName: String, summary: String, clientInfoName: String? = null) {
         if (callId == ringingCallId) return
         if (wasRecentlyRung(callId)) {
             Log.i(TAG, "[RING] skipping repeat ring callId=$callId (recently rung)")
@@ -266,14 +270,14 @@ class SignalingForegroundService : Service() {
         noteActivity()
         Log.i(TAG, "[RING] ringing callId=$callId caller=$callerName")
         logRingDiagnostics()
-        ringCallers[callId] = callerName to summary
+        ringCallers[callId] = Triple(callerName, summary, clientInfoName)
         ringingCallId = callId
         // Backlog item 6: during quiet hours the ring is silent (dedicated
         // channel) but the full-screen UI still shows, so the user can answer
         // an important call. The AI learns about the window through the
         // auto-decline note below — never by assuming, never without a call.
         val quiet = quietHoursManager.isQuietNow(callerName)
-        CallService.showIncomingCallNotification(this, callId, callerName, summary, quiet = quiet)
+        CallService.showIncomingCallNotification(this, callId, callerName, summary, quiet = quiet, clientInfoName = clientInfoName)
         // Pre-bind and warm the TTS engine now so the first spoken word after
         // the user answers never pays the engine bind/voice-load cost.
         try {

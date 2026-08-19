@@ -26,6 +26,13 @@ Thumbs.db
 *.log
 backend/logs/
 
+# Local E2E / probe harnesses and stray build output (never commit)
+backend/pcprobe*.mjs
+backend/scripts/_firebase-setup/
+androidx/
+.impeccable/
+.opencode/
+
 # Build output
 backend/dist/
 

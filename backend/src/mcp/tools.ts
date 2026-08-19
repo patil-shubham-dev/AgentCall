@@ -95,6 +95,8 @@ export function createTools(voicebridge: VoiceBridgeService): McpTool[] {
             taskId: context.task_id as string | undefined,
             options: context.options as string[] | undefined,
             priority: (args.priority as 'low' | 'normal' | 'high' | 'urgent' | undefined) ?? 'normal',
+            // Caller badge for the phone UI: which MCP client asked for the call.
+            clientInfo: identity.clientInfo,
           });
           return text(JSON.stringify({
             call_id: session.id,

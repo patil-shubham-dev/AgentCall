@@ -40,45 +40,8 @@ class CallerTuneManager @Inject constructor(
         }
     }
 
-    // ── Per-agent tunes (backlog item 7) ─────────────────────────
-    // Precedence: agent tune -> global tune -> system default. Agent tunes
-    // are keyed by the agent's id (the slugified name) and stored in the same
-    // prefs file, so a reset-to-default for the global tune never touches them.
-
-    fun hasAgentTune(agentId: String): Boolean =
-        prefs.contains(agentKey(agentId, KEY_AGENT_URI)) ||
-            prefs.contains(agentKey(agentId, KEY_AGENT_LABEL))
-
-    fun getUriForAgent(agentId: String): Uri {
-        val stored = prefs.getString(agentKey(agentId, KEY_AGENT_URI), null)
-        if (stored != null) return Uri.parse(stored)
-        return uri
-    }
-
-    fun getLabelForAgent(agentId: String): String {
-        return prefs.getString(agentKey(agentId, KEY_AGENT_LABEL), null) ?: label
-    }
-
-    fun setAgentUri(agentId: String, uri: Uri, label: String) {
-        prefs.edit {
-            putString(agentKey(agentId, KEY_AGENT_URI), uri.toString())
-            putString(agentKey(agentId, KEY_AGENT_LABEL), label)
-        }
-    }
-
-    fun resetAgentUri(agentId: String) {
-        prefs.edit {
-            remove(agentKey(agentId, KEY_AGENT_URI))
-            remove(agentKey(agentId, KEY_AGENT_LABEL))
-        }
-    }
-
-    private fun agentKey(agentId: String, suffix: String) = "agent:$agentId:$suffix"
-
     companion object {
         private const val KEY_TUNE_URI = "caller_tune_uri"
         private const val KEY_TUNE_LABEL = "caller_tune_label"
-        private const val KEY_AGENT_URI = "uri"
-        private const val KEY_AGENT_LABEL = "label"
     }
 }
