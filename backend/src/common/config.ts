@@ -33,6 +33,13 @@ export const config = {
     rateLimitMessages: parseIntSafe('SIGNALING_RATE_LIMIT_MESSAGES', '30'),
     rateLimitWindowSec: parseIntSafe('SIGNALING_RATE_LIMIT_WINDOW', '10'),
     connectionRateLimit: parseIntSafe('SIGNALING_CONNECTION_RATE_LIMIT', '10'),
+    // Battery audit M1: server→phone heartbeat cadence for dead-connection
+    // detection on the /phone socket. Default 60s matches the phone's OkHttp
+    // pingInterval so both directions wake the radio on the same clock
+    // instead of stacking (the previous hardcoded 25s dominated keepalive
+    // traffic). With idle-park routing rings through FCM, slower liveness
+    // detection costs nothing user-visible, so sub-minute pings earn nothing.
+    heartbeatMs: parseIntSafe('SIGNALING_HEARTBEAT_MS', '60000'),
   },
 
   security: {

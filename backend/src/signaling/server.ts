@@ -74,7 +74,9 @@ function startEvictionTimer(): NodeJS.Timeout {
   }, 30_000).unref();
 }
 
-const HEARTBEAT_INTERVAL_MS = 25_000;
+// Battery audit M1: heartbeat cadence is configuration, not a constant —
+// see config.signaling.heartbeatMs for the default's justification.
+const HEARTBEAT_INTERVAL_MS = config.signaling.heartbeatMs;
 
 export function createSignalingServer(server: Server): WebSocketServer {
   const wss = new WebSocketServer({ server, path: '/phone' });
