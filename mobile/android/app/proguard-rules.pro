@@ -15,3 +15,7 @@
 -keepclasseswithmembers class com.agentcall.app.** {
     kotlinx.serialization.KSerializer serializer(...);
 }
+
+# sherpa-onnx (bundled Piper TTS, backlog item 11): JNI entry points are
+# resolved by name from native code — R8 must not strip or rename them.
+-keep class com.k2fsa.sherpa.onnx.** { *; }

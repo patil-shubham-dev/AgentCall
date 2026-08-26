@@ -10,6 +10,13 @@
         <activity
             android:name=".call.CallActivity"
             android:exported="true" />
+
+        <!-- Debug-only test hook (battery-audit H2 verification): lets adb start
+             a real call session on ROMs that block shell starts of non-exported
+             services. Not present in release builds (src/debug overlay). -->
+        <receiver
+            android:name=".debug.DebugCallTriggerReceiver"
+            android:exported="true" />
     </application>
 
 </manifest>

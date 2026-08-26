@@ -21,6 +21,9 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
         buildConfigField("String", "DEFAULT_HOST", "\"agentcall-66ke.onrender.com\"")
+        ndk {
+            abiFilters += listOf("arm64-v8a")
+        }
     }
 
     buildTypes {
@@ -67,6 +70,8 @@ dependencies {
     implementation(libs.navigation.compose)
     implementation(libs.core.ktx)
     implementation(libs.lifecycle.runtime.compose)
+    implementation(libs.lifecycle.runtime.ktx)
+    implementation(libs.lifecycle.process)
     implementation(libs.lifecycle.viewmodel.compose)
 
     // Networking
@@ -79,6 +84,11 @@ dependencies {
 
     // FCM push-to-wake (Phase A)
     implementation(libs.firebase.messaging)
+
+    // Bundled offline Piper TTS (backlog item 11): sherpa-onnx AAR with the
+    // model bundled in assets/piper. File dependency (RepositoriesMode
+    // FAIL_ON_PROJECT_REPOS forbids maven() project repos).
+    implementation(files("libs/sherpa-onnx-1.13.6.aar"))
 
     // DI
     implementation(libs.hilt.android)
