@@ -225,6 +225,7 @@ class SettingsViewModel @Inject constructor(
 fun SettingsScreen(
     viewModel: SettingsViewModel = hiltViewModel(),
     onReconnect: () -> Unit = {},
+    onOpenBatteryHelp: () -> Unit = {},
 ) {
     val serverHost by viewModel.serverHost.collectAsStateWithLifecycle()
     val connectionStatus by viewModel.connectionStatus.collectAsStateWithLifecycle()
@@ -490,6 +491,20 @@ fun SettingsScreen(
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             lineHeight = 16.sp,
+                        )
+                    }
+                }
+            }
+
+            // ── Call Reliability ────────────────────────
+            SettingsSection(title = "CALL RELIABILITY") {
+                GlassCard {
+                    Column(modifier = Modifier.padding(4.dp)) {
+                        InfoRow(
+                            icon = Icons.Default.BatteryAlert,
+                            title = "Battery optimization & autostart",
+                            subtitle = "Ensure AgentCall can wake for calls",
+                            onClick = onOpenBatteryHelp,
                         )
                     }
                 }
@@ -1051,7 +1066,7 @@ private fun CollapsibleSettingsSection(title: String, content: @Composable () ->
 }
 
 @Composable
-private fun GlassCard(content: @Composable () -> Unit) {
+internal fun GlassCard(content: @Composable () -> Unit) {
     Plate(containerShape = RoundedCornerShape(Radii.Panel)) {
         content()
     }

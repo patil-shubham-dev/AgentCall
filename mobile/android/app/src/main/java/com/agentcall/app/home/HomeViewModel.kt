@@ -1,5 +1,8 @@
 package com.agentcall.app.home
 
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.ProcessLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.agentcall.app.call.SignalingClient
@@ -10,7 +13,7 @@ import com.agentcall.app.data.api.ApiService
 import com.agentcall.app.data.api.AiKeyItem
 import com.agentcall.app.data.database.entity.AiProfileEntity
 import com.agentcall.app.data.repository.CallRepository
-import com.agentcall.app.data.repository.DeleteOutcome
+import com.agentcall.app.settings.BatteryOptimizationManager
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -20,6 +23,8 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -47,6 +52,7 @@ object ServerConfigEvent {
 class HomeViewModel @Inject constructor(
     private val signalingClient: SignalingClient,
     private val repository: CallRepository,
+    private val batteryOptimizationManager: BatteryOptimizationManager,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(HomeUiState())
@@ -62,7 +68,9 @@ class HomeViewModel @Inject constructor(
 
     /**
      * Per-agent online status + last-seen (backlog item 2), keyed by agent
-     * name. Fetched from GET /agents/:id/status on connect — never polled.
+     * name. Fetched on connect and profile changes through a short-TTL cache
+     * (battery audit M5) so the Connected event and a profiles emission that
+     * land together cost one GET per agent, not two rounds of N.
      * Errors degrade to an empty map (chips simply don't show).
      */
     private val _agentStatus = MutableStateFlow<Map<String, AgentStatusResponse>>(emptyMap())
@@ -72,20 +80,39 @@ class HomeViewModel @Inject constructor(
     val snackbarEvents: SharedFlow<String> = _snackbarEvents.asSharedFlow()
 
     /**
-     * Set when the user tried to delete a profile whose key no longer exists
-     * on the server (zero matches or a 404). The Home screen shows a
-     * local-only removal dialog while this is non-null.
+     * One-shot battery-optimization onboarding (ColorOS Doze finding): shown
+     * once, after the app is actually set up (connected + at least one agent)
+     * and the user hasn't already dismissed it. Non-blocking — a banner, not
+     * a gate. Reachable any time from Settings > Call Reliability.
      */
-    private val _orphanDeleteTarget = MutableStateFlow<AiProfileEntity?>(null)
-    val orphanDeleteTarget: StateFlow<AiProfileEntity?> = _orphanDeleteTarget.asStateFlow()
+    private val _showBatteryBanner = MutableStateFlow(false)
+    val showBatteryBanner: StateFlow<Boolean> = _showBatteryBanner.asStateFlow()
 
     private var eventsJob: kotlinx.coroutines.Job? = null
 
+    // Battery audit M5: TTL gate for the N-per-agent status GETs. Both the
+    // Connected handler and the profiles collector fire on the same connect;
+    // within AGENT_STATUS_TTL_MS only the first round trips.
+    @Volatile
+    private var lastAgentStatusFetchMs = 0L
+
     init {
         viewModelScope.launch {
+            // Battery audit H1: isConnected is now derived from connection
+            // state itself, not from an event that was never emitted.
+            // CONNECTING leaves the flag alone (transient flap must not blink
+            // the UI false); DISCONNECTED and RECONNECTING are truthfully
+            // "not connected" — the socket cannot deliver anything right now.
             signalingClient.connectionState.collect { state ->
+                val connected = when (state) {
+                    SignalingClient.ConnectionState.CONNECTED -> true
+                    SignalingClient.ConnectionState.DISCONNECTED -> false
+                    SignalingClient.ConnectionState.RECONNECTING -> false
+                    SignalingClient.ConnectionState.CONNECTING -> _uiState.value.isConnected
+                }
                 _uiState.value = _uiState.value.copy(
                     isReconnecting = state == SignalingClient.ConnectionState.RECONNECTING,
+                    isConnected = connected,
                     statusText = when (state) {
                         SignalingClient.ConnectionState.CONNECTING -> "Connecting..."
                         SignalingClient.ConnectionState.RECONNECTING -> "Reconnecting..."
@@ -93,6 +120,19 @@ class HomeViewModel @Inject constructor(
                         SignalingClient.ConnectionState.CONNECTED -> _uiState.value.statusText
                     },
                 )
+            }
+        }
+
+        viewModelScope.launch {
+            combine(
+                signalingClient.connectionState,
+                profiles,
+            ) { connection, agents ->
+                connection == SignalingClient.ConnectionState.CONNECTED &&
+                    agents.isNotEmpty() &&
+                    batteryOptimizationManager.shouldShowBanner()
+            }.collect { visible ->
+                _showBatteryBanner.value = visible
             }
         }
 
@@ -121,12 +161,22 @@ class HomeViewModel @Inject constructor(
         }
 
         viewModelScope.launch {
-            // Availability poll with exponential backoff on failure so a flaky
-            // network never turns into a fixed 15s hammering loop.
-            val backoffMs = longArrayOf(15_000, 30_000, 60_000, 120_000)
-            var failureStreak = 0
-            while (true) {
-                if (_uiState.value.isConnected) {
+            // Battery audit H1: the availability refresh exists to keep the
+            // Home chips honest while a user can see them. Two lifecycle-aware
+            // gates replace the old always-running loop:
+            //  1. ProcessLifecycleOwner.repeatOnLifecycle(STARTED) — going to
+            //     the background CANCELS this coroutine tree, so nothing fires
+            //     for however long the process survives (critical for users
+            //     who granted battery-optimization exemption, where Doze will
+            //     not mask background work).
+            //  2. collectLatest on connectionState — each cycle is keyed to an
+            //     actual CONNECTED emission; disconnected/parked costs zero
+            //     requests because rings arrive via FCM/WS push regardless.
+            // Cadence itself lives in the pure AvailabilityPollCadence object.
+            ProcessLifecycleOwner.get().lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+                var failureStreak = 0
+                signalingClient.connectionState.collectLatest { state ->
+                    if (state != SignalingClient.ConnectionState.CONNECTED) return@collectLatest
                     val ok = runCatching {
                         ApiClient.ensurePhoneToken()
                         ApiClient.create<ApiService>().listAiKeys()
@@ -135,9 +185,7 @@ class HomeViewModel @Inject constructor(
                         repository.reconcileProfileKeyIds()
                     }.isSuccess
                     failureStreak = if (ok) 0 else failureStreak + 1
-                    delay(backoffMs[failureStreak.coerceIn(0, backoffMs.lastIndex)])
-                } else {
-                    delay(15_000)
+                    delay(AvailabilityPollCadence.computeDelayMs(ok, failureStreak))
                 }
             }
         }
@@ -191,26 +239,30 @@ class HomeViewModel @Inject constructor(
     }
 
     /**
-     * Permanently delete an agent: revoke its backend AI key (so the agent
-     * can no longer authenticate), then remove its profile + call history.
-     * The profile row disappears from the grid immediately (Room flow). If
-     * the server-side revocation fails, nothing is deleted and the exact
-     * reason is shown — never a silent partial delete. When the server
-     * confirms the key is already gone (nothing left to revoke), the user is
-     * offered the local-only removal dialog instead of an error.
+     * Permanently dismiss the one-time battery-optimization banner for this
+     * install. The onboarding stays reachable from Settings > Call Reliability.
+     */
+    fun dismissBatteryBanner() {
+        batteryOptimizationManager.onboardingShown = true
+        _showBatteryBanner.value = false
+    }
+
+    /**
+     * Permanently delete an agent from this device: profile + call history +
+     * transcripts, nothing else. No server call — the MCP key on the
+     * AI/harness side keeps working, so the agent can still call again (a
+     * fresh profile is recreated on the next ring). Delete the key in
+     * Settings to remove the agent from the system entirely. Allowed while a
+     * call is live: the call itself is unaffected, only its history row is
+     * gone.
      */
     fun deleteAgent(profile: AiProfileEntity) {
         viewModelScope.launch {
             try {
-                when (val outcome = repository.deleteAgent(profile)) {
-                    DeleteOutcome.RevokedAndDeleted -> {
-                        _aiStatus.value = _aiStatus.value - profile.name
-                        _agentStatus.value = _agentStatus.value - profile.name
-                    }
-                    DeleteOutcome.NoServerKey -> _orphanDeleteTarget.value = profile
-                    is DeleteOutcome.Failed ->
-                        _snackbarEvents.tryEmit(outcome.message)
-                }
+                repository.deleteAgent(profile)
+                _aiStatus.value = _aiStatus.value - profile.name
+                _agentStatus.value = _agentStatus.value - profile.name
+                _snackbarEvents.tryEmit("Deleted ${profile.name} from this device")
             } catch (e: Exception) {
                 _snackbarEvents.tryEmit(e.message ?: "Couldn't delete ${profile.name} — try again")
             }
@@ -218,35 +270,19 @@ class HomeViewModel @Inject constructor(
     }
 
     /**
-     * Remove an orphaned profile (server already confirmed its key is gone)
-     * from this device only. No server call is made.
-     */
-    fun removeOrphan(profile: AiProfileEntity) {
-        _orphanDeleteTarget.value = null
-        viewModelScope.launch {
-            try {
-                repository.deleteAgentLocalOnly(profile)
-                _aiStatus.value = _aiStatus.value - profile.name
-                _agentStatus.value = _agentStatus.value - profile.name
-                _snackbarEvents.tryEmit("Removed ${profile.name} from this device")
-            } catch (e: Exception) {
-                _snackbarEvents.tryEmit(e.message ?: "Couldn't remove ${profile.name} — try again")
-            }
-        }
-    }
-
-    fun dismissOrphan() {
-        _orphanDeleteTarget.value = null
-    }
-
-    /**
      * One status GET per agent, error-tolerant: any failure leaves the
      * existing map (or an empty map) — never a crash, never a spinner.
+     * TTL-gated (battery audit M5): redundant callers inside the window
+     * return without touching the network. A batch /agents/statuses endpoint
+     * is the proper long-term fix — tracked as follow-up work, not built here.
      */
     fun refreshAgentStatuses() {
         viewModelScope.launch {
             val agents = profiles.value
             if (agents.isEmpty()) return@launch
+            val now = System.currentTimeMillis()
+            if (now - lastAgentStatusFetchMs < AGENT_STATUS_TTL_MS) return@launch
+            lastAgentStatusFetchMs = now
             // The status route requires a phone token; mint it first (the poll
             // loop does the same) or every GET would 401 and the chip would
             // never populate.
@@ -262,5 +298,9 @@ class HomeViewModel @Inject constructor(
                 _agentStatus.value = _agentStatus.value + results
             }
         }
+    }
+
+    private companion object {
+        const val AGENT_STATUS_TTL_MS = 30_000L
     }
 }

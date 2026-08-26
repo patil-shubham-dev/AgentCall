@@ -30,15 +30,25 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.navArgument
+import com.agentcall.app.call.CallService
+import com.agentcall.app.call.CallStateHolder
+import com.agentcall.app.call.CallStatus
 import com.agentcall.app.call.CallActivity
+import com.agentcall.app.call.SignalingClient
+import com.agentcall.app.call.SignalingForegroundService
 import com.agentcall.app.home.HomeScreen
 import com.agentcall.app.profile.ProfileDetailScreen
 import com.agentcall.app.settings.SettingsScreen
+import com.agentcall.app.settings.BatteryOptimizationScreen
 import com.agentcall.app.ui.theme.*
 import dagger.hilt.android.AndroidEntryPoint
+import javax.inject.Inject
 
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
+
+    @Inject
+    lateinit var signalingClient: SignalingClient
     private val notificationPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { _ -> }
@@ -80,6 +90,33 @@ class MainActivity : ComponentActivity() {
         setIntent(intent)
         // Missed-call notifications deep-link into a profile (backlog item 1).
         intent.getStringExtra("profile_id")?.let { pendingProfileId = it }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // Restore the websocket a previous onStop parked (or the socket a
+        // ring/answer re-established): the app being visible means the
+        // signaling path should be live again.
+        signalingClient.connectIfIdle()
+    }
+
+    override fun onStop() {
+        super.onStop()
+        // Backlog item 14 — idle self-stop: FCM is the ring-wake path, so an
+        // app in the background no longer needs an always-on websocket. Park
+        // and let the FGS decide whether it can stop itself entirely (it
+        // stays alive when a ring is in flight, a call is active, or the app
+        // is still visible elsewhere). The FGS-side guards make the race
+        // where a push arrives between park() and this notification safe: a
+        // validating push keeps the service alive until it rings or fails.
+        val state = CallStateHolder.state.value
+        if (!ForegroundTracker.isForeground &&
+            !CallService.hasActiveCall &&
+            state.status != CallStatus.RINGING
+        ) {
+            signalingClient.park()
+            SignalingForegroundService.notifyIdlePark(this)
+        }
     }
 
     private var pendingProfileId: String? by mutableStateOf(null)
@@ -196,6 +233,7 @@ fun MainApp(
                     onProfileClicked = { profileId ->
                         navController.navigate("profile/$profileId")
                     },
+                    onOpenBatteryHelp = { navController.navigate("battery") },
                 )
             }
             composable(
@@ -207,7 +245,12 @@ fun MainApp(
                     onBack = { navController.popBackStack() },
                 )
             }
-            composable("settings") { SettingsScreen() }
+            composable("settings") {
+                SettingsScreen(onOpenBatteryHelp = { navController.navigate("battery") })
+            }
+            composable("battery") {
+                BatteryOptimizationScreen(onBack = { navController.popBackStack() })
+            }
         }
     }
 }

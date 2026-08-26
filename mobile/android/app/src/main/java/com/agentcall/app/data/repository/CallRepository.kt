@@ -21,29 +21,10 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * A cross-boundary operation (delete/rename/ring matching) that depends on the
- * server-side AI key failed. [message] is safe to show the user verbatim.
+ * A server-side operation (rename) that depends on the AI key failed.
+ * [message] is safe to show the user verbatim.
  */
 class AgentSyncException(message: String) : Exception(message)
-
-/**
- * Result of attempting to delete an agent. The server-side revoke runs first
- * and always wins: local data is only removed after it succeeded.
- */
-sealed interface DeleteOutcome {
-    /** Key revoked on the server, local history + profile removed. */
-    data object RevokedAndDeleted : DeleteOutcome
-
-    /**
-     * The server confirms no key exists for this agent (zero name matches, or
-     * a 404 revoking a bound key id) — there is nothing left to revoke, so
-     * the caller may offer a local-only removal.
-     */
-    data object NoServerKey : DeleteOutcome
-
-    /** Revoke failed (network, auth, ambiguity) — nothing was deleted. */
-    data class Failed(val message: String) : DeleteOutcome
-}
 
 /** Result of resolving a key id by display name. */
 private sealed interface KeyIdLookup {
@@ -79,7 +60,7 @@ class CallRepository @Inject constructor(
     /**
      * Backfill keyId bindings for profiles created before the binding
      * existed. Unambiguous names only — a name matching several keys stays
-     * unbound rather than guessing (see delete/rename hard-error paths).
+     * unbound rather than guessing (see the rename hard-error path).
      */
     suspend fun reconcileProfileKeyIds() {
         val unbound = profileDao.getProfiles().filter { it.keyId == null }
@@ -334,72 +315,22 @@ class CallRepository @Inject constructor(
     }
 
     /**
-     * Permanently remove an agent: revoke its backend AI key, then delete its
-     * local history (transcripts first, then calls, then the profile row).
+     * Permanently remove an agent from THIS DEVICE: its profile, call history
+     * and transcripts. No server call is made and the server-side AI key is
+     * left untouched — the MCP key on the AI/harness side keeps working, and
+     * the agent can still call again (a fresh profile is recreated on the
+     * next ring). To remove the agent from the system entirely, delete its
+     * key in Settings instead.
      *
-     * Revocation is keyed by the stable server-side key id and runs FIRST —
-     * if the key can't be found or revoked, nothing is deleted locally. Delete
-     * never pretends success when the server side didn't actually happen.
-     *
-     * Returns [DeleteOutcome.NoServerKey] when the server confirms no key
-     * exists at all (zero name matches for an unbound profile, or a 404 while
-     * revoking a bound key id) — the caller can then offer a local-only
-     * removal, because there is nothing left to revoke.
+     * Deliberately local-only (2026-08-19): the previous server-first flow
+     * could block a Home-screen delete on a flaky status/revoke round-trip
+     * (Render cold starts, stale phone tokens), which surfaced as "Couldn't
+     * check if X is in a call — try again". Call history is device-only, so
+     * deleting it never desyncs anything server-side. Deleting during a live
+     * call is allowed: the call itself is unaffected (it only references the
+     * agent name), the history row is simply gone.
      */
-    suspend fun deleteAgent(profile: AiProfileEntity): DeleteOutcome {
-        // Block before anything else: an agent with an open call must not be
-        // deleted, or the live call's history row would be wiped and the call
-        // would end unrecorded (saveCallEnded no-ops on a missing row). The
-        // check is server-side (GET /agents/:id/status → current_call_id), so
-        // it stays true regardless of whether the app is foregrounded. If the
-        // status can't be determined we fail CLOSED — never delete into the
-        // unknown, never a silent no-op.
-        val status = try {
-            ApiClient.ensurePhoneToken()
-            withContext(Dispatchers.IO) { api.getAgentStatus(profile.name) }
-        } catch (e: Exception) {
-            return DeleteOutcome.Failed(
-                "Couldn't check if \"${profile.name}\" is in a call — try again. Nothing was deleted."
-            )
-        }
-        if (status.currentCallId != null) {
-            return DeleteOutcome.Failed(
-                "Can't delete — this agent has an active call. Try again once the call ends."
-            )
-        }
-
-        val keyId = profile.keyId ?: when (val lookup = lookupKeyIdByName(profile.name)) {
-            is KeyIdLookup.Exact -> lookup.keyId
-            KeyIdLookup.None -> return DeleteOutcome.NoServerKey
-            KeyIdLookup.Ambiguous -> return DeleteOutcome.Failed(
-                "Couldn't revoke \"${profile.name}\": multiple keys share that name. " +
-                    "Delete it from Settings instead. Nothing was deleted."
-            )
-        }
-        try {
-            withContext(Dispatchers.IO) { api.deleteAiKey(keyId) }
-        } catch (e: HttpException) {
-            if (e.code() == 404) return DeleteOutcome.NoServerKey
-            return DeleteOutcome.Failed(
-                "Couldn't revoke the key on the server: ${e.message ?: "unknown error"}. Nothing was deleted."
-            )
-        } catch (e: Exception) {
-            return DeleteOutcome.Failed(
-                "Couldn't revoke the key on the server: ${e.message ?: "unknown error"}. Nothing was deleted."
-            )
-        }
-        if (profile.keyId == null) profileDao.updateKeyId(profile.id, keyId)
-        deleteLocal(profile.id)
-        return DeleteOutcome.RevokedAndDeleted
-    }
-
-    /**
-     * Remove a profile and its history from this device without any server
-     * call. Only reachable after the server confirmed the key no longer
-     * exists ([DeleteOutcome.NoServerKey]) — for a still-live key this would
-     * orphan the server-side credential.
-     */
-    suspend fun deleteAgentLocalOnly(profile: AiProfileEntity) {
+    suspend fun deleteAgent(profile: AiProfileEntity) {
         deleteLocal(profile.id)
     }
 

@@ -43,15 +43,16 @@ fun HomeScreen(
     viewModel: HomeViewModel = hiltViewModel(),
     onCallClicked: (String) -> Unit = {},
     onProfileClicked: (String) -> Unit = {},
+    onOpenBatteryHelp: () -> Unit = {},
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val profiles by viewModel.profiles.collectAsStateWithLifecycle()
     val aiStatus by viewModel.aiStatus.collectAsStateWithLifecycle()
     val agentStatus by viewModel.agentStatus.collectAsStateWithLifecycle()
+    val showBatteryBanner by viewModel.showBatteryBanner.collectAsStateWithLifecycle()
 
     val snackbarHostState = remember { SnackbarHostState() }
     var pendingDelete by remember { mutableStateOf<AiProfileEntity?>(null) }
-    val orphanTarget by viewModel.orphanDeleteTarget.collectAsStateWithLifecycle()
 
     LaunchedEffect(Unit) {
         viewModel.snackbarEvents.collect { message ->
@@ -145,6 +146,17 @@ fun HomeScreen(
 
                 Spacer(modifier = Modifier.height(24.dp))
 
+                if (showBatteryBanner) {
+                    BatteryOptimizationBanner(
+                        onOpen = {
+                            viewModel.dismissBatteryBanner()
+                            onOpenBatteryHelp()
+                        },
+                        onDismiss = { viewModel.dismissBatteryBanner() },
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                }
+
                 when {
                     state.isLoading -> LoadingSkeleton()
                     profiles.isEmpty() && state.isConnected -> EmptyProfilesContent(waitingPulse)
@@ -164,12 +176,13 @@ fun HomeScreen(
     pendingDelete?.let { target ->
         AlertDialog(
             onDismissRequest = { pendingDelete = null },
-            title = { Text("Delete ${target.name} permanently?", color = Slate50) },
+            title = { Text("Delete ${target.name} from this device?", color = Slate50) },
             text = {
                 Text(
-                    "This permanently revokes ${target.name}'s key on the server and " +
-                        "cannot be undone. The agent will no longer be able to call you, " +
-                        "and its call history is deleted from this device.",
+                    "This deletes ${target.name}'s profile, call history and transcripts " +
+                        "from this device and cannot be undone. The agent's key on the " +
+                        "server is kept, so it can still call you again — delete the key " +
+                        "in Settings to remove it entirely.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = Slate400,
                 )
@@ -181,43 +194,12 @@ fun HomeScreen(
                         pendingDelete = null
                     },
                 ) {
-                    Text("Delete permanently", color = Red400, fontWeight = FontWeight.Bold)
+                    Text("Delete from this device", color = Red400, fontWeight = FontWeight.Bold)
                 }
             },
             dismissButton = {
                 TextButton(onClick = { pendingDelete = null }) {
                     Text("Cancel", color = Slate400)
-                }
-            },
-        )
-    }
-
-    // The server confirmed this profile's key no longer exists (deleted in
-    // Settings, or a leftover from before the keyId fix) — nothing left to
-    // revoke, so offer a local-only removal instead of failing.
-    orphanTarget?.let { target ->
-        AlertDialog(
-            onDismissRequest = { viewModel.dismissOrphan() },
-            title = { Text("${target.name} no longer exists on the server", color = Slate50) },
-            text = {
-                Text(
-                    "The key behind this agent is already gone from the server, so " +
-                        "there's nothing left to revoke. You can remove its profile and " +
-                        "call history from this device only, or keep it.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = Slate400,
-                )
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = { viewModel.removeOrphan(target) },
-                ) {
-                    Text("Remove from this device only", color = Red400, fontWeight = FontWeight.Bold)
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { viewModel.dismissOrphan() }) {
-                    Text("Keep it", color = Slate400)
                 }
             },
         )
@@ -447,6 +429,51 @@ private fun DisconnectedContent() {
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center,
             modifier = Modifier.padding(start = 24.dp, top = 8.dp, end = 24.dp))
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun BatteryOptimizationBanner(
+    onOpen: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    Plate(
+        onClick = null,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 20.dp)
+            .combinedClickable(onClick = onOpen),
+        containerShape = RoundedCornerShape(12.dp),
+        containerColor = Slate800.copy(alpha = 0.9f),
+    ) {
+        Row(
+            modifier = Modifier.padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(Icons.Default.BatteryAlert, "Battery optimization", tint = Amber400, modifier = Modifier.size(20.dp))
+            Spacer(modifier = Modifier.width(10.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "Make sure calls can wake the app",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = Slate50,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(
+                    text = "Set up battery & autostart permissions",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Spacer(modifier = Modifier.width(4.dp))
+            TextButton(onClick = onOpen) {
+                Text("Set up", color = Indigo400)
+            }
+            IconButton(onClick = onDismiss) {
+                Icon(Icons.Default.Close, "Dismiss", tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(18.dp))
+            }
+        }
     }
 }
 
