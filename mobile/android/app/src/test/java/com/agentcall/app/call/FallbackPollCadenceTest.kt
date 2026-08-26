@@ -294,4 +294,72 @@ class FallbackPollCadenceTest {
         assertEquals(3, FallbackPollCadence.DOZE_EVERY)
         assertEquals(20, FallbackPollCadence.MAX_BACKGROUND_STREAK)
     }
+
+    // ── shouldRunFallbackPoll (battery audit M4 gate) ────────────────────
+    //
+    // Truth table: poll only when DISCONNECTED && !parked && (fg || ring).
+
+    @Test
+    fun `gate polls when disconnected foreground and not parked`() {
+        assert(
+            FallbackPollCadence.shouldRunFallbackPoll(
+                isDisconnected = true,
+                isParked = false,
+                isForeground = true,
+                hasActiveRing = false,
+            )
+        )
+    }
+
+    @Test
+    fun `gate polls when disconnected with ring in flight and not parked`() {
+        assert(
+            FallbackPollCadence.shouldRunFallbackPoll(
+                isDisconnected = true,
+                isParked = false,
+                isForeground = false,
+                hasActiveRing = true,
+            )
+        )
+    }
+
+    @Test
+    fun `gate never polls while parked even if foreground`() {
+        // Parked means the socket is deliberately down and rings come via FCM;
+        // a foreground app restores the socket through connectIfIdle() instead.
+        assert(
+            !FallbackPollCadence.shouldRunFallbackPoll(
+                isDisconnected = true,
+                isParked = true,
+                isForeground = true,
+                hasActiveRing = true,
+            )
+        )
+    }
+
+    @Test
+    fun `gate treats CONNECTING as wait not poll`() {
+        // isDisconnected=false models CONNECTING/RECONNECTING/CONNECTED alike:
+        // only a genuinely DISCONNECTED socket justifies polling.
+        assert(
+            !FallbackPollCadence.shouldRunFallbackPoll(
+                isDisconnected = false,
+                isParked = false,
+                isForeground = true,
+                hasActiveRing = true,
+            )
+        )
+    }
+
+    @Test
+    fun `gate does not poll when idle in background without ring`() {
+        assert(
+            !FallbackPollCadence.shouldRunFallbackPoll(
+                isDisconnected = true,
+                isParked = false,
+                isForeground = false,
+                hasActiveRing = false,
+            )
+        )
+    }
 }

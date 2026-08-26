@@ -321,7 +321,7 @@ minutes max — stale ones are dropped on reconnect.
 |---|---|---|
 | Room schema (version 3) | `ringtone_uri`, `ringtone_label`, `quick_replies` columns on `profiles` — added by `MIGRATION_1_2`, kept mapped-but-unused in the entity and re-asserted by `MIGRATION_2_3` (guarded adds) so every upgrade path converges on the same schema | Nothing reads or writes them; the guarded adds keep v1→v3, v2-with-columns, and fresh-v2 installs all valid |
 | SharedPreferences `caller_tune` | historical per-agent keys (if any were written before removal) alongside the live global `caller_tune_uri` / `caller_tune_label` | Unreachable by current code |
-| Backend DB | `ai_keys` rows for agents deleted via Settings *or* via profile long-press are removed (both paths now revoke by key id) | Keyed by the profile's bound `keyId` (reconciled lazily from `GET /api/v1/ai/keys`); unbound/ambiguous names hard-error instead of guessing |
+| Backend DB | `ai_keys` rows are removed only by the **Settings** delete path (revoke by the profile's bound `keyId`; unbound/ambiguous names hard-error instead of guessing). Home-screen deletes are local-only and never touch server keys | Home delete removes the device profile + history; the key stays so the agent can call again — by design (2026-08-19 redesign) |
 | Call history | History rows + transcripts for deleted agents are deleted locally, but **calls already pushed to the backend** (`call_records`/transcripts server-side) are unaffected by app-side deletion | Server keeps its own record; expected |
 
 Note: the global ringtone (`CallerTuneManager.uri`) and the global call settings
@@ -332,10 +332,11 @@ only the per-agent variants.
 
 ## 6. Open weaknesses and fragility (honest)
 
-1. ~~Delete-agent revocation is broken~~ **FIXED 2026-08-19** (root-cause fix shared with #3): `CallRepository.deleteAgent` previously called `api.deleteAiKey(agentName)` — the agent *name* — against the id-keyed endpoint, got a swallowed 404, and deleted locally anyway. Now profiles carry the server's `keyId` (Room v3 + `MIGRATION_2_3`, backfilled by `reconcileProfileKeyIds()` from `GET /api/v1/ai/keys`), and delete/rename/ring-matching all use it. Delete revokes server-side first and **hard-errors with a user-safe message — nothing deleted locally — when the key can't be found (renamed/deleted), the name is ambiguous (duplicate names), or the server call fails**. Rename propagates via the new `PATCH /api/v1/ai/keys/:keyId` before touching the local name, so a renamed agent rings back into the same profile (matched by keyId) instead of duplicating.
+1. ~~Delete-agent revocation is broken~~ **FIXED 2026-08-19 (v2: local-only delete)**. The keyId-based revoke fix (below) worked but tied a Home-screen delete to a server round-trip: a cold Render instance or stale phone token made the status/revoke call fail and the fail-closed guard refused with "Couldn't check if X is in a call — try again", leaving users unable to clear the Home screen. **The user's redesign decision (2026-08-19): deleting an agent from Home is local-only** — it cascade-deletes the profile + call history + transcripts from the device with **zero server calls**; the MCP key on the AI/harness side keeps working, so the agent can still call again (a fresh profile is recreated on the next ring). Deleting during a live call is allowed (the call itself is unaffected; only the history row is gone). Hard-deleting the agent from the system (key revoke) happens only in Settings. The old orphan/"no server key" dialog and the mid-call block were removed with the flow. Rename is still server-first (it must keep the server join consistent) and still surfaces the 409 collision and orphan errors. Server-side `ai_keys` rows are only removed by the Settings delete path, keyed by the profile's bound `keyId`.
 2. **Same-name keys collide.** Nothing enforces unique key names. Two keys named "X"
    behave as one agent on the phone (same profile slug, interleaved history, ring-gate
-   sees one presence), and deleting "one of them" is ambiguous.
+   sees one presence), and **renaming** one of them is ambiguous (hard-error with a
+   Settings hint; Home delete no longer cares — it is local-only).
 3. **Rename creates duplicates.** Profile rename is local-only; the server key name
    never changes, so the next ring re-creates the profile under the old name.
 4. **The badge is self-declared.** `clientInfo` comes from the client's `initialize`

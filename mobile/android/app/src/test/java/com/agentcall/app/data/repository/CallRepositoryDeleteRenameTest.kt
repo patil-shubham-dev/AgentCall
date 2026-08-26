@@ -42,11 +42,12 @@ import org.junit.Before
 import org.junit.Test
 
 /**
- * Self-test for the delete/rename keyId fix (2026-08-19). Exercises the real
- * CallRepository against stateful fakes: the fake "server" actually holds
- * keys and mutates them, so every assertion about revocation/rename is a
- * follow-up through the same API surface the app calls — and a shared event
- * log proves the order (server first, local only after).
+ * Delete/rename contract tests (2026-08-19 redesign). Delete is now
+ * deliberately LOCAL-ONLY: it removes the profile + call history + transcripts
+ * from the device and makes zero server calls — the MCP key on the AI/harness
+ * side stays untouched, so the agent can still call again. Rename stays
+ * server-first (it must keep the server join consistent). A shared event log
+ * proves which surface each operation actually touched.
  */
 class CallRepositoryDeleteRenameTest {
 
@@ -69,10 +70,10 @@ class CallRepositoryDeleteRenameTest {
         ApiClient.phoneToken = "test-token"
     }
 
-    // ── 1. Delete: bound key that exists ──────────────────────────────────
+    // ── 1. Delete: local-only, zero server calls ──────────────────────────
 
     @Test
-    fun `delete with bound key revokes server key first then removes local rows`() = runBlocking {
+    fun `delete removes profile call history and transcripts with zero server calls`() = runBlocking {
         api.keys["k1"] = FakeKey("k1", "Alpha")
         profileDao.profiles["alpha"] = AiProfileEntity(id = "alpha", name = "Alpha", keyId = "k1", callCount = 3)
         callDao.calls["c1"] = CallRecordEntity(
@@ -81,51 +82,44 @@ class CallRepositoryDeleteRenameTest {
         )
         transcriptDao.messages += TranscriptMessageEntity(callId = "c1", role = "ai", content = "hi", createdAt = "t")
 
-        val outcome = repo.deleteAgent(profileDao.profiles["alpha"]!!)
+        repo.deleteAgent(profileDao.profiles["alpha"]!!)
 
-        assertEquals(DeleteOutcome.RevokedAndDeleted, outcome)
-        // Follow-up through the same API surface: the key is actually gone.
-        assertTrue(api.keys.isEmpty())
-        assertTrue(api.listAiKeys().keys.isEmpty())
-        // Local rows gone.
-        assertTrue(profileDao.profiles.isEmpty())
-        assertTrue(callDao.calls.isEmpty())
+        // Local rows gone — cascade: transcripts, calls, profile.
         assertTrue(transcriptDao.messages.isEmpty())
-        // Order proven by the shared log: revoke ran before any local delete.
-        val revokeIdx = log.indexOf("api.deleteKey:k1")
-        val profileDelIdx = log.indexOf("profile.delete:alpha")
-        assertTrue("revoke($revokeIdx) must precede local delete($profileDelIdx)", revokeIdx >= 0 && revokeIdx < profileDelIdx)
-    }
-
-    // ── 2. Delete: orphan (zero server matches) ───────────────────────────
-
-    @Test
-    fun `orphan with zero server matches returns NoServerKey and revokes nothing`() = runBlocking {
-        api.keys["other"] = FakeKey("other", "Someone Else")
-        profileDao.profiles["ghost"] = AiProfileEntity(id = "ghost", name = "Ghost", keyId = null)
-
-        val outcome = repo.deleteAgent(profileDao.profiles["ghost"]!!)
-
-        assertEquals(DeleteOutcome.NoServerKey, outcome)
-        assertFalse(log.any { it.startsWith("api.deleteKey") })
-        assertTrue(log.contains("api.listKeys")) // the lookup that confirmed zero matches
-        // "Keep it": nothing was touched.
-        assertEquals(1, profileDao.profiles.size)
-        assertEquals("Ghost", profileDao.profiles["ghost"]!!.name)
+        assertTrue(callDao.calls.isEmpty())
+        assertTrue(profileDao.profiles.isEmpty())
+        // Zero server calls attempted — not even a status check or key list.
+        assertTrue("server was contacted: $log", log.none { it.startsWith("api.") })
+        // The server key is untouched — the MCP key on the AI side still works.
         assertEquals(1, api.keys.size)
+        assertEquals("Alpha", api.keys["k1"]!!.name)
     }
 
     @Test
-    fun `bound key that 404s on revoke also maps to NoServerKey`() = runBlocking {
-        profileDao.profiles["a"] = AiProfileEntity(id = "a", name = "A", keyId = "gone-id")
-        val outcome = repo.deleteAgent(profileDao.profiles["a"]!!)
-        assertEquals(DeleteOutcome.NoServerKey, outcome)
-        assertTrue(log.contains("api.deleteKey:gone-id"))
-        assertEquals(1, profileDao.profiles.size) // nothing deleted locally
+    fun `delete keeps the server key usable - a later ring recreates the profile fresh`() = runBlocking {
+        api.keys["k1"] = FakeKey("k1", "Alpha")
+        profileDao.profiles["alpha"] = AiProfileEntity(id = "alpha", name = "Alpha", keyId = "k1")
+        callDao.calls["c1"] = CallRecordEntity(
+            callId = "c1", agentId = "alpha", callerName = "Alpha", status = "completed",
+            reason = "", summary = "", startedAt = 1L,
+        )
+
+        repo.deleteAgent(profileDao.profiles["alpha"]!!)
+        assertTrue(profileDao.profiles.isEmpty())
+
+        // The agent calls again (its key was never revoked) → fresh profile,
+        // and history from the OLD profile is NOT resurrected.
+        val ring = repo.ensureProfileExists("alpha", "Alpha")
+        assertEquals("alpha", ring)
+        assertEquals(1, profileDao.profiles.size)
+        assertEquals(0, callDao.calls.size)
+        assertEquals("k1", profileDao.profiles["alpha"]!!.keyId)
     }
 
+    // ── 2. Delete: unbound / stale-key profiles ───────────────────────────
+
     @Test
-    fun `local-only removal after NoServerKey makes zero server calls`() = runBlocking {
+    fun `delete works for an unbound profile - no key lookup is needed`() = runBlocking {
         api.keys["other"] = FakeKey("other", "Someone Else")
         profileDao.profiles["ghost"] = AiProfileEntity(id = "ghost", name = "Ghost", keyId = null)
         callDao.calls["c1"] = CallRecordEntity(
@@ -133,77 +127,94 @@ class CallRepositoryDeleteRenameTest {
             reason = "", summary = "", startedAt = 1L,
         )
 
-        repo.deleteAgentLocalOnly(profileDao.profiles["ghost"]!!)
+        repo.deleteAgent(profileDao.profiles["ghost"]!!)
 
-        // Zero server calls attempted — not even a list.
-        assertTrue(log.none { it.startsWith("api.") })
         assertTrue(profileDao.profiles.isEmpty())
         assertTrue(callDao.calls.isEmpty())
+        assertTrue("server was contacted: $log", log.none { it.startsWith("api.") })
+        assertEquals(1, api.keys.size) // other keys untouched
     }
 
-    // ── 3. Delete: ambiguous name ─────────────────────────────────────────
+    @Test
+    fun `delete works even when the bound keyId is stale on the server`() = runBlocking {
+        // keyId points at a key that was already deleted server-side — under
+        // the old flow this orphan-blocked the delete; now it just works.
+        profileDao.profiles["a"] = AiProfileEntity(id = "a", name = "A", keyId = "gone-id")
+        repo.deleteAgent(profileDao.profiles["a"]!!)
+        assertTrue(profileDao.profiles.isEmpty())
+        assertTrue("server was contacted: $log", log.none { it.startsWith("api.") })
+    }
 
     @Test
-    fun `ambiguous name hard-errors with Settings hint and deletes nothing`() = runBlocking {
+    fun `delete works even when duplicate server names exist - no ambiguity block`() = runBlocking {
         api.keys["k1"] = FakeKey("k1", "Twin")
         api.keys["k2"] = FakeKey("k2", "Twin")
         profileDao.profiles["twin"] = AiProfileEntity(id = "twin", name = "Twin", keyId = null)
 
-        val outcome = repo.deleteAgent(profileDao.profiles["twin"]!!)
+        repo.deleteAgent(profileDao.profiles["twin"]!!)
 
-        assertTrue(outcome is DeleteOutcome.Failed)
-        val message = (outcome as DeleteOutcome.Failed).message
-        assertTrue("message was: $message", message.contains("Delete it from Settings"))
-        assertTrue(message.contains("Nothing was deleted"))
-        assertFalse(log.any { it.startsWith("api.deleteKey") }) // never guessed
-        assertEquals(2, api.keys.size) // neither key deleted
-        assertEquals(1, profileDao.profiles.size) // local untouched
+        assertTrue(profileDao.profiles.isEmpty())
+        assertEquals(2, api.keys.size) // neither server key touched
+        assertTrue("server was contacted: $log", log.none { it.startsWith("api.") })
     }
 
-    // ── 4. Delete: agent with an active call ──────────────────────────────
+    // ── 3. Delete: active call ────────────────────────────────────────────
 
     @Test
-    fun `delete is blocked while the agent has an active call - no history loss`() = runBlocking {
+    fun `delete is allowed while the agent has an active call - local rows are removed`() = runBlocking {
         api.keys["k1"] = FakeKey("k1", "MidCall")
-        api.activeCallByAgent["MidCall"] = "live"
         profileDao.profiles["mid"] = AiProfileEntity(id = "mid", name = "MidCall", keyId = "k1")
         callDao.calls["live"] = CallRecordEntity(
             callId = "live", agentId = "mid", callerName = "MidCall", status = "active",
             reason = "", summary = "", startedAt = 1L,
         )
 
-        val outcome = repo.deleteAgent(profileDao.profiles["mid"]!!)
+        // The call itself is server-side and unaffected; only this device's
+        // history row is removed. No status round-trip, no block.
+        repo.deleteAgent(profileDao.profiles["mid"]!!)
 
-        // Blocked with the exact user-facing message — no revoke, no delete.
-        assertTrue(outcome is DeleteOutcome.Failed)
-        val message = (outcome as DeleteOutcome.Failed).message
-        assertTrue("message was: $message", message.contains("active call"))
-        assertTrue("message was: $message", message.contains("Try again once the call ends"))
-        assertFalse(log.any { it.startsWith("api.deleteKey") }) // never revoked
-        assertTrue(api.keys.containsKey("k1")) // server key untouched
-        assertTrue(profileDao.profiles.containsKey("mid")) // profile untouched
-        assertTrue(callDao.calls.containsKey("live")) // HISTORY INTACT — the whole point
-
-        // When the call ends normally, the row still exists to be updated.
-        repo.saveCallEnded("live", "completed")
-        assertEquals("completed", repo.getCallRecord("live")!!.status)
+        assertTrue(profileDao.profiles.isEmpty())
+        assertTrue(callDao.calls.isEmpty())
+        assertEquals(1, api.keys.size) // server key untouched
+        assertTrue("server was contacted: $log", log.none { it.startsWith("api.") })
     }
 
     @Test
-    fun `delete fails closed when the call status cannot be checked`() = runBlocking {
-        api.keys["k1"] = FakeKey("k1", "Alpha")
-        api.failStatusCheck = true
+    fun `delete never depends on the server - works while the backend is unreachable`() = runBlocking {
+        // No keys at all (server asleep/empty): the old fail-closed status
+        // check would have refused this; local-only delete just works.
         profileDao.profiles["alpha"] = AiProfileEntity(id = "alpha", name = "Alpha", keyId = "k1")
 
-        val outcome = repo.deleteAgent(profileDao.profiles["alpha"]!!)
+        repo.deleteAgent(profileDao.profiles["alpha"]!!)
 
-        // Never delete into the unknown: the status check is the guard, and
-        // when it fails the delete is refused with an explicit message.
-        assertTrue(outcome is DeleteOutcome.Failed)
-        assertTrue((outcome as DeleteOutcome.Failed).message.contains("Couldn't check"))
-        assertFalse(log.any { it.startsWith("api.deleteKey") })
-        assertTrue(api.keys.containsKey("k1"))
-        assertTrue(profileDao.profiles.containsKey("alpha"))
+        assertTrue(profileDao.profiles.isEmpty())
+        assertTrue("server was contacted: $log", log.none { it.startsWith("api.") })
+    }
+
+    // ── 4. Delete: local failure surfaces and retry recovers ──────────────
+
+    @Test
+    fun `local delete failure surfaces and a retry cleans up`() = runBlocking {
+        api.keys["k1"] = FakeKey("k1", "Alpha")
+        profileDao.profiles["alpha"] = AiProfileEntity(id = "alpha", name = "Alpha", keyId = "k1")
+        callDao.failNextDelete = true
+
+        var caught: Exception? = null
+        try {
+            repo.deleteAgent(profileDao.profiles["alpha"]!!)
+        } catch (e: Exception) {
+            caught = e
+        }
+
+        assertNotNull("local failure must surface, not be swallowed", caught)
+        assertTrue(profileDao.profiles.containsKey("alpha")) // profile survived
+        assertTrue(log.contains("call.delete:alpha")) // the failing step was attempted
+        assertEquals(1, api.keys.size) // server untouched, retry is safe
+
+        // Retry — no server dependency, so the retry is just another local pass.
+        repo.deleteAgent(profileDao.profiles["alpha"]!!)
+        assertTrue(profileDao.profiles.isEmpty())
+        assertTrue(callDao.calls.isEmpty())
     }
 
     // ── 5. Rename: bound agent ────────────────────────────────────────────
@@ -286,40 +297,15 @@ class CallRepositoryDeleteRenameTest {
         assertEquals("Alpha", profileDao.profiles["alpha"]!!.name) // local untouched
         assertEquals(1, api.keys.values.count { it.name == "Beta" }) // still exactly one Beta
 
-        // Because no ambiguity exists, an unbound Beta profile now deletes
-        // cleanly — the collision bug this whole fix closes.
+        // A duplicate-name profile (a "Twin"-style leftover) still deletes
+        // cleanly — the ambiguity block only ever applied to rename.
         profileDao.profiles["beta-other"] = AiProfileEntity(id = "beta-other", name = "Beta", keyId = null)
-        val outcome = repo.deleteAgent(profileDao.profiles["beta-other"]!!)
-        assertEquals(DeleteOutcome.RevokedAndDeleted, outcome)
-        assertTrue(api.keys.containsKey("k1")) // only k2 was revoked
+        repo.deleteAgent(profileDao.profiles["beta-other"]!!)
+        assertTrue(profileDao.profiles["beta-other"] == null)
+        assertEquals(2, api.keys.size) // no server key revoked
     }
 
-    // ── 9. Network drop mid-operation ─────────────────────────────────────
-
-    @Test
-    fun `revoke succeeds but local delete fails - profile survives and retry recovers via escape hatch`() = runBlocking {
-        api.keys["k1"] = FakeKey("k1", "Alpha")
-        profileDao.profiles["alpha"] = AiProfileEntity(id = "alpha", name = "Alpha", keyId = "k1")
-        callDao.failNextDelete = true
-
-        var caught: Exception? = null
-        try {
-            repo.deleteAgent(profileDao.profiles["alpha"]!!)
-        } catch (e: Exception) {
-            caught = e
-        }
-
-        assertNotNull("local failure must surface, not be swallowed", caught)
-        assertTrue(api.keys.isEmpty()) // server key WAS revoked
-        assertEquals(1, profileDao.profiles.size) // local side survived → inconsistent
-
-        // Retry: the bound keyId now 404s → NoServerKey → local-only cleans up.
-        val retry = repo.deleteAgent(profileDao.profiles["alpha"]!!)
-        assertEquals(DeleteOutcome.NoServerKey, retry)
-        repo.deleteAgentLocalOnly(profileDao.profiles["alpha"]!!)
-        assertTrue(profileDao.profiles.isEmpty())
-        assertTrue(callDao.calls.isEmpty())
-    }
+    // ── 8. Rename: network drop mid-operation ─────────────────────────────
 
     @Test
     fun `rename server succeeds but local rename fails - next ring self-heals`() = runBlocking {
@@ -405,11 +391,11 @@ class CallRepositoryDeleteRenameTest {
             calls[callId]?.let { calls[callId] = it.copy(transcriptFetched = true) }
         }
         override suspend fun deleteForAgent(agentId: String) {
+            log += "call.delete:$agentId"
             if (failNextDelete) {
                 failNextDelete = false
                 throw java.io.IOException("simulated local delete failure")
             }
-            log += "call.delete:$agentId"
             calls.entries.removeAll { it.value.agentId == agentId }
         }
     }
@@ -432,9 +418,6 @@ class CallRepositoryDeleteRenameTest {
 
     private class FakeApiService(private val log: MutableList<String>) : ApiService {
         val keys = mutableMapOf<String, FakeKey>()
-        /** agent display name → live call id, mirroring GET /agents/:id/status. */
-        val activeCallByAgent = mutableMapOf<String, String>()
-        var failStatusCheck = false
 
         override suspend fun listAiKeys(): AiKeyListResponse {
             log += "api.listKeys"
@@ -463,15 +446,8 @@ class CallRepositoryDeleteRenameTest {
             keys[id] = FakeKey(id, body.name)
             return AiKeyCreateResponse(keyId = id, name = body.name, key = "ac_test")
         }
-        override suspend fun getAgentStatus(agentId: String): AgentStatusResponse {
-            log += "api.status:$agentId"
-            if (failStatusCheck) throw java.io.IOException("simulated status-check failure")
-            return AgentStatusResponse(
-                agentId = agentId,
-                online = false,
-                currentCallId = activeCallByAgent[agentId],
-            )
-        }
+        override suspend fun getAgentStatus(agentId: String): AgentStatusResponse =
+            AgentStatusResponse(agentId = agentId, online = false, currentCallId = null)
         override suspend fun getTranscript(callId: String): TranscriptResponse {
             log += "api.getTranscript:$callId"
             return TranscriptResponse(callId = callId, messages = emptyList())
