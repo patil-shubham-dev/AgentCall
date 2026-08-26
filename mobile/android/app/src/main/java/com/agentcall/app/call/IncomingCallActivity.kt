@@ -172,16 +172,30 @@ private var currentClientInfoName by mutableStateOf<String?>(null)
             return
         }
         ownsRing = true
+
+        currentCallId = intent.getStringExtra("call_id") ?: run { isProcessing.set(false); finish(); return }
+        currentCallerName = intent.getStringExtra("caller_name") ?: "AI Agent"
+        currentContextSummary = intent.getStringExtra("context_summary") ?: ""
+        currentClientInfoName = intent.getStringExtra("client_info_name")
+        // Backlog item 14 — stale-FSI guard: a full-screen intent for an
+        // already-answered/ended call (relaunch from recents, racing
+        // duplicate notification, stale push) must never re-ring. Validate
+        // against the shared ring truth BEFORE telling the FGS the ring UI is
+        // open, so the service's 60s timeout stays armed when the guard
+        // finishes — a rejected launch must not leave the ring ungoverned.
+        val state = CallStateHolder.state.value
+        if (state.status != CallStatus.RINGING || state.callId != currentCallId) {
+            Log.i(TAG, "[LAUNCH] stale FSI for $currentCallId (${state.status}) — finishing")
+            isProcessing.set(false)
+            finish()
+            return
+        }
         // The ring UI now owns the timeout: the service's 60s fallback (meant
         // for a notification that was never opened) would otherwise fire under
         // the open Later picker and send the AI a decline note racing the
         // user's chosen callback. The in-UI countdown below is picker-aware.
         SignalingForegroundService.notifyRingOpened(this@IncomingCallActivity)
 
-        currentCallId = intent.getStringExtra("call_id") ?: run { isProcessing.set(false); finish(); return }
-        currentCallerName = intent.getStringExtra("caller_name") ?: "AI Agent"
-        currentContextSummary = intent.getStringExtra("context_summary") ?: ""
-        currentClientInfoName = intent.getStringExtra("client_info_name")
         quietRing = quietHoursManager.isQuietNow(currentCallerName)
         Log.i(TAG, "[LAUNCH] IncomingCallActivity created callId=$currentCallId via=$launchSource quiet=$quietRing")
 
@@ -216,13 +230,24 @@ private var currentClientInfoName by mutableStateOf<String?>(null)
                         quiet = quietRing,
                         onAnswer = {
                             stopRinger()
-                            SignalingForegroundService.notifyRingResolved(this@IncomingCallActivity)
+                            // Backlog item 14 — the FGS ring is cleared by
+                            // CallService's ACTION_START_CALL (notifyRingResolved)
+                            // after the shared state flips to ANSWERED, so a
+                            // stale decline can never cancel an answered call.
                             CallService.cancelIncomingNotification(this@IncomingCallActivity)
                             val svcIntent = Intent(this@IncomingCallActivity, CallService::class.java).apply {
                                 action = CallService.ACTION_START_CALL
                                 putExtra(CallService.EXTRA_CALL_ID, currentCallId)
                                 putExtra(CallService.EXTRA_CALLER_NAME, currentCallerName)
                                 putExtra(CallService.EXTRA_CONTEXT_SUMMARY, currentContextSummary)
+                                // Debug-only: forward the watchdog-cap override so
+                                // adb-driven H2 verification can pass it through the
+                                // ring UI (this ROM blocks shell starts of the
+                                // non-exported service directly).
+                                if (com.agentcall.app.BuildConfig.DEBUG) {
+                                    val dbg = intent.getLongExtra(CallService.EXTRA_DEBUG_MAX_CALL_MS, 0L)
+                                    if (dbg > 0L) putExtra(CallService.EXTRA_DEBUG_MAX_CALL_MS, dbg)
+                                }
                             }
                             if (ContextCompat.checkSelfPermission(this@IncomingCallActivity,
                                     Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
@@ -237,13 +262,22 @@ private var currentClientInfoName by mutableStateOf<String?>(null)
                         onDecline = {
                             stopRinger()
                             ringResolved = true
-                            SignalingForegroundService.notifyRingResolved(this@IncomingCallActivity)
-                            CallService.cancelIncomingNotification(this@IncomingCallActivity)
-                            startService(Intent(this@IncomingCallActivity, CallService::class.java).apply {
-                                action = CallService.ACTION_CANCEL_CALL
-                                putExtra(CallService.EXTRA_CALL_ID, currentCallId)
-                                putExtra(CallService.EXTRA_TEXT, quietDeclineNote())
-                            })
+                            // Backlog item 14 — only cancel while this call is
+                            // still ringing: the in-UI countdown auto-decline
+                            // can race the answer tap, and a stale FSI decline
+                            // must never cancel a live or answered call.
+                            val state = CallStateHolder.state.value
+                            if (state.status == CallStatus.RINGING && state.callId == currentCallId) {
+                                SignalingForegroundService.notifyRingResolved(this@IncomingCallActivity)
+                                CallService.cancelIncomingNotification(this@IncomingCallActivity)
+                                startService(Intent(this@IncomingCallActivity, CallService::class.java).apply {
+                                    action = CallService.ACTION_CANCEL_CALL
+                                    putExtra(CallService.EXTRA_CALL_ID, currentCallId)
+                                    putExtra(CallService.EXTRA_TEXT, quietDeclineNote())
+                                })
+                            } else {
+                                Log.i(TAG, "[DECLINE] skipped cancel for $currentCallId (${state.status}) — no longer ringing")
+                            }
                             isProcessing.set(false)
                             finish()
                         },
@@ -311,6 +345,19 @@ private var currentClientInfoName by mutableStateOf<String?>(null)
 
     override fun onResume() {
         super.onResume()
+        // Backlog item 14 — a stale FSI can surface after the call already
+        // resolved (relaunch from recents, racing duplicate intent): leave
+        // the ring UI immediately instead of ringing a dead call.
+        if (!showCall) {
+            val state = CallStateHolder.state.value
+            if (state.status != CallStatus.RINGING || state.callId != currentCallId) {
+                Log.i(TAG, "[RESUME] stale FSI for $currentCallId (${state.status}) — finishing")
+                stopRinger()
+                isProcessing.set(false)
+                finish()
+                return
+            }
+        }
         try {
             mediaPlayer?.apply {
                 if (isPlayerValid && !isPlaying) start()
@@ -322,18 +369,23 @@ private var currentClientInfoName by mutableStateOf<String?>(null)
     override fun onDestroy() {
         stopRinger()
         if (ownsRing && !ringResolved) {
-            // Ring UI destroyed without answer/decline/later (e.g. back-press).
-            // Resolve immediately instead of leaving the call pending and the
-            // notification orphaned until the 60s service-side timeout.
+            // Backlog item 14 — same guard as decline: only auto-decline
+            // while this call is still ringing.
             val callIdToCancel = currentCallId
-            Log.i(TAG, "[DISMISS] ring destroyed unresolved — auto-declining $callIdToCancel")
-            CallService.cancelIncomingNotification(this)
-            if (callIdToCancel.isNotBlank()) {
-                startService(Intent(this@IncomingCallActivity, CallService::class.java).apply {
-                    action = CallService.ACTION_CANCEL_CALL
-                    putExtra(CallService.EXTRA_CALL_ID, callIdToCancel)
-                    putExtra(CallService.EXTRA_TEXT, quietDeclineNote())
-                })
+            val state = CallStateHolder.state.value
+            if (state.status == CallStatus.RINGING && state.callId == callIdToCancel) {
+                // Ring UI destroyed without answer/decline/later (e.g. back-press).
+                // Resolve immediately instead of leaving the call pending and the
+                // notification orphaned until the 60s service-side timeout.
+                Log.i(TAG, "[DISMISS] ring destroyed unresolved — auto-declining $callIdToCancel")
+                CallService.cancelIncomingNotification(this)
+                if (callIdToCancel.isNotBlank()) {
+                    startService(Intent(this@IncomingCallActivity, CallService::class.java).apply {
+                        action = CallService.ACTION_CANCEL_CALL
+                        putExtra(CallService.EXTRA_CALL_ID, callIdToCancel)
+                        putExtra(CallService.EXTRA_TEXT, quietDeclineNote())
+                    })
+                }
             }
         }
         super.onDestroy()

@@ -52,7 +52,9 @@ import androidx.compose.ui.unit.sp
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import com.agentcall.app.ui.composables.ActionCircle
 import com.agentcall.app.ui.composables.AmbientBackground
 import com.agentcall.app.ui.composables.GradientAvatar
@@ -60,7 +62,9 @@ import com.agentcall.app.ui.composables.Notice
 import com.agentcall.app.ui.ClientBadge
 import com.agentcall.app.ui.theme.*
 import dagger.hilt.android.AndroidEntryPoint
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import java.util.UUID
 
 @AndroidEntryPoint
@@ -114,7 +118,23 @@ fun ActiveCallScreen(
 
     LaunchedEffect(callId) {
         viewModel.connect(callId, contextSummary, agentName)
-        while (true) { delay(250); viewModel.tick() }
+    }
+
+    // Battery audit M2: the tick is a per-second UI clock, not a busy loop.
+    // repeatOnLifecycle(STARTED) cancels it whenever the screen stops
+    // (covered/backgrounded) instead of spinning blind, 1 s is enough for a
+    // second-resolution timer (was 250 ms), and the phase check ends the loop
+    // for good at ENDED — previously a finished call kept ticking for as long
+    // as the composition survived. connect() stays in its own one-shot effect
+    // so a START->STOP->START cycle never re-runs session setup.
+    val lifecycleOwner = LocalLifecycleOwner.current
+    LaunchedEffect(callId, lifecycleOwner) {
+        lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            while (isActive && viewModel.uiState.value.phase != CallPhase.ENDED) {
+                delay(1_000)
+                viewModel.tick()
+            }
+        }
     }
 
     LaunchedEffect(state.messages.size) {

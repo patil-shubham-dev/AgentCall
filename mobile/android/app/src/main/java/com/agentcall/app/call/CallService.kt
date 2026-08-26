@@ -2,6 +2,7 @@ package com.agentcall.app.call
 
 import android.app.*
 import android.content.Context
+import android.media.AudioAttributes
 import android.os.Build
 import android.content.Intent
 import android.os.Bundle
@@ -14,6 +15,8 @@ import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import androidx.core.app.Person
+import com.agentcall.app.BuildConfig
 import com.agentcall.app.ForegroundTracker
 import com.agentcall.app.MainActivity
 import com.agentcall.app.R
@@ -25,8 +28,11 @@ import com.agentcall.app.data.api.CompleteRequest
 import com.agentcall.app.data.api.CompleteResultPayload
 import com.agentcall.app.data.database.dao.TranscriptMessageDao
 import com.agentcall.app.data.repository.CallRepository
+import com.agentcall.app.settings.MessageTemplates
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.Channel
+import kotlin.coroutines.coroutineContext
 import org.json.JSONObject
 import java.io.File
 import java.util.Locale
@@ -46,6 +52,13 @@ class CallService : Service() {
     // on this scope so a service teardown can never cancel a pending delivery.
     private val retryScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var wakeLock: PowerManager.WakeLock? = null
+    // Battery audit H2: force-ends a wedged call (backend silence, UI gone)
+    // at the max-call duration. Cancelled by endCall() on every terminal path.
+    private var callWatchdogJob: Job? = null
+    // Debug builds only: adb-injected override of the watchdog/wake-lock
+    // duration so on-device verification can exercise the wedge scenario in
+    // seconds instead of 30 minutes. Release builds never read it.
+    @Volatile private var debugMaxCallMs = 0L
     // Backlog item 13: one-shot resource-release guard — every terminal path
     // funnels through releaseCallResources(), and double-releases are no-ops.
     private var resourcesReleased = false
@@ -54,6 +67,19 @@ class CallService : Service() {
     var callId: String? = null
     var textToSpeech: TextToSpeech? = null
     private var ttsInitialized = false
+    private var ttsInitJob: Job? = null
+    // Backlog item 11 — bundled Piper TTS (sherpa-onnx, offline, no first-run
+    // voice-install dependency). Initialized lazily on an IO coroutine: the
+    // 81 MB model extraction + ONNX load blocks for seconds and must never
+    // run on the main thread. Speech is paced sentence-by-sentence through a
+    // single serialized worker; the system TextToSpeech engine remains as the
+    // fallback when Piper is unavailable.
+    private val piperEngine = PiperTtsEngine(this)
+    @Volatile private var piperReady = false
+    private var piperInitJob: Job? = null
+    @Volatile private var piperAttempted = false
+    private val speechChannel = Channel<String>(Channel.UNLIMITED)
+    private var speechWorker: Job? = null
     @Volatile var isRecording = false
     @Volatile var isAiSpeaking = false
     @Volatile var isPaused = false
@@ -87,6 +113,19 @@ class CallService : Service() {
             if (status == TextToSpeech.SUCCESS) {
                 ttsInitialized = true
                 textToSpeech?.language = Locale.US
+                // Route TTS through the voice-communication path instead of
+                // the media stream: the default USAGE_MEDIA plays out of the
+                // loudspeaker regardless of the speaker toggle. With
+                // USAGE_VOICE_COMMUNICATION the audio follows the
+                // communication device — earpiece by default, loudspeaker
+                // when the Speaker button (CallAudioManager) toggles it,
+                // and Bluetooth/wired headsets when connected.
+                textToSpeech?.setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                        .build()
+                )
                 textToSpeech?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
                     override fun onStart(utteranceId: String?) {
                         if (utteranceId == WARMUP_UTTERANCE_ID) return
@@ -150,27 +189,86 @@ class CallService : Service() {
         when (intent?.action) {
             ACTION_PREWARM_TTS -> {
                 if (textToSpeech == null) initTts()
+                // Piper needs no user-gated voice install and is the primary
+                // engine — kick off its (slow) init at ring time so the
+                // greeting is ready when the call starts. A failed attempt
+                // this ring is retried on the next ring.
+                piperAttempted = false
+                ensurePiperInit()
             }
             ACTION_START_CALL -> {
                 val id = intent.getStringExtra(EXTRA_CALL_ID) ?: return START_NOT_STICKY
                 val callerName = intent.getStringExtra(EXTRA_CALLER_NAME) ?: "AI Agent"
-                // A fresh call owns fresh resources (the service instance may
-                // have survived an earlier call's endCall + idle TTS shutdown).
-                resourcesReleased = false
-                ttsIdleJob?.cancel()
-                callId = id
-                callStartMs = System.currentTimeMillis()
-                firstWordLogged = false
-                transcriptSequence = 0
-                incomingSummary = intent.getStringExtra(EXTRA_CONTEXT_SUMMARY)
-                SignalingForegroundService.notifyRingResolved(this)
-                startForeground(NOTIFICATION_ID_ONGOING, createOngoingCallNotification("AI Call"))
-                acquireWakeLock()
-                audioManager.requestFocus()
-                val agentId = callerName.lowercase().replace("\\s+".toRegex(), "-")
-                scope.launch { repository.markCallAnswered(id, agentId, callerName) }
-                startVoiceSession(id)
-                retryWithBackoff(id, KEY_PENDING_ANSWERS, "ANSWER") { attemptAnswer(it) }
+                // Backlog item 14 — duplicate-answer guard: the notification's
+                // direct Answer action, the full-screen Answer button, and a
+                // stale FSI for an already-answered call can each fire an
+                // ACTION_START_CALL for the same call. Only the first may open
+                // a session; a second START_CALL for the same call is a silent
+                // no-op, and a START_CALL for a different call while this one
+                // owns the state is ignored (single-ring design).
+                val state = CallStateHolder.state.value
+                if (state.callId != null && state.callId != id) {
+                    Log.w(TAG, "[ANSWER] ignoring START_CALL for $id — ${state.status} for ${state.callId}")
+                    return START_STICKY
+                }
+                if (state.status == CallStatus.ANSWERED || state.status == CallStatus.ENDED) {
+                    Log.i(TAG, "[ANSWER] duplicate START_CALL for $id (${state.status}) — skipping")
+                    return START_STICKY
+                }
+                if (BuildConfig.DEBUG) {
+                    debugMaxCallMs = intent.getLongExtra(EXTRA_DEBUG_MAX_CALL_MS, 0L)
+                }
+                // Battery audit H2: everything from resource acquisition (wake
+                // lock, audio focus) to session start is guarded — an exception
+                // mid-setup must tear down exactly like a user-initiated end,
+                // or the wake lock and foreground notification outlive a call
+                // that never started.
+                try {
+                    hasActiveCall = true
+                    CallStateHolder.answered(id)
+                    // A fresh call owns fresh resources (the service instance may
+                    // have survived an earlier call's endCall + idle TTS shutdown).
+                    resourcesReleased = false
+                    ttsIdleJob?.cancel()
+                    callId = id
+                    callStartMs = System.currentTimeMillis()
+                    firstWordLogged = false
+                    transcriptSequence = 0
+                    incomingSummary = intent.getStringExtra(EXTRA_CONTEXT_SUMMARY)
+                    // A parked websocket (idle background) must be restored before
+                    // AiMessage events can reach this session.
+                    signalingClient.connectIfIdle()
+                    // Runs after hasActiveCall=true so the FGS sees the live call
+                    // and keeps itself alive instead of parking.
+                    SignalingForegroundService.notifyRingResolved(this)
+                    // Fresh call, fresh Piper attempt: a previous call may have
+                    // failed init (transient I/O/memory), and the ring-time prewarm
+                    // may not have run on this process instance.
+                    piperAttempted = false
+                    ensurePiperInit()
+                    startForeground(NOTIFICATION_ID_ONGOING, createOngoingCallNotification("AI Call"))
+                    acquireWakeLock(effectiveMaxCallMs() + WAKELOCK_TIMEOUT_BUFFER_MS)
+                    audioManager.requestFocus()
+                    // Earpiece by default, like a real phone call. Explicit even
+                    // though the route usually defaults there: on pre-S devices
+                    // isSpeakerphoneOn persists across calls, so a previous
+                    // speakerphone call would leave the next one blaring.
+                    audioManager.setSpeakerphone(false)
+                    // Direct Answer action from the incoming-call notification
+                    // landed here — the ring UI is not open to dismiss it.
+                    cancelIncomingNotification(this)
+                    val agentId = callerName.lowercase().replace("\\s+".toRegex(), "-")
+                    scope.launch { repository.markCallAnswered(id, agentId, callerName) }
+                    startVoiceSession(id)
+                    startCallWatchdog()
+                    retryWithBackoff(id, KEY_PENDING_ANSWERS, "ANSWER") { attemptAnswer(it) }
+                } catch (t: Throwable) {
+                    Log.e(TAG, "[CALL] session setup failed — forcing teardown for $id", t)
+                    CallStateHolder.ended(id)
+                    CallEventBus.emit(CallEvent.CallEnded)
+                    endCall()
+                    stopSelf()
+                }
             }
             ACTION_START_RECORDING -> startRecording()
             ACTION_STOP_RECORDING -> stopRecording()
@@ -199,21 +297,21 @@ class CallService : Service() {
                 val messageId = intent.getStringExtra(EXTRA_MESSAGE_ID) ?: UUID.randomUUID().toString()
                 enqueueUserText(cid, messageId, text)
             }
-            ACTION_END_CALL -> {
-                val cid = intent.getStringExtra(EXTRA_CALL_ID) ?: callId
-                if (cid != null) {
-                    scope.launch {
-                        repository.saveCallEnded(cid, "ended")
-                        deriveSummary()?.let { repository.saveCallSummary(cid, it) }
-                    }
-                    retryWithBackoff(cid, KEY_PENDING_COMPLETES, "COMPLETE") { attemptComplete(it) }
-                }
-                CallEventBus.emit(CallEvent.CallEnded)
-                endCall()
-                stopSelf()
-            }
+            ACTION_END_CALL -> terminateCall(intent.getStringExtra(EXTRA_CALL_ID) ?: callId)
             ACTION_CANCEL_CALL -> {
                 val id = intent.getStringExtra(EXTRA_CALL_ID) ?: return START_NOT_STICKY
+                // Backlog item 14 — an answered call must never be cancelled:
+                // the ring UI's countdown auto-decline can race the answer tap,
+                // and a late duplicate cancel can trail a resolved ring.
+                val state = CallStateHolder.state.value
+                if (state.status == CallStatus.ANSWERED && state.callId == id) {
+                    Log.i(TAG, "[CANCEL] ignoring cancel for answered call $id")
+                    return START_STICKY
+                }
+                CallStateHolder.ended(id)
+                // Direct Decline action from the incoming-call notification
+                // landed here — the ring UI is not open to dismiss it.
+                cancelIncomingNotification(this)
                 val note = intent.getStringExtra(EXTRA_TEXT)?.takeIf { it.isNotBlank() }
                 if (note != null) {
                     savePendingNote(id, note)
@@ -225,6 +323,26 @@ class CallService : Service() {
                     scope.launch { repository.saveUserTextMessage(id, note) }
                 }
                 retryWithBackoff(id, KEY_PENDING_CANCELS, "CANCEL") { attemptCancel(it) }
+                if (!intent.getBooleanExtra(EXTRA_FROM_TIMEOUT, false)) {
+                    // Clear the FGS ring state: a decline via the notification's
+                    // direct action (or the activity) leaves the ring armed, and
+                    // the 60s timeout would then send a duplicate decline note.
+                    // Timeout-originated cancels skip this — the FGS already
+                    // cleared its ring and must stay alive for call_expired.
+                    SignalingForegroundService.notifyRingResolved(this)
+                }
+                // Battery audit H3: a declined/expired ring never opened a
+                // session, but the ring-time prewarm may have loaded Piper and
+                // onCreate already bound system TTS. Without this cleanup the
+                // sticky service stays resident holding both engines (~100 MB+)
+                // until process death. Same funnel as endCall(): idle shutdown
+                // schedules the engine release; stopSelf() drops the service.
+                // Retry jobs live on retryScope and survive teardown by design,
+                // and ttsIdleJob is cancelled by any subsequent START_CALL.
+                if (!hasActiveCall) {
+                    scheduleTtsIdleShutdown()
+                    stopSelf()
+                }
             }
             ACTION_SCHEDULE_CALLBACK -> {
                 val id = intent.getStringExtra(EXTRA_CALL_ID) ?: return START_NOT_STICKY
@@ -232,6 +350,13 @@ class CallService : Service() {
                 val note = intent.getStringExtra(EXTRA_NOTE)?.takeIf { it.isNotBlank() }
                 savePendingCallback(id, delayMin, note)
                 retryWithBackoff(id, KEY_PENDING_CALLBACKS, "CALLBACK") { attemptScheduleCallback(it) }
+                // Battery audit H3: same ring-resolution cleanup as CANCEL —
+                // "Later" also ends a ring that never opened a session, so the
+                // prewarmed engines must not keep the sticky service resident.
+                if (!hasActiveCall) {
+                    scheduleTtsIdleShutdown()
+                    stopSelf()
+                }
             }
         }
         return START_STICKY
@@ -398,13 +523,115 @@ class CallService : Service() {
             Log.d(TAG, "[MUTE] skipping speech (muted): ${text.take(60)}")
             return
         }
+        if (text.isBlank()) return
+        // Single serialized worker (speechLoop) paces Piper sentence-by-
+        // sentence or hands the message to the system TTS engine — one AI
+        // message at a time, no interleaving between the two engines.
+        enqueueSpeech(text)
+    }
+
+    @Synchronized
+    private fun enqueueSpeech(text: String) {
+        speechChannel.trySend(text)
+        if (speechWorker?.isActive != true) {
+            speechWorker = scope.launch { speechLoop() }
+        }
+    }
+
+    private suspend fun speechLoop() {
+        for (text in speechChannel) {
+            if (!coroutineContext.isActive) break
+            if (isPaused) continue
+            speakPaced(text)
+        }
+    }
+
+    private suspend fun speakPaced(text: String) {
+        // Piper-first: bundled, offline, no first-run voice install, and it
+        // gives per-sentence pacing. If init is still running (cold ring, the
+        // prewarm races the answer), wait up to a short cap — init blocks for
+        // seconds, so an unready engine falls back to system TTS for this
+        // message rather than delaying the first word.
+        val initJob = ensurePiperInit()
+        if (piperReady) {
+            speakWithPiper(text)
+            return
+        }
+        if (initJob != null) {
+            // Battery audit M3(b): coroutine-native wait — the join() suspends
+            // (zero wakeups) instead of polling piperReady at 20 Hz. The cap
+            // keeps the first word fast: an engine that is still initializing
+            // after PIPER_WAIT_MS hands this message to system TTS.
+            withTimeoutOrNull(PIPER_WAIT_MS) { initJob.join() }
+        }
+        if (piperReady) {
+            speakWithPiper(text)
+        } else {
+            speakWithSystemTts(text)
+        }
+    }
+
+    /**
+     * Starts Piper init once per call. Idempotent, synchronized, never touches
+     * the main thread (81 MB model extraction + ONNX load). Returns the running
+     * init job so callers can wait on it; null when already ready or already
+     * failed (a failed attempt is retried on the next ring/call via
+     * [piperAttempted] reset).
+     */
+    @Synchronized
+    private fun ensurePiperInit(): Job? {
+        if (piperReady) return null
+        if (piperInitJob?.isActive == true) return piperInitJob
+        if (piperAttempted) return null
+        piperAttempted = true
+        val job = scope.launch {
+            piperReady = piperEngine.init()
+            Log.i(TAG, "[PIPER] init finished ready=$piperReady")
+        }
+        piperInitJob = job
+        return job
+    }
+
+    private suspend fun speakWithPiper(text: String) {
+        val sentences = SpeechPacing.splitIntoSentences(text)
+        if (sentences.isEmpty()) return
+        if (!firstWordLogged) {
+            firstWordLogged = true
+            Log.i(TAG, "[TTS] piper first word: answer->word=${System.currentTimeMillis() - callStartMs}ms")
+        }
+        isAiSpeaking = true
+        CallEventBus.emit(CallEvent.AiSpeakingStarted)
+        try {
+            sentences.forEachIndexed { index, sentence ->
+                if (!coroutineContext.isActive || piperEngine.stopRequested) return@forEachIndexed
+                if (index > 0) {
+                    // Breathing pause before every sentence but the first.
+                    // Battery audit M3(c): a single cancellable delay replaces
+                    // the 20 Hz stopRequested poll — every requestStop() caller
+                    // also cancels this worker job (releaseCallResources), so
+                    // cancellation propagation interrupts the pause instantly;
+                    // the post-delay check covers the flag-only path.
+                    delay(SpeechPacing.sentenceDelayMs())
+                    if (!coroutineContext.isActive || piperEngine.stopRequested) return@forEachIndexed
+                }
+                val speed = SpeechPacing.sentenceSpeed()
+                withContext(Dispatchers.Default) {
+                    piperEngine.speakSentence(sentence, speed)
+                }
+            }
+        } finally {
+            isAiSpeaking = false
+            CallEventBus.emit(CallEvent.AiSpeakingFinished)
+        }
+    }
+
+    private fun speakWithSystemTts(text: String) {
         val tts = textToSpeech
         if (tts == null || !ttsInitialized) {
             pendingSpeakText = text
             if (tts == null) initTts()
             return
         }
-
         val utteranceId = UUID.randomUUID().toString()
         speakRequestedAt[utteranceId] = System.currentTimeMillis()
         tts.speak(text, TextToSpeech.QUEUE_ADD, null, utteranceId)
@@ -541,6 +768,10 @@ class CallService : Service() {
                 Log.i(TAG, "[GREET] source=incoming-or-fallback summary=\"$summary\"")
             }
 
+            // Give the user a beat to bring the phone to their ear after
+            // answering — the AI's first words start ~1s after the answer
+            // tap, like the ring-out silence on a real call.
+            delay(1000)
             speakTextOnMain(summary)
             if (lastAiMessage.isBlank()) {
                 lastAiMessage = summary
@@ -707,10 +938,75 @@ class CallService : Service() {
         }
     }
 
+    /**
+     * Single terminal-teardown path for a live call session: persists the end
+     * record and recap, schedules the backend COMPLETE with retry, then tears
+     * down service resources. Shared by the user's End action (ACTION_END_CALL)
+     * and the max-duration watchdog so both produce identical state.
+     */
+    private fun terminateCall(cid: String?) {
+        if (cid != null) {
+            scope.launch {
+                repository.saveCallEnded(cid, "ended")
+                deriveSummary()?.let { repository.saveCallSummary(cid, it) }
+            }
+            retryWithBackoff(cid, KEY_PENDING_COMPLETES, "COMPLETE") { attemptComplete(it) }
+        }
+        CallEventBus.emit(CallEvent.CallEnded)
+        endCall()
+        stopSelf()
+    }
+
+    /**
+     * Battery audit H2: the watchdog is the actual fix for the wedge scenario
+     * (backend never sends a terminal event, no UI left to press End). At the
+     * max-call duration it force-terminates through the same [terminateCall]
+     * path as a user-initiated end. The wake-lock timeout (acquire time +
+     * buffer) is only insurance in case this job itself fails.
+     */
+    private fun startCallWatchdog() {
+        callWatchdogJob?.cancel()
+        val durationMs = effectiveMaxCallMs()
+        callWatchdogJob = scope.launch {
+            delay(durationMs)
+            val cid = callId ?: return@launch
+            Log.w(TAG, "[CALL] watchdog fired after ${durationMs / 1000}s — forcing end for $cid")
+            terminateCall(cid)
+        }
+    }
+
+    /** Watchdog/wake-lock ceiling: adb-overridable in debug builds for verification. */
+    private fun effectiveMaxCallMs(): Long {
+        // Debug-only prefs override lets adb-driven verification set the cap
+        // via run-as without needing to inject service intents (this ROM
+        // blocks shell starts of non-exported components entirely).
+        if (BuildConfig.DEBUG) {
+            val pref = getSharedPreferences(PREFS_CALL_STATE, MODE_PRIVATE)
+                .getLong(KEY_DEBUG_MAX_CALL_MS, 0L)
+            if (pref > 0L) return pref
+        }
+        return if (BuildConfig.DEBUG && debugMaxCallMs > 0L) debugMaxCallMs else MAX_CALL_DURATION_MS
+    }
+
     private fun endCall() {
+        // Backlog item 14: the shared ring/call truth must be updated before
+        // the FGS is asked to park — an active call is exactly the state that
+        // keeps the FGS alive.
+        hasActiveCall = false
+        callWatchdogJob?.cancel()
+        callWatchdogJob = null
+        val endedId = callId
+        if (endedId != null) CallStateHolder.ended(endedId)
+        val firstEnd = !resourcesReleased
         releaseCallResources()
         scheduleTtsIdleShutdown()
         callId = null
+        if (firstEnd) {
+            // The FGS may have missed the terminal WS event while
+            // hasActiveCall was still true; ask it to park/stop itself now.
+            // onDestroy's second endCall() call is a no-op here.
+            SignalingForegroundService.notifyIdlePark(this)
+        }
     }
 
     /**
@@ -721,6 +1017,12 @@ class CallService : Service() {
     private fun releaseCallResources() {
         if (resourcesReleased) return
         resourcesReleased = true
+        // Stop the speech pipeline: drop queued sentences, cancel the worker,
+        // and stop any sentence mid-playback.
+        while (speechChannel.tryReceive().isSuccess) {}
+        speechWorker?.cancel()
+        speechWorker = null
+        piperEngine.requestStop()
         textToSpeech?.stop()
         speechRecognizer?.destroy()
         speechRecognizer = null
@@ -733,26 +1035,44 @@ class CallService : Service() {
     }
 
     /**
-     * Backlog item 13: the TTS engine must not stay alive app-wide after a
-     * call. Shut it down after an idle window; initTts() recreates on demand
-     * (ttsInitialized is reset so the re-init path is not short-circuited).
+     * Backlog item 13: the TTS engines must not stay alive app-wide after a
+     * call. Shut both down after an idle window; initTts()/ensurePiperInit()
+     * recreate on demand. Piper's 81 MB model + native libs are released so
+     * they are not held in memory after the call.
      */
     private fun scheduleTtsIdleShutdown() {
         ttsIdleJob?.cancel()
         ttsIdleJob = retryScope.launch {
             delay(TTS_IDLE_SHUTDOWN_MS)
             if (callId == null && !isRecording && !isAiSpeaking) {
+                // Battery-audit verification hook: makes the engine release
+                // observable in logcat (dumpsys alone cannot separate mmap'd
+                // model pages from allocator retention).
+                Log.i(TAG, "[TTS] idle shutdown — releasing system TTS + Piper engines")
                 runCatching { textToSpeech?.shutdown() }
                 textToSpeech = null
                 ttsInitialized = false
+                runCatching { piperEngine.release() }
+                piperReady = false
+                piperAttempted = false
+                piperInitJob = null
             }
         }
     }
 
-    private fun acquireWakeLock() {
+    /**
+     * Battery audit H2: the lock is always acquired WITH a timeout (the
+     * documented pattern for exactly this failure mode — developer.android.com
+     * "Release a wake lock": acquire(long) automatically releases after the
+     * timeout, so even if every in-process release path fails the OS reclaims
+     * it). The timeout is the max-call duration plus a buffer so that under
+     * normal operation the watchdog's graceful terminateCall() wins and only a
+     * failed watchdog ever hits the raw timeout.
+     */
+    private fun acquireWakeLock(timeoutMs: Long) {
         val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
         wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "VoiceBridge:CallLock")
-            .apply { acquire() }
+            .apply { acquire(timeoutMs) }
     }
 
     private fun releaseWakeLock() {
@@ -809,6 +1129,17 @@ class CallService : Service() {
         const val EXTRA_MESSAGE_ID = "message_id"
         const val EXTRA_NOTE = "note"
         const val EXTRA_MUTED = "muted"
+        // Set by the FGS ring-timeout auto-decline: lets ACTION_CANCEL_CALL
+        // skip notifying the FGS to park/stop (it must stay alive to receive
+        // the server's call_expired and post the missed-call notification).
+        const val EXTRA_FROM_TIMEOUT = "from_timeout"
+        /**
+         * Whether a call session is live (CallService has accepted an answer
+         * and not yet ended it). The FGS consults this before parking/stopping
+         * itself — an active call must never lose its ring/wake infrastructure.
+         */
+        @Volatile
+        var hasActiveCall = false
         const val CHANNEL_ONGOING_CALL = "ongoing_call"
         // v2: old "incoming_call" channel had no ringtone/vibration and ColorOS drops
         // channel updates/delete, so an in-place upgrade is impossible — version the ID.
@@ -831,6 +1162,22 @@ class CallService : Service() {
         private const val NOTIFICATION_ID_INCOMING = 1002
         private const val NOTIFICATION_ID_MISSED = 1005
         private const val TTS_IDLE_SHUTDOWN_MS = 60_000L
+        // Battery audit H2: hard ceiling on a single call session. The longest
+        // legitimate call this product supports is an AI check-in conversation;
+        // 30 min leaves generous margin above that. The wake lock carries this
+        // plus WAKELOCK_TIMEOUT_BUFFER_MS so the OS-level self-release only
+        // fires if the in-process watchdog itself failed.
+        const val MAX_CALL_DURATION_MS = 30 * 60_000L
+        private const val WAKELOCK_TIMEOUT_BUFFER_MS = 5 * 60_000L
+        // Debug builds only: lets adb-driven verification exercise the watchdog
+        // with a short cap (am start-service --el). Release ignores it entirely.
+        const val EXTRA_DEBUG_MAX_CALL_MS = "debug_max_call_ms"
+        private const val KEY_DEBUG_MAX_CALL_MS = "debug_max_call_ms"
+        // How long a message may wait for a Piper init that is already
+        // running (cold ring: prewarm raced the answer). Init blocks for
+        // seconds, so the cap keeps the first word fast — an unready engine
+        // hands the message to the system TTS instead.
+        private const val PIPER_WAIT_MS = 3_000L
         private const val WARMUP_UTTERANCE_ID = "tts-warmup"
         private const val WARMUP_TEXT = "ok"
         private const val WARMUP_FILE = "tts-warmup.wav"
@@ -867,6 +1214,38 @@ class CallService : Service() {
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
 
             val channel = if (quiet) CHANNEL_INCOMING_CALL_QUIET else CHANNEL_INCOMING_CALL
+            // Direct actions, mirroring the full-screen IncomingCallActivity
+            // buttons: Answer starts the same ACTION_START_CALL session the
+            // screen's Answer button starts; Decline sends the same
+            // ACTION_CANCEL_CALL with the same decline note. Tapping these
+            // never opens a second confirmation screen. Request codes are
+            // derived from the call id so simultaneous calls can't collide.
+            val answerPi = PendingIntent.getService(
+                context, callId.hashCode() * 2,
+                Intent(context, CallService::class.java).apply {
+                    action = ACTION_START_CALL
+                    putExtra(EXTRA_CALL_ID, callId)
+                    putExtra(EXTRA_CALLER_NAME, callerName)
+                    putExtra(EXTRA_CONTEXT_SUMMARY, summary)
+                },
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
+            val declinePi = PendingIntent.getService(
+                context, callId.hashCode() * 2 + 1,
+                Intent(context, CallService::class.java).apply {
+                    action = ACTION_CANCEL_CALL
+                    putExtra(EXTRA_CALL_ID, callId)
+                    putExtra(EXTRA_TEXT, MessageTemplates.declineMessage(context))
+                },
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
+            val callStyle = if (Build.VERSION.SDK_INT >= 31) {
+                val person = Person.Builder().setName(callerName).build()
+                NotificationCompat.CallStyle.forIncomingCall(person, declinePi, answerPi)
+            } else {
+                null
+            }
+
             val notification = NotificationCompat.Builder(context, channel)
                 .setContentTitle(if (quiet) "Incoming AI Call (quiet)" else "Incoming AI Call")
                 .setContentText(summary.ifBlank { "$callerName is calling..." })
@@ -879,8 +1258,11 @@ class CallService : Service() {
                 // full-screen intent is rejected (no USE_FULL_SCREEN_INTENT
                 // grant): the user could never open the incoming-call UI.
                 .setContentIntent(pi)
+                .addAction(R.drawable.ic_call, "Answer", answerPi)
+                .addAction(R.drawable.ic_missed_call, "Decline", declinePi)
                 .setAutoCancel(true)
                 .setOngoing(false)
+                .setStyle(callStyle)
                 .build()
 
             mgr.notify(NOTIFICATION_ID_INCOMING, notification)

@@ -70,6 +70,21 @@ class SignalingClient @Inject constructor(
     @Volatile
     private var userDisconnected = false
 
+    /**
+     * Idle park (backlog item 14 — FCM is now the primary ring-wake path):
+     * the websocket is closed WITHOUT marking the user disconnected, so a
+     * later [connectIfIdle] (or any [connect]) restores it cleanly. While
+     * parked, the app relies on FCM high-priority pushes for rings — the
+     * FGS fallback poll only runs while the FGS is alive, and the FGS parks
+     * itself when there is no ring, no call and no foreground app.
+     */
+    @Volatile
+    private var parked = false
+
+    /** True while the socket is idle-parked (battery audit M4 poll gating). */
+    val isParked: Boolean
+        get() = parked
+
     @Volatile
     private var connectGeneration = 0
 
@@ -110,6 +125,7 @@ class SignalingClient @Inject constructor(
         if (_connectionState.value == ConnectionState.CONNECTED && userId == currentUserId) {
             return
         }
+        parked = false
         currentUserId = userId
         reconnectAttempt = 0
         userDisconnected = false
@@ -151,6 +167,10 @@ class SignalingClient @Inject constructor(
 
     private fun onNetworkAvailable() {
         if (userDisconnected) return
+        if (parked) {
+            Log.d(TAG, "[TRACE] onNetworkAvailable() fired while parked — staying parked until connectIfIdle()")
+            return
+        }
         val state = _connectionState.value
         Log.d(TAG, "[TRACE] onNetworkAvailable() fired state=$state")
         if (state == ConnectionState.DISCONNECTED) {
@@ -180,7 +200,12 @@ class SignalingClient @Inject constructor(
         if (reconnectAttempt >= MAX_RECONNECT_ATTEMPTS) {
             Log.e(TAG, "[WS] max reconnect attempts reached ($MAX_RECONNECT_ATTEMPTS)")
             _connectionState.value = ConnectionState.DISCONNECTED
-            scope.launch { _events.emit(VoiceBridgeEvent.Error("MAX_RECONNECT", "Server unreachable after $MAX_RECONNECT_ATTEMPTS attempts")) }
+            scope.launch {
+                _events.emit(VoiceBridgeEvent.Error("MAX_RECONNECT", "Server unreachable after $MAX_RECONNECT_ATTEMPTS attempts"))
+                // Battery audit H1: the connection is genuinely gone — say so,
+                // or UI flags derived from events drift from reality.
+                _events.emit(VoiceBridgeEvent.Disconnected)
+            }
             return
         }
         try {
@@ -271,6 +296,7 @@ class SignalingClient @Inject constructor(
                 "[WS] $shortLivedStreak sockets died quickly — parking websocket; fallback poll takes over rings (caller=$caller)",
             )
             _connectionState.value = ConnectionState.DISCONNECTED
+            scope.launch { _events.emit(VoiceBridgeEvent.Disconnected) }
             return true
         }
         _connectionState.value = ConnectionState.RECONNECTING
@@ -405,6 +431,59 @@ class SignalingClient @Inject constructor(
             null
         }
 
+    /**
+     * Idle park: closes the socket and stops reconnect activity without
+     * setting [userDisconnected]. A ring in flight (CallStateHolder RINGING)
+     * must never be cut — the FGS/poll path owns that window and can only
+     * park after the ring resolves.
+     *
+     * Unlike [disconnect] this does NOT stop the SignalingForegroundService —
+     * the caller decides service lifetime (maybeParkAndStop / MainActivity).
+     */
+    fun park() {
+        if (CallStateHolder.state.value.status == CallStatus.RINGING) {
+            Log.i(TAG, "[WS] park skipped — a ring is in flight")
+            return
+        }
+        if (parked) return
+        parked = true
+        Log.i(TAG, "[WS] park (idle)")
+        connectGeneration++
+        unregisterNetworkCallback()
+        connectionJob?.cancel()
+        val socket = webSocket
+        webSocket = null
+        socket?.close(1000, "Parked idle")
+        _connectionState.value = ConnectionState.DISCONNECTED
+        // Battery audit H1: park() is a genuine disconnect for every consumer
+        // of the event stream — the socket is closed and nothing will restore
+        // it until connectIfIdle()/connect(). Emitting keeps UI state truthful
+        // (HomeViewModel stops its availability polling) instead of relying on
+        // an event that was defined but never sent.
+        scope.launch { _events.emit(VoiceBridgeEvent.Disconnected) }
+    }
+
+    /**
+     * Restores the websocket after an idle park (or any unreasoned
+     * DISCONNECTED state), without forcing a full [connect] lifecycle.
+     * The app re-enters the foreground, answers a call, or re-subscribes to
+     * events through this. A deliberate [disconnect] stays disconnected
+     * (userDisconnected) until the user explicitly reconnects.
+     */
+    fun connectIfIdle() {
+        if (userDisconnected) return
+        if (parked || _connectionState.value == ConnectionState.DISCONNECTED) {
+            Log.i(TAG, "[WS] connectIfIdle — restoring connection")
+            parked = false
+            registerNetworkCallback()
+            SignalingForegroundService.start(app)
+            connectGeneration++
+            connectionJob = scope.launch {
+                connectInternal("CALLER=connectIfIdle")
+            }
+        }
+    }
+
     fun disconnect() {
         Log.d(TAG, "[WS] disconnect")
         userDisconnected = true
@@ -415,6 +494,7 @@ class SignalingClient @Inject constructor(
         webSocket = null
         socket?.close(1000, "User disconnected")
         _connectionState.value = ConnectionState.DISCONNECTED
+        scope.launch { _events.emit(VoiceBridgeEvent.Disconnected) }
         SignalingForegroundService.stop(app)
     }
 }

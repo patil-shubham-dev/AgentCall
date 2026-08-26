@@ -60,6 +60,9 @@ class SignalingForegroundService : Service() {
     private val ringCallers = mutableMapOf<String, Triple<String, String, String?>>()
     @Volatile private var foregroundStarted = false
     @Volatile private var lastFcmRegisterMs = 0L
+    // A push (ACTION_RING_FROM_PUSH) is being validated against the backend;
+    // while true the service must not park/stop or the ring is lost.
+    @Volatile private var pendingRingValidation = false
 
     private val disconnectReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -69,12 +72,10 @@ class SignalingForegroundService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        val filter = IntentFilter(ACTION_DISCONNECT)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            registerReceiver(disconnectReceiver, filter, RECEIVER_NOT_EXPORTED)
-        } else {
-            registerReceiver(disconnectReceiver, filter, RECEIVER_NOT_EXPORTED)
-        }
+        // Battery audit L4: the two SDK branches were identical — collapsed.
+        // RECEIVER_NOT_EXPORTED is a compile-time constant whose unknown bits
+        // are ignored pre-13, so one call covers all supported levels.
+        registerReceiver(disconnectReceiver, IntentFilter(ACTION_DISCONNECT), RECEIVER_NOT_EXPORTED)
         eventsJob = scope.launch {
             signalingClient.events.collect { event ->
                 handleEvent(event)
@@ -94,23 +95,19 @@ class SignalingForegroundService : Service() {
                 }
             }
         }
-        // WS-down fallback: on deployments whose proxy cannot hold a websocket
-        // the ring push never arrives. While the socket is NOT connected, poll
-        // the active-call REST endpoint so incoming calls still ring. When the
-        // WS is up this loop is stopped — the push path stays the single ring
-        // source; the shared recentlyRung/ringingCallId guards dedupe overlap
-        // while the connection flaps.
+        // WS-down fallback (battery audit M4): the poll runs only through the
+        // FallbackPollCadence.shouldRunFallbackPoll gate — genuinely
+        // DISCONNECTED, not parked, and only while a foreground app or an
+        // in-flight ring can act on what it finds. CONNECTING is "wait": the
+        // socket that is coming up will deliver the same events. Re-evaluated
+        // on every connection-state emission AND whenever ring state changes
+        // (ring()/clearRing()), since those flip the hasActiveRing input.
         fallbackJob = scope.launch {
-            signalingClient.connectionState.collect { state ->
-                if (state == SignalingClient.ConnectionState.CONNECTED) {
-                    stopFallbackPoll()
-                } else {
-                    startFallbackPoll()
-                }
-            }
+            signalingClient.connectionState.collect { updateFallbackPoll() }
         }
-        // After a device reboot the app process is gone; the boot receiver only
-        // starts this service, so establish the WebSocket from here.
+        // If the service starts with the socket down (process restart after a
+        // system kill, sticky-service restart), establish the WebSocket from
+        // here — there is no boot receiver by design: rings wake us via FCM.
         if (signalingClient.connectionState.value == SignalingClient.ConnectionState.DISCONNECTED) {
             signalingClient.connect()
         }
@@ -121,13 +118,22 @@ class SignalingForegroundService : Service() {
         // gap where FCM rings can never be delivered. Fetching the current
         // token here is idempotent and self-heals that case.
         scope.launch {
+            // Battery audit L1: seed optimistically BEFORE the fetch so a
+            // ws-CONNECTED callback racing this coroutine cannot double-POST
+            // (observed on cold start: both registrations fired in the same
+            // millisecond when seeding waited for POST completion). On
+            // failure the seed is cleared so ws-CONNECTED doubles as retry.
+            lastFcmRegisterMs = System.currentTimeMillis()
             val token = runCatching { awaitFcmToken() }.getOrNull()
             if (token.isNullOrBlank()) {
                 Log.w(TAG, "[FCM] startup token fetch returned nothing — FCM unavailable?")
             } else {
                 Log.i(TAG, "[FCM] startup token registration")
                 runCatching { callRepository.registerFcmToken(token) }
-                    .onFailure { Log.w(TAG, "[FCM] startup token registration failed", it) }
+                    .onFailure {
+                        Log.w(TAG, "[FCM] startup token registration failed", it)
+                        lastFcmRegisterMs = 0L
+                    }
             }
         }
     }
@@ -176,23 +182,32 @@ class SignalingForegroundService : Service() {
                 // if the answering surface never reported back locally, so the
                 // 60s auto-decline can never fire on a live call.
                 clearRing()
+                CallStateHolder.answered(event.callId)
+                // Deliberately no maybeParkAndStop(): CallService owns the
+                // active session and parks/stops us via ACTION_IDLE_PARK when
+                // the call ends.
             }
             is VoiceBridgeEvent.CallEnded -> {
                 clearRing()
+                CallStateHolder.ended(event.callId)
                 // Finalize the ring-time record (the answering path upserts its
                 // own "started" row; this covers rings that ended without an
                 // answer). Idempotent — no-op when no row exists.
                 callRepository.saveCallEnded(event.callId, "ended")
+                maybeParkAndStop()
             }
             is VoiceBridgeEvent.CallCancelled -> {
                 clearRing()
+                CallStateHolder.ended(event.callId)
                 callRepository.saveCallEnded(event.callId, "cancelled")
+                maybeParkAndStop()
             }
             is VoiceBridgeEvent.CallExpired -> {
                 // Backlog item 1: the ring window closed unanswered. Record the
                 // miss and — when the app is backgrounded — post the silent
                 // missed-call notification that deep-links to the profile.
                 clearRing()
+                CallStateHolder.ended(event.callId)
                 val meta = ringCallers.remove(event.callId)
                 callRepository.saveCallEnded(event.callId, "expired")
                 if (!ForegroundTracker.isForeground && meta != null) {
@@ -203,13 +218,16 @@ class SignalingForegroundService : Service() {
                         meta.first.agentSlug(),
                     )
                 }
+                maybeParkAndStop()
             }
             is VoiceBridgeEvent.CallAborted -> {
                 // The agent's process died mid-call (ring or active): record the
                 // distinct "aborted" outcome — no missed-call notification, the
                 // caller hung up rather than the phone missing the call.
                 clearRing()
+                CallStateHolder.ended(event.callId)
                 callRepository.saveCallEnded(event.callId, "aborted")
+                maybeParkAndStop()
             }
             else -> {}
         }
@@ -272,6 +290,16 @@ class SignalingForegroundService : Service() {
         logRingDiagnostics()
         ringCallers[callId] = Triple(callerName, summary, clientInfoName)
         ringingCallId = callId
+        // Battery audit M4: a ring starting while the socket is down must
+        // start (or keep) the fallback poll even if no connection-state
+        // emission follows — hasActiveRing is an input to the gate.
+        updateFallbackPoll()
+        // Ring truth for the Answer/Decline paths: the full-screen activity
+        // and the notification's direct actions validate against this before
+        // acting, so a stale ring UI can never answer/cancel a live call.
+        // Set BEFORE the notification posts — the Answer PendingIntent is
+        // fireable the moment the notification is visible.
+        CallStateHolder.ringing(callId)
         // Backlog item 6: during quiet hours the ring is silent (dedicated
         // channel) but the full-screen UI still shows, so the user can answer
         // an important call. The AI learns about the window through the
@@ -293,6 +321,7 @@ class SignalingForegroundService : Service() {
             if (ringingCallId == callId) {
                 Log.i(TAG, "[RING] timeout for $callId — auto-declining")
                 clearRing()
+                CallStateHolder.ended(callId)
                 val note = if (quiet) {
                     val (start, end) = quietHoursManager.activeRange(callerName) ?: (0 to 0)
                     MessageTemplates.quietHoursMessage(
@@ -307,7 +336,11 @@ class SignalingForegroundService : Service() {
                     action = CallService.ACTION_CANCEL_CALL
                     putExtra(CallService.EXTRA_CALL_ID, callId)
                     putExtra(CallService.EXTRA_TEXT, note)
+                    putExtra(CallService.EXTRA_FROM_TIMEOUT, true)
                 })
+                // Deliberately no maybeParkAndStop(): the server's
+                // call_expired must still reach this service so the missed-call
+                // notification can be posted; the terminal handler parks/stops.
             }
         }
     }
@@ -339,6 +372,31 @@ class SignalingForegroundService : Service() {
         ringTimeoutJob = null
         ringingCallId = null
         CallService.cancelIncomingNotification(this)
+        // Battery audit M4: the ring resolving flips hasActiveRing — without
+        // re-evaluating, the poll would keep running at foreground cadence
+        // with nobody left to act on it.
+        updateFallbackPoll()
+    }
+
+    /**
+     * Backlog item 14 — idle self-stop: with FCM as the primary ring-wake
+     * path the always-on socket is no longer needed. When there is no ring
+     * in flight, no active call and no visible app, the service parks the
+     * websocket and stops itself. Any of the three conditions keeps it alive
+     * (a ring owns the WS/poll path, an active call may still need the
+     * socket, and a foreground app must keep its status truthful).
+     *
+     * [pendingRingValidation] also blocks parking: a push that is still
+     * being validated has not yet decided whether it rings.
+     */
+    private fun maybeParkAndStop() {
+        if (ringingCallId != null) return
+        if (pendingRingValidation) return
+        if (CallService.hasActiveCall) return
+        if (ForegroundTracker.isForeground) return
+        Log.i(TAG, "[FGS] no ring, no call, app backgrounded — parking WS and stopping")
+        signalingClient.park()
+        stopSelf()
     }
 
     private var fallbackJob: Job? = null
@@ -395,6 +453,24 @@ class SignalingForegroundService : Service() {
         fallbackPollLoop = null
     }
 
+    /**
+     * Single decision point for the fallback poll loop (battery audit M4):
+     * evaluates the pure gate against live state. Called from the connection
+     * collector and from ring()/clearRing() so a ring starting or resolving
+     * while the socket is down flips the poll without waiting for the next
+     * connection-state emission.
+     */
+    private fun updateFallbackPoll() {
+        val shouldPoll = FallbackPollCadence.shouldRunFallbackPoll(
+            isDisconnected = signalingClient.connectionState.value ==
+                SignalingClient.ConnectionState.DISCONNECTED,
+            isParked = signalingClient.isParked,
+            isForeground = ForegroundTracker.isForeground,
+            hasActiveRing = ringingCallId != null,
+        )
+        if (shouldPoll) startFallbackPoll() else stopFallbackPoll()
+    }
+
     private suspend fun pollActiveCall() {
         val active = try {
             callRepository.checkActiveCall(signalingClient.currentUserId)
@@ -449,7 +525,31 @@ class SignalingForegroundService : Service() {
                         createdAtMs = intent.getStringExtra(EXTRA_RING_CREATED_AT)?.toEpochMsOrNull(),
                         expiresAtMs = intent.getStringExtra(EXTRA_RING_EXPIRES_AT)?.toEpochMsOrNull(),
                     )
-                    scope.launch { ringFromEvent(event) }
+                    // Guards the idle-park path: a park request that lands
+                    // while the push is still validating must not kill the
+                    // service before the ring (or its rejection) resolves.
+                    pendingRingValidation = true
+                    scope.launch {
+                        ringFromEvent(event)
+                        pendingRingValidation = false
+                        // A push that failed validation (stale/expired/unknown)
+                        // must not leave the FGS alive forever — nothing will
+                        // ever park it otherwise.
+                        if (ringingCallId == null) {
+                            maybeParkAndStop()
+                        }
+                    }
+                }
+                // Idle-park backstop: if a push produced no ring within a
+                // generous window (validation is a single network call), the
+                // service is stale and should park itself.
+                ringTimeoutJob?.cancel()
+                ringTimeoutJob = scope.launch {
+                    delay(PUSH_IDLE_STOP_MS)
+                    if (ringingCallId == null) {
+                        Log.i(TAG, "[FGS] push did not produce a ring — parking and stopping")
+                        maybeParkAndStop()
+                    }
                 }
             }
             ACTION_RING_OPENED -> {
@@ -465,8 +565,21 @@ class SignalingForegroundService : Service() {
             }
             ACTION_RING_RESOLVED -> {
                 // The ring UI was answered/declined/postponed — stop the timeout
-                // so it can never cancel a call that is now being handled.
+                // so it can never cancel a call that is now being handled, then
+                // park/stop when nothing else needs the service.
                 clearRing()
+                maybeParkAndStop()
+            }
+            ACTION_IDLE_PARK -> {
+                // Sent by CallService.endCall() (and MainActivity.onStop via
+                // SignalingForegroundService.stop): the call is over and
+                // nothing needs the socket — park and stop. A ring that
+                // started concurrently with the previous call's teardown must
+                // not be dismissed by this stale park request.
+                if (ringingCallId == null) {
+                    clearRing()
+                }
+                maybeParkAndStop()
             }
         }
         return START_STICKY
@@ -534,6 +647,10 @@ class SignalingForegroundService : Service() {
         const val ACTION_DISCONNECT = "com.agentcall.app.action.DISCONNECT_SIGNALING"
         const val ACTION_RING_RESOLVED = "com.agentcall.app.action.RING_RESOLVED"
         const val ACTION_RING_OPENED = "com.agentcall.app.action.RING_OPENED"
+        // Sent by CallService.endCall() after the active-call flag drops:
+        // the FGS may have missed the terminal event while hasActiveCall was
+        // still true, so it never got a chance to park/stop itself.
+        const val ACTION_IDLE_PARK = "com.agentcall.app.action.IDLE_PARK"
         // Phase A (FCM push-to-wake): the FGS is started by the Firebase
         // MessagingService with this action carrying the ring payload.
         const val ACTION_RING_FROM_PUSH = "com.agentcall.app.action.RING_FROM_PUSH"
@@ -545,6 +662,9 @@ class SignalingForegroundService : Service() {
         private const val NOTIFICATION_ID = 1003
         private const val REQUEST_DISCONNECT = 1001
         private const val RING_TIMEOUT_MS = 60_000L
+        // How long a push that never produces a ring is allowed to keep the
+        // service alive before it parks itself (validation is one network call).
+        private const val PUSH_IDLE_STOP_MS = 20_000L
         private const val RECENT_RING_TTL_MS = 5 * 60_000L
         private const val MAX_RECENT_RINGS = 16
         // Adaptive fallback-poll cadence (battery): fast while active/foreground,
@@ -578,6 +698,14 @@ class SignalingForegroundService : Service() {
             context.startService(
                 Intent(context, SignalingForegroundService::class.java).apply {
                     action = ACTION_RING_OPENED
+                }
+            )
+        }
+
+        fun notifyIdlePark(context: Context) {
+            context.startService(
+                Intent(context, SignalingForegroundService::class.java).apply {
+                    action = ACTION_IDLE_PARK
                 }
             )
         }

@@ -29,6 +29,32 @@ object FallbackPollCadence {
     const val MAX_BACKGROUND_STREAK = 20
 
     /**
+     * Pure gate for whether the fallback poll loop should be running
+     * (battery audit M4). The poll exists for one job: find rings while the
+     * websocket cannot. It must therefore run ONLY when the socket is
+     * genuinely down AND someone is around to act on what it finds:
+     *
+     * - parked sockets have no live consumer — a parked FGS relies on FCM;
+     * - CONNECTING/RECONNECTING are transient — polling during them races
+     *   the socket that is about to deliver the same events;
+     * - with no foreground app and no ring in flight there is no surface to
+     *   ring on and no user watching — idle-park stops the FGS instead.
+     *
+     * Booleans instead of the ConnectionState enum keep this object pure
+     * Kotlin, mirroring [computeDelayMs]'s testability contract.
+     */
+    fun shouldRunFallbackPoll(
+        isDisconnected: Boolean,
+        isParked: Boolean,
+        isForeground: Boolean,
+        hasActiveRing: Boolean,
+    ): Boolean {
+        if (isParked) return false
+        if (!isDisconnected) return false
+        return isForeground || hasActiveRing
+    }
+
+    /**
      * Pure-function poll delay calculator.  Call from
      * [SignalingForegroundService.nextPollDelayMs] with live values; call from
      * tests with controlled values.
