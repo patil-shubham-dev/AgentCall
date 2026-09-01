@@ -1,310 +1,273 @@
 <p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="">
-    <img alt="AgentCall" src="" width="280">
-  </picture>
+  <img alt="AgentCall logo" src="./docs/assets/agentcall-logo.svg" width="120">
+</p>
+
+<h1 align="center">AgentCall</h1>
+
+<p align="center">
+  <strong>Let AI agents reach humans when a decision, confirmation, or live conversation is needed.</strong>
 </p>
 
 <p align="center">
-  <em>The Communication Platform for AI</em>
+  AgentCall is an open, AI-agnostic communication bridge for MCP clients, backend services, and a native Android calling experience.
 </p>
 
 <p align="center">
-  <a href="#"><img src="https://img.shields.io/badge/version-1.0.0-blue" alt="Version"></a>
-  <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="License"></a>
-  <a href="#"><img src="https://img.shields.io/badge/node-20.x-brightgreen" alt="Node"></a>
-  <a href="#"><img src="https://img.shields.io/badge/typescript-5.5-blue" alt="TypeScript"></a>
-  <a href="#"><img src="https://img.shields.io/badge/build-passing-brightgreen" alt="Build"></a>
-  <a href="#"><img src="https://img.shields.io/badge/coverage-100%25-brightgreen" alt="Coverage"></a>
-  <a href="./docs/README.md"><img src="https://img.shields.io/badge/docs-ready-blue" alt="Docs"></a>
-  <a href="./CHANGELOG.md"><img src="https://img.shields.io/badge/changelog-keep%20a%20changelog-orange" alt="Changelog"></a>
+  <a href="./LICENSE"><img alt="License" src="https://img.shields.io/badge/license-MIT-16a34a"></a>
+  <a href="./VERSION.md"><img alt="Version" src="https://img.shields.io/badge/version-1.0.0-7967DE"></a>
+  <a href="./backend/package.json"><img alt="Node.js" src="https://img.shields.io/badge/node-20.x-339933"></a>
+  <a href="./mobile/android/app/build.gradle.kts"><img alt="Android" src="https://img.shields.io/badge/android-API%2026%2B-3DDC84"></a>
+  <a href="./docs/README.md"><img alt="Docs" src="https://img.shields.io/badge/docs-ready-2563eb"></a>
 </p>
 
 ---
 
-**AgentCall** is an open, AI-agnostic communication platform that enables any AI to securely reach humans through voice, notifications, and future channels. AI agents connect via the MCP protocol — AgentCall handles the rest.
+## Why AgentCall Exists
 
-> *AI owns intelligence. AgentCall owns communication. Humans own decisions.*
+AI agents are getting better at working independently, but they still hit moments where a human needs to answer, approve, clarify, or take responsibility. Today that handoff is awkward: agents wait in chat windows, users poll dashboards, and urgent work gets buried in notifications.
 
----
+AgentCall gives agents a communication layer. An AI can create a call through MCP or REST, the backend routes the event, and the Android app rings like a real phone call. The human stays in control, while the agent gets a reliable path to reach them.
 
-## ✨ Features
+> AI owns intelligence. AgentCall owns communication. Humans own decisions.
 
-- **AI-Agnostic** — Works with Claude, ChatGPT, Gemini, Cursor, local LLMs, and any MCP-compatible agent
-- **MCP Native** — 6 built-in MCP tools: `create_call`, `send_message`, `get_transcript`, `complete_call`, `cancel_call`, `send_message_and_wait`
-- **Real-Time Voice** — WebSocket-based voice bridge between AI and humans
-- **Android App** — Native Kotlin/Jetpack Compose app with incoming call notifications
-- **Single-Port Architecture** — HTTP, WebSocket, and health probes on one port
-- **Flexible Persistence** — Memory-only, PostgreSQL, or dual-write modes
-- **Event-Driven Core** — In-process EventBus with subscriber hooks, scoped subscriptions, priority ordering
-- **Privacy First** — No recording, no transcript retention by default
-- **Free First** — No paid APIs, no cloud dependencies, fully self-hosted
+## What You Can Build With It
 
----
+- **AI escalation flows** where an agent calls before taking a high-impact action.
+- **Approval and confirmation loops** for payments, deployments, customer responses, or ops incidents.
+- **Hands-free conversations** between a human and an AI agent using the Android call UI.
+- **Self-hosted AI communication infrastructure** with MCP, REST, WebSocket signaling, and optional PostgreSQL persistence.
+- **Future multi-channel workflows** across mobile notifications, callbacks, presence, and device routing.
 
-## 🏗 Architecture
+## Highlights
+
+- **MCP-native backend** with an embedded Streamable HTTP MCP endpoint at `/mcp`.
+- **Android calling app** built with Kotlin and Jetpack Compose.
+- **Real-time signaling** over WebSocket, with FCM-assisted push-to-wake support.
+- **VoiceBridge runtime** for incoming calls, transcripts, text messages, completion, and cancellation.
+- **On-device speech path** using Android speech and TTS services, with bundled Piper assets for offline TTS support.
+- **Self-hostable deployment** through Docker Compose, Caddy, coturn, and PostgreSQL-ready persistence modes.
+- **Strict TypeScript backend** with Zod validation, structured errors, and Vitest coverage for core behavior.
+
+## Architecture
 
 ```mermaid
 flowchart TB
-    subgraph AI["AI Providers"]
-        direction LR
-        Claude["Claude"]
+    subgraph Agents["AI agents and clients"]
+        Claude["Claude / Claude Code"]
         ChatGPT["ChatGPT"]
-        Gemini["Gemini"]
         Cursor["Cursor"]
-        Local["Local LLMs"]
+        OpenCode["OpenCode"]
+        Custom["Custom MCP or REST client"]
     end
 
-    subgraph MCP["MCP Endpoint (embedded in backend)"]
-        HTTP["Streamable HTTP (/mcp)"]
-        Tools["6 MCP tools"]
+    subgraph Backend["AgentCall backend"]
+        MCP["MCP endpoint<br/>POST /mcp"]
+        REST["REST API<br/>/api/v1"]
+        Signaling["WebSocket signaling"]
+        VoiceBridge["VoiceBridge service"]
+        Events["Event bus"]
+        Persistence["Memory / PostgreSQL / dual-write"]
     end
 
-    subgraph Backend["Backend API (backend/)"]
-        REST["REST API (routes.ts)"]
-        WS["WebSocket Signaling (server.ts)"]
-        VB["VoiceBridge Service (service.ts)"]
-        EB["Event Bus"]
+    subgraph Android["Android app"]
+        Home["Agent presence"]
+        Incoming["Incoming call UI"]
+        Active["Active call UI"]
+        Notifications["Call notifications"]
     end
 
-    subgraph Storage["Persistence"]
-        Mem["In-Memory"]
-        PG["PostgreSQL"]
-        DW["Dual-Write"]
-    end
-
-    subgraph Devices["Device"]
-        Android["Android App"]
-    end
-
-    AI -->|MCP| MCP
-    MCP -->|HTTP| Backend
-    Backend -->|WebSocket| Android
-    Backend --> Storage
-    Android -->|"WebSocket (phone)"| WS
+    Agents -->|MCP or REST| MCP
+    Agents -->|REST| REST
+    MCP --> VoiceBridge
+    REST --> VoiceBridge
+    VoiceBridge --> Events
+    VoiceBridge --> Persistence
+    VoiceBridge -->|ring events| Signaling
+    Signaling -->|WebSocket| Android
+    VoiceBridge -->|optional FCM wake| Notifications
 ```
 
-> Full architecture: [ARCHITECTURE.md](./ARCHITECTURE.md) · [docs/archive/ARCHITECTURE_BASELINE.md](./docs/archive/ARCHITECTURE_BASELINE.md)
+## Repository Layout
 
----
+```text
+backend/          Node.js, TypeScript, Fastify, MCP SDK, WebSocket signaling
+mobile/android/   Kotlin, Jetpack Compose, Room, Firebase Messaging
+infra/            Docker Compose, Caddy reverse proxy, coturn config
+docs/             Architecture, operations, implementation notes, reports
+```
 
-## 📱 Screenshots
-
-<!--
-Add screenshots here once available:
-- Android app call screen
-- Backend startup logs
-- MCP tool invocation example
-
-![Call Screen](./docs/screenshots/call-screen.png)
--->
-
-*Screenshots coming soon.*
-
----
-
-## 🚀 Quick Start
+## Quick Start
 
 ### Prerequisites
 
 - Node.js 20+
 - npm
-- Android phone or emulator (for mobile)
+- JDK 17 for Android builds
+- Android Studio or the Android Gradle toolchain
+- Docker, if you want PostgreSQL, Caddy, or coturn locally
 
-### 1. Backend
+### Run The Backend
 
 ```bash
 cd backend
-cp .env.example .env
-# Edit .env: set SERVICE_TOKEN to a random 64-char hex string
 npm install
-npm run dev
-# → http://localhost:4000
+cp .env.example .env
 ```
 
-### 2. Android App
+Set a secure `SERVICE_TOKEN` in `backend/.env`:
 
 ```bash
-# Open mobile/android/ in Android Studio
-# Build and deploy to your device
-# Enter your server URL in Settings
+openssl rand -hex 32
 ```
 
-### 3. Connect an AI Agent (MCP over HTTP)
+Start the development server:
 
-The MCP server is embedded in the backend (`POST /mcp`, Streamable HTTP). Each AI client gets its own key:
+```bash
+npm run dev
+```
 
-1. Open the Android app → **Settings → AI Connections → Add AI** and type a name (e.g. "Claude").
-2. The app shows a one-time key (`ac_...`) with ready-made snippets for Claude/Claude Code, Cursor, Opencode, and ChatGPT.
+The backend listens on `http://localhost:4000` by default.
 
-Claude Desktop / Claude Code:
+### Build The Android App
+
+```bash
+cd mobile/android
+./gradlew :app:assembleDebug
+```
+
+Open `mobile/android` in Android Studio, install the debug build on a device or emulator, then configure the backend host from the app settings.
+
+### Connect An AI Client
+
+1. Open the Android app.
+2. Go to **Settings -> AI Connections -> Add AI**.
+3. Create a key for your client.
+4. Configure your MCP-compatible client with the backend URL and key.
+
+Example MCP configuration:
 
 ```json
 {
   "mcpServers": {
     "agentcall": {
       "type": "http",
-      "url": "https://YOUR_SERVER/mcp",
-      "headers": { "Authorization": "Bearer ac_YOUR_KEY" }
+      "url": "https://YOUR_AGENTCALL_HOST/mcp",
+      "headers": {
+        "Authorization": "Bearer ac_YOUR_KEY"
+      }
     }
   }
 }
 ```
 
-ChatGPT (query-param auth, no header support):
+For clients that cannot send custom headers, pass the key as a query parameter:
 
+```text
+https://YOUR_AGENTCALL_HOST/mcp?key=ac_YOUR_KEY
 ```
-https://YOUR_SERVER/mcp?key=ac_YOUR_KEY
-```
 
----
+## Production Deployment
 
-## 🛠 Installation
-
-### Docker Compose (Recommended for Production)
+AgentCall ships with a production-oriented Docker Compose setup:
 
 ```bash
-git clone https://github.com/agentcall/agentcall.git
-cd agentcall
-
-# Set up environment
 cp backend/.env.example backend/.env
-# Edit backend/.env with your configuration
-
-# Start services
 docker compose -f infra/docker-compose.yml up -d
-# → http://localhost:4000
 ```
 
-### Kubernetes
+The compose stack includes:
+
+- `backend-api` for the AgentCall runtime.
+- `caddy` for reverse proxying and TLS.
+- `coturn` for STUN/TURN infrastructure.
+
+See [DEPLOYMENT_GUIDE.md](./DEPLOYMENT_GUIDE.md) and [docs/README.md](./docs/README.md) for deeper deployment and operations notes.
+
+## Configuration
+
+Important backend environment variables:
+
+| Variable | Required | Default | Purpose |
+| --- | --- | --- | --- |
+| `PORT` | No | `4000` | Backend HTTP port |
+| `SERVICE_TOKEN` | Yes | empty | Server auth secret |
+| `CORS_ALLOWED_ORIGINS` | No | empty | Browser CORS allowlist |
+| `DATABASE_URL` | Mode-dependent | empty | PostgreSQL connection string |
+| `PERSISTENCE_MODE` | No | `dual-write` | `memory`, `dual-write`, `database-read`, or `database` |
+| `COTURN_SECRET` | For TURN | empty | Shared TURN auth secret |
+| `FCM_ENABLED` | No | `false` | Enables push-to-wake delivery |
+| `FIREBASE_SERVICE_ACCOUNT_PATH` | If FCM enabled | empty | Firebase service account JSON path |
+
+The complete environment template lives in [backend/.env.example](./backend/.env.example).
+
+## Development Commands
+
+Backend:
 
 ```bash
-kubectl apply -f infra/k8s/01-namespace.yaml
-kubectl apply -f infra/k8s/02-secret-template.yaml
-# Edit secrets with your values
-kubectl apply -f infra/k8s/
+cd backend
+npm run build
+npm run typecheck
+npm run lint
+npm test
 ```
 
-> Full deployment guide: [DEPLOYMENT_GUIDE.md](./DEPLOYMENT_GUIDE.md)
-
----
-
-## 🔧 Environment Variables
-
-| Variable | Default | Required | Description |
-|----------|---------|----------|-------------|
-| `PORT` | `4000` | No | HTTP server port |
-| `NODE_ENV` | `development` | No | Runtime environment |
-| `SERVICE_TOKEN` | — | **Yes** | Auth token (`openssl rand -hex 32`) |
-| `CORS_ALLOWED_ORIGINS` | `*` | No | CORS origins |
-| `BODY_LIMIT_BYTES` | `1048576` | No | Max request body |
-| `DATABASE_URL` | — | No* | PostgreSQL connection string |
-| `PERSISTENCE_MODE` | `dual-write` | No | `memory`, `database`, `dual-write`, `database-read` |
-| `DB_POOL_MIN` | `2` | No | Minimum pool connections |
-| `DB_POOL_MAX` | `10` | No | Maximum pool connections |
-
-*\* Required when `PERSISTENCE_MODE=database` or `database-read`.*
-
----
-
-## 📖 Examples
-
-### Create a Call via MCP
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": 1,
-  "method": "tools/call",
-  "params": {
-    "name": "create_call",
-    "arguments": {
-      "user_id": "user_abc123",
-      "phone_number": "+1234567890",
-      "context": "Payment confirmation required"
-    }
-  }
-}
-```
-
-### REST API Health Check
+Android:
 
 ```bash
-curl http://localhost:4000/api/v1/health
-# → {"status":"ok","uptime":1234,"mode":"dual-write"}
+cd mobile/android
+./gradlew :app:assembleDebug
 ```
 
-> Full API reference: [docs/archive/API_SPEC.md](./docs/archive/API_SPEC.md)
+## API Surface
 
----
+AgentCall exposes three integration layers:
 
-## 📚 Documentation
+- **MCP** for AI-native tool calls through `POST /mcp`.
+- **REST** for service-to-service integrations and operational checks.
+- **WebSocket signaling** for the Android client runtime.
 
-| Area | Document |
-|------|----------|
-| 📖 **Documentation Hub** | [docs/README.md](./docs/README.md) |
-| 🏗 **Architecture** | [ARCHITECTURE.md](./ARCHITECTURE.md) · [SYSTEM_ARCHITECTURE.md](./SYSTEM_ARCHITECTURE.md) · [docs/archive/ARCHITECTURE_BASELINE.md](./docs/archive/ARCHITECTURE_BASELINE.md) |
-| 📡 **API** | [docs/archive/API_SPEC.md](./docs/archive/API_SPEC.md) · [API_GUIDELINES.md](./docs/API_GUIDELINES.md) |
-| 🚢 **Deployment** | [DEPLOYMENT_GUIDE.md](./DEPLOYMENT_GUIDE.md) · [docs/archive/PRODUCTION_READINESS.md](./docs/archive/PRODUCTION_READINESS.md) |
-| 🗄️ **Database** | [docs/archive/DATABASE_GUIDE.md](./docs/archive/DATABASE_GUIDE.md) |
-| ⚙️ **Operations** | [docs/archive/OPERATIONS_BASELINE.md](./docs/archive/OPERATIONS_BASELINE.md) · [docs/archive/KNOWN_LIMITATIONS.md](./docs/archive/KNOWN_LIMITATIONS.md) |
-| 🔒 **Security** | [SECURITY.md](./SECURITY.md) · [SECURITY_GUIDELINES.md](./docs/SECURITY_GUIDELINES.md) |
-| 💻 **Development** | [DEVELOPMENT_GUIDE.md](./DEVELOPMENT_GUIDE.md) · [TESTING_GUIDE.md](./docs/TESTING_GUIDE.md) |
-| 🤖 **AI Integration** | [AI_INTEGRATION.md](./docs/AI_INTEGRATION.md) · [MULTI_PROVIDER_PLAN.md](./docs/MULTI_PROVIDER_PLAN.md) |
+Common agent actions include creating a call, sending messages, waiting for human replies, reading transcripts, completing calls, and cancelling calls. See [MCP_API_SPEC.md](./MCP_API_SPEC.md), [docs/API_GUIDELINES.md](./docs/API_GUIDELINES.md), and [docs/AI_INTEGRATION.md](./docs/AI_INTEGRATION.md).
 
----
+## Project Status
 
-## 🗺 Roadmap
+AgentCall v1.0.0, "Solo Bridge", is focused on one human, one Android device class, and AI-to-human voice escalation. The current architecture is intentionally simple enough to self-host while leaving clear paths toward multi-user auth, stronger provider isolation, multi-device routing, and additional mobile platforms.
 
-| Version | Focus | Status |
-|---------|-------|--------|
-| **v1.0** "Solo Bridge" | VoiceBridge: AI-to-human voice calls | ✅ Released |
-| **v1.1** | Cross-pod session lock, WebSocket drain, migration tooling | 🔜 Planned |
-| **v2.0** | Multi-user auth (RBAC/JWT), iOS app, multi-region | 🔮 Future |
+See [VERSION.md](./VERSION.md), [ROADMAP.md](./ROADMAP.md), and [docs/NEXT_IMPROVEMENTS.md](./docs/NEXT_IMPROVEMENTS.md).
 
-See [ROADMAP.md](./ROADMAP.md) and [IMPLEMENTATION_ROADMAP.md](./docs/IMPLEMENTATION_ROADMAP.md).
+## Security Model
 
----
+AgentCall is designed for self-hosted and controlled deployments:
 
-## 🤝 Contributing
+- Use a strong `SERVICE_TOKEN`.
+- Keep `.env`, Firebase service accounts, and TURN secrets out of git.
+- Prefer HTTPS/WSS in production.
+- Treat MCP keys as credentials.
+- Review [SECURITY.md](./SECURITY.md) before exposing a deployment publicly.
 
-We welcome contributions from the community!
+## Contributing
 
-- [CONTRIBUTING.md](./CONTRIBUTING.md) — Contribution guidelines
-- [CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md) — Community standards
-- [CODE_STYLE.md](./docs/CODE_STYLE.md) — Coding conventions
-- [ARCHITECTURE_CHECKLIST.md](./docs/ARCHITECTURE_CHECKLIST.md) — PR review checklist
+Contributions are welcome. The best issues and pull requests are small, testable, and grounded in the current architecture.
 
----
+Start here:
 
-## 🔒 Security
+- [CONTRIBUTING.md](./CONTRIBUTING.md)
+- [DEVELOPMENT_GUIDE.md](./DEVELOPMENT_GUIDE.md)
+- [docs/CODE_STYLE.md](./docs/CODE_STYLE.md)
+- [docs/ARCHITECTURE_CHECKLIST.md](./docs/ARCHITECTURE_CHECKLIST.md)
 
-Found a vulnerability? See our [security policy](./SECURITY.md) for responsible disclosure.
+Good first areas include Android polish, MCP client examples, deployment hardening, documentation, and focused reliability tests.
 
----
+## License
 
-## 🙏 Acknowledgements
-
-AgentCall is built on open-source foundations:
-
-- [Fastify](https://fastify.dev/) — HTTP framework
-- [TypeScript](https://www.typescriptlang.org/) — Language
-- [MCP Protocol](https://modelcontextprotocol.io/) — AI integration standard
-- [Jetpack Compose](https://developer.android.com/jetpack/compose) — Android UI
-- [Vitest](https://vitest.dev/) — Testing framework
-- All our [contributors](https://github.com/agentcall/agentcall/graphs/contributors)
-
----
-
-## 📄 License
-
-[MIT](./LICENSE) © 2026 AgentCall
-
----
+AgentCall is released under the [MIT License](./LICENSE).
 
 <p align="center">
-  <a href="https://github.com/agentcall/agentcall">GitHub</a> ·
-  <a href="./docs/README.md">Documentation</a> ·
-  <a href="./CHANGELOG.md">Changelog</a> ·
-  <a href="https://github.com/agentcall/agentcall/discussions">Discussions</a>
+  <a href="./docs/README.md">Documentation</a>
+  ·
+  <a href="./ROADMAP.md">Roadmap</a>
+  ·
+  <a href="./SECURITY.md">Security</a>
+  ·
+  <a href="https://github.com/patil-shubham-dev/AgentCall/issues">Issues</a>
 </p>
