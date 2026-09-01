@@ -1,0 +1,58 @@
+# Prevent Render free-tier idle spin-down for AgentCall backend.
+# Render spins down free web services after ~15 minutes without inbound HTTP/WebSocket
+# traffic (https://docs.render.com/free#spinning-down-on-idle). A spun-down service
+# takes ~20-30s to cold-start on next request, which surfaces as call-setup latency
+# and WS connection failures on the Android app.
+#
+# This workflow does an anonymous GET to the lightweight health endpoint every
+# 5 minutes (well within Render's 15-min idle window). It is intentionally
+# external (GitHub Actions, not the mobile app) so the phone's background
+# footprint stays at zero. The endpoint does no DB work and requires no auth.
+#
+# If you migrate to a paid Render plan (which never spins down), this file can
+# be safely deleted. See backend/src/routes.ts GET /health and GET /api/v2/health.
+#
+# Schedule note: GitHub's `schedule` trigger has a minimum interval of 5 minutes
+# and may be delayed a few minutes under load — 5 minutes is intentionally
+# frequent enough to stay inside the 15-minute spin-down window even with jitter
+# (tightened from 10 to 5 per persistence audit — no budget concern, only this backend on the account).
+
+name: Keep Render Warm
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'  # every 5 minutes
+  workflow_dispatch:  # allow manual run from Actions tab
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Ping AgentCall health endpoint
+        run: |
+          set -e
+          URL="https://agentcall-66ke.onrender.com/health"
+          FALLBACK="https://agentcall-66ke.onrender.com/api/v2/health"
+          echo "Pinging $URL ..."
+          # Try primary lightweight endpoint first (GET /health)
+          HTTP_CODE=$(curl -s -o /tmp/body.txt -w "%{http_code}" --max-time 30 "$URL" || echo "000")
+          echo "Primary $URL -> HTTP $HTTP_CODE"
+          cat /tmp/body.txt || true
+          # If primary not yet deployed (404/401) or fails, try fallback that always exists
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "Primary failed, trying fallback $FALLBACK ..."
+            HTTP_CODE2=$(curl -s -o /tmp/body2.txt -w "%{http_code}" --max-time 30 "$FALLBACK" || echo "000")
+            echo "Fallback $FALLBACK -> HTTP $HTTP_CODE2"
+            cat /tmp/body2.txt || true
+            if [ "$HTTP_CODE2" != "200" ]; then
+              echo "::warning::Both health endpoints returned non-200 (primary=$HTTP_CODE fallback=$HTTP_CODE2) — Render instance may be spinning up"
+              # Do not fail the workflow on cold-start slow response; a 200 after ~20s is success.
+              # Only hard-fail on 5xx or network error that persists.
+              if [ "$HTTP_CODE2" = "000" ]; then
+                echo "::error::Network error reaching Render"
+                exit 1
+              fi
+            fi
+          fi
+          echo "Keep-warm ping complete at $(date -u +%Y-%m-%dT%H:%M:%SZ)"

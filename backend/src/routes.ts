@@ -114,7 +114,8 @@ export function registerRoutes(app: FastifyInstance, opts: RouteOptions): void {
     const url = request.url ?? '';
     // Skip auth for health check endpoints (required by K8s probes), phone token
     // registration, and the MCP endpoint (which does its own multi-method auth)
-    if (url.startsWith('/api/v1/health') || url.startsWith('/api/v1/ready') || url.startsWith('/api/v1/metrics') || url === '/api/v1/phone/token' || url.split('?')[0] === '/mcp' || url.startsWith('/api/v2/health')) {
+    // Keep-warm ping: GET /health and GET / use the lightweight no-DB handler below.
+    if (url === '/health' || url.startsWith('/health?') || url === '/' || url.startsWith('/?') || url.startsWith('/api/v1/health') || url.startsWith('/api/v1/ready') || url.startsWith('/api/v1/metrics') || url === '/api/v1/phone/token' || url.split('?')[0] === '/mcp' || url.startsWith('/api/v2/health')) {
       return;
     }
     const isDev = config.serviceToken === DEV_SERVICE_TOKEN;
@@ -133,6 +134,26 @@ export function registerRoutes(app: FastifyInstance, opts: RouteOptions): void {
     (request as FastifyRequest & { auth: AuthContext }).auth = auth;
     logger.debug({ method: request.method, url, auth }, '[HTTP] request');
   });
+
+  // Lightweight keep-warm health check — no auth, no DB work, just liveness.
+  // Used by GitHub Actions keep-warm job to prevent Render free-tier spin-down.
+  // Keep this handler cheap: no repo.list(), no dbHealth, no metrics writes.
+  app.get('/health', {
+    config: { rateLimit: { max: 20, timeWindow: '10 seconds' } },
+  }, async () => ({
+    status: 'ok',
+    timestamp: new Date().toISOString(),
+    version: '2.0.0',
+  }));
+
+  app.get('/', {
+    config: { rateLimit: { max: 20, timeWindow: '10 seconds' } },
+  }, async () => ({
+    status: 'ok',
+    timestamp: new Date().toISOString(),
+    version: '2.0.0',
+    service: 'agentcall-voicebridge',
+  }));
 
   app.get('/api/v1/health', {
     config: { rateLimit: { max: 20, timeWindow: '10 seconds' } },
