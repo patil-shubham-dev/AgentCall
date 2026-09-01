@@ -159,6 +159,8 @@ describe('Delete: server-side revocation is real and verifiable', () => {
     expect(del.status).toBe(200);
 
     // The very next request from that agent (still using its session id) fails auth.
+    const sessionId = init.sessionId;
+    expect(sessionId).toBeTruthy();
     const follow = await postMcp('/mcp', {
       jsonrpc: '2.0',
       id: 2,
@@ -166,7 +168,7 @@ describe('Delete: server-side revocation is real and verifiable', () => {
       params: {},
     }, {
       Authorization: `Bearer ${created.key}`,
-      'Mcp-Session-Id': init.sessionId!,
+      'Mcp-Session-Id': sessionId as string,
     });
     expect(follow.status).toBe(401);
   });
