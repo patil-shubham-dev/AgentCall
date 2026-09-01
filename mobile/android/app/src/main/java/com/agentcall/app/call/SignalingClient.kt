@@ -122,7 +122,7 @@ class SignalingClient @Inject constructor(
     }
 
     fun connect(userId: String = "solo-user") {
-        if (_connectionState.value == ConnectionState.CONNECTED && userId == currentUserId) {
+        if ((_connectionState.value == ConnectionState.CONNECTED || _connectionState.value == ConnectionState.CONNECTING) && userId == currentUserId) {
             return
         }
         parked = false

@@ -156,13 +156,23 @@ class CallViewModel @Inject constructor(
                     aiRespondingUntilMs = call.aiWait?.activeUntil?.toEpochMsOrNull(),
                     phase = machine.state.phase,
                 )
+                // 3a — the opening summary must exist as a persistent transcript bubble, not only as the transient banner.
+                if (!terminal && summary.isNotBlank()) {
+                    val alreadyHasAi = _uiState.value.messages.any { it.role == "ai" && it.text == summary }
+                    if (!alreadyHasAi) addAiMessage(summary)
+                }
             } catch (e: Exception) {
                 Log.w(TAG, "[connect] setup failed callId=$callId", e)
+                val fallback = contextSummary?.takeIf { it.isNotBlank() } ?: "AI needs your input."
                 _uiState.value = _uiState.value.copy(
                     isConnected = true,
                     statusText = "Connected",
-                    callContext = CallContextInfo(summary = contextSummary ?: "AI needs your input."),
+                    callContext = CallContextInfo(summary = fallback),
                 )
+                if (fallback.isNotBlank()) {
+                    val alreadyHasAi = _uiState.value.messages.any { it.role == "ai" && it.text == fallback }
+                    if (!alreadyHasAi) addAiMessage(fallback)
+                }
             }
         }
 

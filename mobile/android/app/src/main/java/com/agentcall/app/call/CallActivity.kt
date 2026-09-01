@@ -27,6 +27,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.PhoneForwarded
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.automirrored.filled.VolumeDown
+import androidx.compose.material.icons.automirrored.filled.VolumeOff
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -158,13 +159,13 @@ fun ActiveCallScreen(
 
     Box(modifier = Modifier.fillMaxSize().background(Slate900)) {
         AmbientBackground(
-            accentColor = Indigo400,
-            secondaryColor = Indigo600,
+            accentColor = MaterialTheme.colorScheme.primary,
+            secondaryColor = MaterialTheme.colorScheme.surfaceVariant,
             speedMultiplier = 1f,
             density = if (state.isAiSpeaking || state.isRecording) 1.2f else 0.6f,
         )
 
-        Column(modifier = Modifier.fillMaxSize()) {
+        Column(modifier = Modifier.fillMaxSize().statusBarsPadding()) {
             Row(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -191,28 +192,26 @@ fun ActiveCallScreen(
                         timerText
                     } else {
                         when (state.phase) {
-                            CallPhase.CONNECTING -> "Connecting…"
+                            CallPhase.CONNECTING -> "Connecting..."
                             else -> timerText
                         }
                     },
                     style = MonoTitle, color = Slate50)
             }
 
-            // Reconnecting banner: the session stays live while the link heals.
-            // Genuine warning → amber, per the design read.
+            // Reconnecting banner: opaque so AmbientBackground orbs don't bleed
             AnimatedVisibility(visible = state.phase == CallPhase.RECONNECTING,
                 enter = slideInVertically(animationSpec = spring(dampingRatio = 0.8f)) + fadeIn(),
                 exit = slideOutVertically() + fadeOut()) {
                 Notice(
                     text = "Reconnecting — the call stays live",
                     lampColor = Amber400,
-                    containerColor = Amber400.copy(alpha = 0.12f),
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant,
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
                 )
             }
 
-            // Informational banners (agent offline / not responding): quiet
-            // indigo surface + slate lamp — status, not alarm.
+            // Informational banners (agent offline / not responding): opaque surface
             AnimatedVisibility(visible = state.aiResponding == false,
                 enter = slideInVertically(animationSpec = spring(dampingRatio = 0.8f)) + fadeIn(),
                 exit = slideOutVertically() + fadeOut()) {
@@ -223,7 +222,7 @@ fun ActiveCallScreen(
                         "AI is not currently responding — your reply will be saved"
                     },
                     lampColor = Slate400,
-                    containerColor = Indigo900.copy(alpha = 0.6f),
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant,
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
                 )
             }
@@ -233,19 +232,20 @@ fun ActiveCallScreen(
                 exit = slideOutVertically() + fadeOut()) {
                 Surface(
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
-                    shape = RoundedCornerShape(16.dp), color = Indigo900.copy(alpha = 0.6f),
-                    tonalElevation = 4.dp
+                    shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surface,
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                    tonalElevation = 0.dp
                 ) {
                     Row(modifier = Modifier.padding(14.dp), verticalAlignment = Alignment.Top) {
-                        Icon(Icons.Default.Info, "AI calling about", modifier = Modifier.size(18.dp), tint = Indigo300)
+                        Icon(Icons.Default.Info, "AI calling about", modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
                         Spacer(modifier = Modifier.width(10.dp))
                         Column {
                             Text("AI is calling about:",
-                                style = MaterialTheme.typography.labelSmall, color = Indigo300,
+                                style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 fontWeight = FontWeight.SemiBold)
                             Spacer(modifier = Modifier.height(4.dp))
                             Text(state.callContext.summary,
-                                style = MaterialTheme.typography.bodyMedium, color = Slate200)
+                                style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
                         }
                     }
                 }
@@ -278,7 +278,8 @@ fun ActiveCallScreen(
                     item(key = "paused") {
                         Surface(
                             modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(12.dp), color = Amber400.copy(alpha = 0.12f),
+                            shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.surfaceVariant,
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
                         ) {
                             Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                                 Icon(Icons.Default.PauseCircle, "Call paused", tint = Amber400,
@@ -299,10 +300,10 @@ fun ActiveCallScreen(
                 isRecording = state.isRecording,
             )
 
-            // Text Input + Controls
+            // Text Input + Controls — imePadding keeps transcript visible above keyboard
             Surface(
-                modifier = Modifier.fillMaxWidth(),
-                color = Slate900.copy(alpha = 0.95f),
+                modifier = Modifier.fillMaxWidth().imePadding(),
+                color = MaterialTheme.colorScheme.background,
                 tonalElevation = 0.dp,
             ) {
                 Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
@@ -368,8 +369,10 @@ fun ActiveCallScreen(
                             modifier = Modifier.size(48.dp),
                             shape = CircleShape,
                             colors = IconButtonDefaults.filledIconButtonColors(
-                                containerColor = Indigo600,
-                                contentColor = Slate50,
+                                containerColor = BrandPurple,
+                                contentColor = Color.White,
+                                disabledContainerColor = Slate700,
+                                disabledContentColor = Slate500,
                             ),
                             enabled = textInput.isNotBlank(),
                         ) {
@@ -398,93 +401,17 @@ fun ActiveCallScreen(
                         Spacer(modifier = Modifier.height(8.dp))
                     }
 
-                    // Control buttons row — four ActionCircle, 48dp
+                    // 5-inline control row — icon-only per design system; Mute uses crossed speaker (VolumeOff) not MicOff
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceEvenly,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        ActionCircle(
-                            icon = if (state.isRecording) Icons.Default.StopCircle else Icons.Default.Mic,
-                            label = if (state.isRecording) "Stop" else "Record",
-                            iconTint = if (state.isRecording) Red400 else Slate50,
-                            bgColor = if (state.isRecording) GlassRed else GlassWhite,
-                            onClick = {
-                                context.startService(Intent(context, CallService::class.java).apply {
-                                    action = if (state.isRecording) CallService.ACTION_STOP_RECORDING
-                                    else CallService.ACTION_START_RECORDING
-                                })
-                                viewModel.setRecording(!state.isRecording)
-                            })
-
-                        ActionCircle(
-                            icon = if (state.isMuted) Icons.Default.MicOff else Icons.Default.Mic,
-                            label = if (state.isMuted) "Unmute" else "Mute",
-                            iconTint = if (state.isMuted) Indigo400 else Slate50,
-                            bgColor = if (state.isMuted) GlassIndigo else GlassWhite,
-                            onClick = { viewModel.setMuted(context, !state.isMuted) })
-
-                        ActionCircle(
-                            icon = if (state.isSpeakerOn) Icons.AutoMirrored.Filled.VolumeUp else Icons.AutoMirrored.Filled.VolumeDown,
-                            label = "Speaker",
-                            iconTint = if (state.isSpeakerOn) Indigo400 else Slate50,
-                            bgColor = if (state.isSpeakerOn) GlassIndigo else GlassWhite,
-                            onClick = { viewModel.toggleSpeaker() })
-
-                        ActionCircle(
-                            icon = Icons.Default.Replay, label = "Repeat",
-                            iconTint = Slate50, bgColor = GlassWhite, onClick = {
-                                context.startService(Intent(context, CallService::class.java).apply {
-                                    action = CallService.ACTION_REPEAT_LAST
-                                })
-                            })
-                    }
-
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    // End Call Button — 56dp red circle with a soft red halo
-                    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
-                        val endInteraction = remember { MutableInteractionSource() }
-                        val isPressed by endInteraction.collectIsPressedAsState()
-                        val pressScale by animateFloatAsState(
-                            targetValue = if (isPressed) 0.92f else 1f,
-                            animationSpec = spring(dampingRatio = 0.5f, stiffness = 800f), label = "endCallPress"
-                        )
-                        val haloAlpha by rememberInfiniteTransition(label = "endHalo").animateFloat(
-                            0.15f, 0.35f,
-                            infiniteRepeatable(tween(1600, easing = EaseInOutSine), RepeatMode.Reverse),
-                            label = "endHaloAlpha"
-                        )
-                        Box(contentAlignment = Alignment.Center) {
-                            Box(
-                                modifier = Modifier
-                                    .size(72.dp)
-                                    .border(1.5.dp, Red400.copy(alpha = haloAlpha), CircleShape)
-                            )
-                            Button(
-                                onClick = {
-                                    // state.callId carries the real backend id;
-                                    // the intent extra is only the provisional uuid.
-                                    val cid = state.callId.ifBlank { callId }
-                                    onEndCall(cid)
-                                },
-                                modifier = Modifier.size(56.dp).scale(pressScale), shape = CircleShape,
-                                colors = ButtonDefaults.buttonColors(containerColor = Red500),
-                                contentPadding = PaddingValues(0.dp),
-                                interactionSource = endInteraction,
-                            ) {
-                                Icon(
-                                    Icons.AutoMirrored.Filled.PhoneForwarded,
-                                    "End",
-                                    modifier = Modifier.size(24.dp), tint = Slate50,
-                                )
-                            }
-                        }
-                        Spacer(modifier = Modifier.height(2.dp))
-                        Text(
-                            "End",
-                            style = MaterialTheme.typography.labelSmall, color = Red400, fontWeight = FontWeight.Medium,
-                        )
+                        InlineControl(modifier = Modifier.weight(1f), icon = if (state.isRecording) Icons.Default.StopCircle else Icons.Default.Mic, contentDescription = if (state.isRecording) "Stop recording" else "Start recording", active = state.isRecording, onClick = { context.startService(Intent(context, CallService::class.java).apply { action = if (state.isRecording) CallService.ACTION_STOP_RECORDING else CallService.ACTION_START_RECORDING }); viewModel.setRecording(!state.isRecording) })
+                        InlineControl(modifier = Modifier.weight(1f), icon = Icons.AutoMirrored.Filled.VolumeOff, contentDescription = if (state.isMuted) "Unmute AI voice" else "Mute AI voice", active = state.isMuted, onClick = { viewModel.setMuted(context, !state.isMuted) })
+                        InlineControl(modifier = Modifier.weight(1f), icon = if (state.isSpeakerOn) Icons.AutoMirrored.Filled.VolumeUp else Icons.AutoMirrored.Filled.VolumeDown, contentDescription = if (state.isSpeakerOn) "Speaker on" else "Speaker off", active = state.isSpeakerOn, onClick = { viewModel.toggleSpeaker() })
+                        InlineControl(modifier = Modifier.weight(1f), icon = Icons.Default.Replay, contentDescription = "Repeat last message", active = false, onClick = { context.startService(Intent(context, CallService::class.java).apply { action = CallService.ACTION_REPEAT_LAST }) })
+                        Surface(onClick = { val cid = state.callId.ifBlank { callId }; onEndCall(cid) }, modifier = Modifier.weight(1f).height(48.dp), shape = RoundedCornerShape(Radii.Field), color = Error, border = androidx.compose.foundation.BorderStroke(6.dp, ErrorBg)) { Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Icon(Icons.AutoMirrored.Filled.PhoneForwarded, contentDescription = "End call", tint = Color.White, modifier = Modifier.size(20.dp)) } }
                     }
                 }
             }
@@ -507,8 +434,8 @@ private fun QuickReplyChips(
             Surface(
                 onClick = { onPick(option) },
                 shape = RoundedCornerShape(20.dp),
-                color = Indigo900.copy(alpha = 0.55f),
-                border = BorderStroke(1.dp, Indigo400.copy(alpha = 0.45f)),
+                color = MaterialTheme.colorScheme.surfaceVariant,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
             ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
@@ -534,6 +461,27 @@ private fun QuickReplyChips(
 }
 
 @Composable
+private fun InlineControl(
+    modifier: Modifier = Modifier,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    contentDescription: String,
+    active: Boolean,
+    onClick: () -> Unit,
+) {
+    Surface(
+        onClick = onClick,
+        modifier = modifier.height(48.dp),
+        shape = RoundedCornerShape(Radii.Field),
+        color = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
+        border = if (active) null else BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+    ) {
+        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Icon(icon, contentDescription = contentDescription, tint = if (active) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(22.dp))
+        }
+    }
+}
+
+@Composable
 private fun MessageBubble(msg: ChatBubble, isAi: Boolean, onRetry: (() -> Unit)? = null) {
     var visible by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) {
@@ -551,6 +499,7 @@ private fun MessageBubble(msg: ChatBubble, isAi: Boolean, onRetry: (() -> Unit)?
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = if (isAi) Arrangement.Start else Arrangement.End,
+            verticalAlignment = Alignment.Top,
         ) {
             if (isAi) {
                 GradientAvatar(size = 32.dp)
@@ -558,15 +507,17 @@ private fun MessageBubble(msg: ChatBubble, isAi: Boolean, onRetry: (() -> Unit)?
             }
 
             Surface(
+                modifier = Modifier.weight(1f, fill = false).widthIn(max = 280.dp),
                 shape = RoundedCornerShape(
                     topStart = if (isAi) 4.dp else 16.dp,
                     topEnd = if (isAi) 16.dp else 4.dp,
                     bottomStart = 16.dp, bottomEnd = 16.dp,
                 ),
-                color = if (isAi) Slate800 else Indigo800,
-                tonalElevation = if (isAi) 0.dp else 2.dp,
+                color = if (isAi) Slate800 else UserBubbleBg,
+                border = if (isAi) null else BorderStroke(1.dp, UserBubbleBorder),
+                tonalElevation = 0.dp,
             ) {
-                Column(modifier = Modifier.padding(12.dp).widthIn(max = 280.dp)) {
+                Column(modifier = Modifier.padding(12.dp)) {
                     if (isAi) {
                         Text("AI", style = MaterialTheme.typography.labelSmall,
                             color = Indigo400, fontWeight = FontWeight.Bold)

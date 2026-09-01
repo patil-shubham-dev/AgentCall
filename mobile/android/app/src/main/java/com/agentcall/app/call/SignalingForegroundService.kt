@@ -603,7 +603,7 @@ class SignalingForegroundService : Service() {
         return NotificationCompat.Builder(this, CHANNEL_SIGNALING)
             .setContentTitle("AgentCall")
             .setContentText(text)
-            .setSmallIcon(R.drawable.ic_agent)
+            .setSmallIcon(R.drawable.agentcall_notification_icon)
             .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setSilent(true)

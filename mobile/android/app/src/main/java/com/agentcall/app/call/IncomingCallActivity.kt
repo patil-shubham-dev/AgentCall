@@ -166,6 +166,7 @@ private var currentClientInfoName by mutableStateOf<String?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        androidx.core.view.WindowCompat.setDecorFitsSystemWindows(window, false)
 
         if (!isProcessing.compareAndSet(false, true)) {
             finish()
@@ -240,6 +241,7 @@ private var currentClientInfoName by mutableStateOf<String?>(null)
                                 putExtra(CallService.EXTRA_CALL_ID, currentCallId)
                                 putExtra(CallService.EXTRA_CALLER_NAME, currentCallerName)
                                 putExtra(CallService.EXTRA_CONTEXT_SUMMARY, currentContextSummary)
+                                putExtra(CallService.EXTRA_LAUNCH_UI, false)
                                 // Debug-only: forward the watchdog-cap override so
                                 // adb-driven H2 verification can pass it through the
                                 // ring UI (this ROM blocks shell starts of the
@@ -457,7 +459,7 @@ fun IncomingCallScreen(
             density = 1.5f,
         )
 
-        Column(modifier = Modifier.fillMaxSize().padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        Column(modifier = Modifier.fillMaxSize().statusBarsPadding().padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             Spacer(modifier = Modifier.weight(0.12f))
 
             Surface(shape = RoundedCornerShape(100.dp), color = Indigo400.copy(alpha = 0.12f)) {

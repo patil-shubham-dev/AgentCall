@@ -2,6 +2,7 @@ package com.agentcall.app.settings
 
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -26,6 +27,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.res.painterResource
 import android.app.TimePickerDialog
 import android.net.Uri
 import android.provider.OpenableColumns
@@ -38,6 +40,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.agentcall.app.BuildConfig
+import com.agentcall.app.R
 import com.agentcall.app.settings.CallerTuneManager
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -226,6 +229,7 @@ fun SettingsScreen(
     viewModel: SettingsViewModel = hiltViewModel(),
     onReconnect: () -> Unit = {},
     onOpenBatteryHelp: () -> Unit = {},
+    onBack: () -> Unit = {},
 ) {
     val serverHost by viewModel.serverHost.collectAsStateWithLifecycle()
     val connectionStatus by viewModel.connectionStatus.collectAsStateWithLifecycle()
@@ -344,7 +348,7 @@ fun SettingsScreen(
                             singleLine = true,
                             placeholder = { Text(BuildConfig.DEFAULT_HOST, color = MaterialTheme.colorScheme.onSurfaceVariant) },
                             leadingIcon = {
-                                Icon(Icons.Default.Computer, "Server address", tint = Indigo400, modifier = Modifier.size(20.dp))
+                                Icon(Icons.Default.Computer, "Server address", tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
                             },
                             keyboardOptions = KeyboardOptions(
                                 keyboardType = KeyboardType.Uri,
@@ -356,8 +360,8 @@ fun SettingsScreen(
                             colors = OutlinedTextFieldDefaults.colors(
                                 focusedTextColor = MaterialTheme.colorScheme.onSurface,
                                 unfocusedTextColor = MaterialTheme.colorScheme.onSurface,
-                                cursorColor = Indigo400,
-                                focusedBorderColor = Indigo600,
+                                cursorColor = MaterialTheme.colorScheme.primary,
+                                focusedBorderColor = MaterialTheme.colorScheme.primary,
                                 unfocusedBorderColor = MaterialTheme.colorScheme.outline,
                                 focusedContainerColor = MaterialTheme.colorScheme.surface,
                                 unfocusedContainerColor = MaterialTheme.colorScheme.surface,
@@ -376,7 +380,10 @@ fun SettingsScreen(
                                 onClick = { focusManager.clearFocus(); viewModel.connect(); onReconnect() },
                                 modifier = Modifier.weight(1f),
                                 shape = RoundedCornerShape(12.dp),
-                                colors = ButtonDefaults.buttonColors(containerColor = Indigo600),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = MaterialTheme.colorScheme.primary,
+                                    contentColor = MaterialTheme.colorScheme.onPrimary,
+                                ),
                             ) {
                                 Icon(Icons.Default.Wifi, "Connect to server", modifier = Modifier.size(18.dp))
                                 Spacer(modifier = Modifier.width(6.dp))
@@ -429,7 +436,7 @@ fun SettingsScreen(
                                             0f, 1f, infiniteRepeatable(tween(800, easing = LinearEasing), RepeatMode.Restart),
                                             label = "spin"
                                         )
-                                        Icon(Icons.Default.Sync, "Testing", tint = Indigo400,
+                                        Icon(Icons.Default.Sync, "Testing", tint = MaterialTheme.colorScheme.primary,
                                             modifier = Modifier.size(18.dp).clip(CircleShape).graphicsLayer {
                                                 rotationZ = spin * 360f
                                             })
@@ -657,7 +664,7 @@ fun SettingsScreen(
                                 Icon(
                                     Icons.Default.SmartToy,
                                     "AI",
-                                    tint = Indigo400,
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                     modifier = Modifier.size(20.dp),
                                 )
                                 Spacer(modifier = Modifier.width(10.dp))
@@ -692,7 +699,10 @@ fun SettingsScreen(
                             onClick = { showAddAiDialog = true },
                             modifier = Modifier.fillMaxWidth(),
                             shape = RoundedCornerShape(10.dp),
-                            colors = ButtonDefaults.buttonColors(containerColor = Indigo600),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.primary,
+                                contentColor = MaterialTheme.colorScheme.onPrimary,
+                            ),
                         ) {
                             Icon(Icons.Default.SmartToy, "Add AI", modifier = Modifier.size(18.dp))
                             Spacer(modifier = Modifier.width(6.dp))
@@ -794,6 +804,15 @@ fun SettingsScreen(
             CollapsibleSettingsSection(title = "ABOUT") {
                 GlassCard {
                     Column(modifier = Modifier.padding(4.dp)) {
+                        Image(
+                            painter = painterResource(R.drawable.agentcall_logo_transparent),
+                            contentDescription = "AgentCall logo",
+                            modifier = Modifier
+                                .align(Alignment.CenterHorizontally)
+                                .padding(vertical = 12.dp)
+                                .size(44.dp),
+                        )
+                        SettingsDivider()
                         InfoRow(
                             icon = Icons.Default.Info,
                             title = "Version",
@@ -862,7 +881,10 @@ private fun AddAiDialog(
                 onClick = { onCreate(name.trim()) },
                 enabled = name.isNotBlank() && !creating,
                 shape = RoundedCornerShape(10.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = Indigo600),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.primary,
+                    contentColor = MaterialTheme.colorScheme.onPrimary,
+                ),
             ) {
                 if (creating) {
                     CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.onPrimary)
@@ -1006,9 +1028,9 @@ private fun KeySnippet(
             )
             Spacer(modifier = Modifier.height(6.dp))
             TextButton(onClick = onCopy, modifier = Modifier.padding(0.dp)) {
-                Icon(Icons.Default.ContentCopy, "Copy", tint = Indigo400, modifier = Modifier.size(14.dp))
+                Icon(Icons.Default.ContentCopy, "Copy", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(14.dp))
                 Spacer(modifier = Modifier.width(4.dp))
-                Text(copyLabel, style = MaterialTheme.typography.labelSmall, color = Indigo400)
+                Text(copyLabel, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
             }
         }
     }
@@ -1122,6 +1144,7 @@ private fun InfoRow(
                 }
             }
             if (onClick != null) {
+                Spacer(modifier = Modifier.width(8.dp))
                 Icon(Icons.Default.ChevronRight, "View $title", tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f), modifier = Modifier.size(18.dp))
             }
         }
@@ -1160,7 +1183,7 @@ private fun QuietHoursCard(manager: QuietHoursManager) {
     GlassCard {
         Column(modifier = Modifier.padding(16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Default.Nightlight, "Quiet hours", tint = Indigo400, modifier = Modifier.size(20.dp))
+                Icon(Icons.Default.Nightlight, "Quiet hours", tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
                 Spacer(modifier = Modifier.width(10.dp))
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
@@ -1175,9 +1198,18 @@ private fun QuietHoursCard(manager: QuietHoursManager) {
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
+                Spacer(modifier = Modifier.width(12.dp))
                 Switch(
                     checked = enabled,
                     onCheckedChange = { on -> enabled = on; manager.globalEnabled = on },
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = MaterialTheme.colorScheme.onPrimary,
+                        checkedTrackColor = MaterialTheme.colorScheme.primary,
+                        checkedBorderColor = MaterialTheme.colorScheme.primary,
+                        uncheckedThumbColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                        uncheckedTrackColor = MaterialTheme.colorScheme.surfaceVariant,
+                        uncheckedBorderColor = MaterialTheme.colorScheme.outline,
+                    ),
                 )
             }
 
@@ -1293,7 +1325,10 @@ private fun TemplateEditor(
                     Button(
                         onClick = onSave,
                         shape = RoundedCornerShape(10.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = Indigo600),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.primary,
+                            contentColor = MaterialTheme.colorScheme.onPrimary,
+                        ),
                     ) {
                         Icon(Icons.Default.Save, "Save message", modifier = Modifier.size(16.dp))
                         Spacer(modifier = Modifier.width(6.dp))

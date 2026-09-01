@@ -262,6 +262,23 @@ class CallService : Service() {
                     startVoiceSession(id)
                     startCallWatchdog()
                     retryWithBackoff(id, KEY_PENDING_ANSWERS, "ANSWER") { attemptAnswer(it) }
+                    // §4: Answer from notification/lock screen must bring the
+                    // Active Call UI to the foreground, not just start the
+                    // background service. IncomingCallActivity's in-app Answer
+                    // already shows ActiveCallScreen via showCall=true, so it
+                    // sets EXTRA_LAUNCH_UI=false to avoid a duplicate launch.
+                    val shouldLaunchUi = intent.getBooleanExtra(EXTRA_LAUNCH_UI, true)
+                    if (shouldLaunchUi) {
+                        try {
+                            val callIntent = Intent(this, CallActivity::class.java).apply {
+                                putExtra(EXTRA_CALL_ID, id)
+                                putExtra(EXTRA_CALLER_NAME, callerName)
+                                putExtra(EXTRA_CONTEXT_SUMMARY, incomingSummary ?: "")
+                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                            }
+                            startActivity(callIntent)
+                        } catch (_: Exception) { }
+                    }
                 } catch (t: Throwable) {
                     Log.e(TAG, "[CALL] session setup failed — forcing teardown for $id", t)
                     CallStateHolder.ended(id)
@@ -1094,7 +1111,7 @@ class CallService : Service() {
         return NotificationCompat.Builder(this, CHANNEL_ONGOING_CALL)
             .setContentTitle("AI Voice Call")
             .setContentText(text)
-            .setSmallIcon(R.drawable.ic_agent)
+            .setSmallIcon(R.drawable.agentcall_notification_icon)
             .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setColorized(true)
@@ -1129,6 +1146,7 @@ class CallService : Service() {
         const val EXTRA_MESSAGE_ID = "message_id"
         const val EXTRA_NOTE = "note"
         const val EXTRA_MUTED = "muted"
+        const val EXTRA_LAUNCH_UI = "launch_ui"
         // Set by the FGS ring-timeout auto-decline: lets ACTION_CANCEL_CALL
         // skip notifying the FGS to park/stop (it must stay alive to receive
         // the server's call_expired and post the missed-call notification).
@@ -1246,10 +1264,10 @@ class CallService : Service() {
                 null
             }
 
-            val notification = NotificationCompat.Builder(context, channel)
+            val builder = NotificationCompat.Builder(context, channel)
                 .setContentTitle(if (quiet) "Incoming AI Call (quiet)" else "Incoming AI Call")
                 .setContentText(summary.ifBlank { "$callerName is calling..." })
-                .setSmallIcon(R.drawable.ic_agent)
+                .setSmallIcon(R.drawable.agentcall_notification_icon)
                 .setColor(android.graphics.Color.parseColor("#6366F1"))
                 .setPriority(if (quiet) NotificationCompat.PRIORITY_LOW else NotificationCompat.PRIORITY_HIGH)
                 .setCategory(NotificationCompat.CATEGORY_CALL)
@@ -1257,13 +1275,23 @@ class CallService : Service() {
                 // Without a contentIntent the notification is inert when the
                 // full-screen intent is rejected (no USE_FULL_SCREEN_INTENT
                 // grant): the user could never open the incoming-call UI.
+                // Both intents point at the same IncomingCallActivity so body tap
+                // opens the full UI exactly like the real phone app.
                 .setContentIntent(pi)
-                .addAction(R.drawable.ic_call, "Answer", answerPi)
-                .addAction(R.drawable.ic_missed_call, "Decline", declinePi)
                 .setAutoCancel(true)
                 .setOngoing(false)
                 .setStyle(callStyle)
-                .build()
+            // CallStyle.forIncomingCall already registers the two actions
+            // (Answer/Decline) with the system UI; adding them again via
+            // addAction creates a duplicate third tappable element on OEM
+            // skins (realme/ColorOS showed a red pill + purple pill + green
+            // icon). Only add fallback actions when CallStyle is unavailable
+            // (API <31).
+            if (callStyle == null) {
+                builder.addAction(R.drawable.ic_call, "Answer", answerPi)
+                builder.addAction(R.drawable.ic_missed_call, "Decline", declinePi)
+            }
+            val notification = builder.build()
 
             mgr.notify(NOTIFICATION_ID_INCOMING, notification)
         }
@@ -1283,7 +1311,7 @@ class CallService : Service() {
             val warning = NotificationCompat.Builder(context, SignalingForegroundService.CHANNEL_SIGNALING)
                 .setContentTitle("Incoming calls may not work")
                 .setContentText("Tap to grant \"Full screen intent\" permission in App Settings > Notifications")
-                .setSmallIcon(android.R.drawable.ic_dialog_alert)
+                .setSmallIcon(R.drawable.agentcall_notification_icon)
                 .setPriority(NotificationCompat.PRIORITY_HIGH)
                 .setOngoing(true)
                 .setContentIntent(settingsPi)
@@ -1322,7 +1350,7 @@ class CallService : Service() {
             val notification = NotificationCompat.Builder(context, CHANNEL_MISSED_CALLS)
                 .setContentTitle("Missed call from $callerName")
                 .setContentText("The AI tried to call you but no one answered. Tap to call back.")
-                .setSmallIcon(R.drawable.ic_missed_call)
+                .setSmallIcon(R.drawable.agentcall_notification_icon)
                 .setColor(android.graphics.Color.parseColor("#F59E0B"))
                 .setPriority(NotificationCompat.PRIORITY_LOW)
                 .setAutoCancel(true)

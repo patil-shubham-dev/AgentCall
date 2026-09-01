@@ -1,4 +1,4 @@
-package com.agentcall.app.profile
+﻿package com.agentcall.app.profile
 
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -23,8 +23,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.agentcall.app.ui.theme.Indigo400
-import com.agentcall.app.ui.theme.Indigo600
 import com.agentcall.app.ui.theme.Indigo800
 import com.agentcall.app.ui.theme.Slate50
 import com.agentcall.app.ui.theme.Slate900
@@ -60,9 +58,9 @@ fun EditNameSheet(
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
                 colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = Indigo400,
+                    focusedBorderColor = MaterialTheme.colorScheme.primary,
                     unfocusedBorderColor = Indigo800,
-                    cursorColor = Indigo400,
+                    cursorColor = MaterialTheme.colorScheme.primary,
                     focusedTextColor = Slate50,
                     unfocusedTextColor = Slate50,
                 ),
@@ -72,7 +70,7 @@ fun EditNameSheet(
                 onClick = { if (name.isNotBlank()) onSave(name) },
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(12.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = Indigo600),
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
                 enabled = name.isNotBlank(),
             ) {
                 Text("Save")
@@ -81,3 +79,5 @@ fun EditNameSheet(
         }
     }
 }
+
+
