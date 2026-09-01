@@ -21,25 +21,19 @@ import com.agentcall.app.ui.theme.Radii
 import com.agentcall.app.ui.theme.Slate700
 
 /**
- * The standard card recipe: plate surface at ~0.9 alpha with a 1dp hairline
- * border and no heavy shadow. Shadows are reserved for sheets and dialogs.
+ * Minimal card: theme surface, 1dp outline hairline, no shadow.
  * Rendered as a button when [onClick] is provided.
- *
- * Parameter names deliberately avoid colliding with material3 `Surface`
- * parameter names (`shape`, `color`, `border`, `content`): the K2 compiler
- * misresolves same-named argument forwards against Surface's overload set
- * ("No value passed for parameter 'p1'").
  */
 @Composable
 fun Plate(
     modifier: Modifier = Modifier,
-    containerShape: RoundedCornerShape = RoundedCornerShape(Radii.Panel),
+    containerShape: RoundedCornerShape = RoundedCornerShape(Radii.Card),
     onClick: (() -> Unit)? = null,
-    containerColor: Color = MaterialTheme.colorScheme.surface.copy(alpha = 0.9f),
+    containerColor: Color = MaterialTheme.colorScheme.surface,
     interactionSource: MutableInteractionSource? = null,
     plateContent: @Composable ColumnScope.() -> Unit,
 ) {
-    val hairline = BorderStroke(1.dp, Slate700)
+    val hairline = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
     if (onClick != null) {
         val src = interactionSource ?: remember { MutableInteractionSource() }
         val isPressed by src.collectIsPressedAsState()

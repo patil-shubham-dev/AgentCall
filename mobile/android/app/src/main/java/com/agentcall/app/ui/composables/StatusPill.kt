@@ -1,4 +1,4 @@
-package com.agentcall.app.ui.composables
+﻿package com.agentcall.app.ui.composables
 
 import androidx.compose.animation.core.EaseInOutSine
 import androidx.compose.animation.core.RepeatMode
@@ -28,15 +28,17 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.agentcall.app.ui.theme.DotOffline
+import com.agentcall.app.ui.theme.DotOnline
+import com.agentcall.app.ui.theme.DotBusy
 import com.agentcall.app.ui.theme.LampOff
 import com.agentcall.app.ui.theme.Radii
 import com.agentcall.app.ui.theme.Slate700
 import com.agentcall.app.ui.theme.Slate800
 
 /**
- * The standard status pill: a lamp (lit = colored, pulsing when live; unlit
- * = idle) plus a label. One component everywhere — Home header, Settings
- * connection row, empty states — so status always reads the same way.
+ * Minimal status pill: dot + label, theme surface, outline border.
+ * Pulse only when explicitly live (connected/reconnecting).
  */
 @Composable
 fun StatusPill(
@@ -55,32 +57,32 @@ fun StatusPill(
     Surface(
         modifier = modifier,
         shape = RoundedCornerShape(Radii.Pill),
-        color = Slate800,
-        border = BorderStroke(1.dp, Slate700),
+        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
         tonalElevation = 0.dp,
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.Center,
         ) {
             Box(
                 modifier = Modifier
-                    .size(7.dp)
+                    .size(6.dp)
                     .clip(CircleShape)
                     .background(
                         if (pulse) {
                             lampColor.copy(alpha = 0.5f + pulseAlpha * 0.5f)
                         } else {
-                            if (lampColor == LampOff) LampOff else lampColor
+                            if (lampColor == DotOffline) DotOffline else lampColor
                         }
                     ),
             )
-            Spacer(modifier = Modifier.width(7.dp))
+            Spacer(modifier = Modifier.width(6.dp))
             Text(
                 text = label,
                 style = MaterialTheme.typography.labelSmall,
-                color = if (lampColor == LampOff) {
+                color = if (lampColor == DotOffline) {
                     MaterialTheme.colorScheme.onSurfaceVariant
                 } else {
                     lampColor
@@ -90,3 +92,7 @@ fun StatusPill(
         }
     }
 }
+
+
+
+

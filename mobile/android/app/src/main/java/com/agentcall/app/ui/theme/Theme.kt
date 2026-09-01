@@ -1,4 +1,4 @@
-package com.agentcall.app.ui.theme
+﻿package com.agentcall.app.ui.theme
 
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
@@ -11,78 +11,61 @@ import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
 
-// ── THE CONTROL BOARD — direction contract ──
-// THESIS: The app is an industrial control panel — the user is the operator
-// on watch, agents are equipment on the line, a call lights the board. It
-// refuses the category default of dark navy, purple gradients and glass.
-// OWN-WORLD: machined graphite panels with brushed-aluminum hairlines, LED
-// status lamps (green lit / amber busy / red destructive / unlit idle),
-// phosphor-cyan readouts, mono data, Black-weight industrial caps, per-agent
-// identity ribbons. Flat machined plates, minimal radii, no glassmorphism.
-// STORY: status is readable at a glance by lamp; the server line, agent
-// presence and live calls read like instrument state.
-// FIRST VIEWPORT: graphite Home — AGENTCALL plate header, line-status lamp,
-// 2x2 grid of agent plates with lamps, engraved names, mono last-seen,
-// machined Home/Settings keys.
-// FORM: direction "The Control Board", seed key 8a6269ca, code-led (no comp;
-// ambition carried by this contract, audited on device screenshots).
-// FINISH: unreviewed and undocumented is unfinished; this build ends with
-// the finish review, the verdict, DESIGN.md, and every shipping raster
-// carrying its provenance.
+// ── Minimal premium — warm paper + ink ──
+// Light: paper bg, white cards, ink primary. Dark: true near-black, no graphite.
+// One radius, one border, one accent (ink), semantic each ONE meaning.
 
-// ── Dark Color Scheme ───────────────────────
 private val DarkColorScheme = darkColorScheme(
-    primary = Indigo500,
-    onPrimary = Slate50,
-    primaryContainer = Indigo800,
-    onPrimaryContainer = Indigo200,
-    secondary = Phosphor,
-    onSecondary = Slate950,
-    tertiary = Amber400,
-    onTertiary = Slate950,
-    background = Slate850,
-    onBackground = Slate50,
-    surface = Slate800,
-    onSurface = Slate50,
-    surfaceVariant = Slate750,
-    onSurfaceVariant = Slate400,
-    error = Red500,
-    onError = Slate50,
-    errorContainer = Red600,
-    onErrorContainer = Slate50,
-    outline = Slate600,
-    outlineVariant = Slate700,
-    inverseSurface = Slate200,
-    inverseOnSurface = Slate900,
-    inversePrimary = Indigo400,
-    surfaceTint = Indigo500,
+    primary = DarkTextPrimary,
+    onPrimary = DarkBg,
+    primaryContainer = DarkSurfaceVariant,
+    onPrimaryContainer = DarkTextPrimary,
+    secondary = DarkTextSecondary,
+    onSecondary = DarkBg,
+    tertiary = Warning,
+    onTertiary = Color.White,
+    background = DarkBg,
+    onBackground = DarkTextPrimary,
+    surface = DarkSurface,
+    onSurface = DarkTextPrimary,
+    surfaceVariant = DarkSurfaceVariant,
+    onSurfaceVariant = DarkTextSecondary,
+    error = Error,
+    onError = Color.White,
+    errorContainer = ErrorBg,
+    onErrorContainer = Error,
+    outline = DarkBorder,
+    outlineVariant = DarkBorderStrong,
+    inverseSurface = LightBg,
+    inverseOnSurface = LightTextPrimary,
+    inversePrimary = Ink,
+    surfaceTint = DarkBorder,
 )
 
-// ── Light Color Scheme ──────────────────────
 private val LightColorScheme = lightColorScheme(
-    primary = Indigo600,
-    onPrimary = Color.White,
-    primaryContainer = Indigo100,
-    onPrimaryContainer = Indigo900,
-    secondary = Indigo500,
+    primary = Ink,
+    onPrimary = OnInk,
+    primaryContainer = LightSurfaceVariant,
+    onPrimaryContainer = LightTextPrimary,
+    secondary = LightTextSecondary,
     onSecondary = Color.White,
-    tertiary = Amber600,
+    tertiary = Warning,
     onTertiary = Color.White,
-    background = LightBackground,
-    onBackground = LightOnBackground,
+    background = LightBg,
+    onBackground = LightTextPrimary,
     surface = LightSurface,
-    onSurface = LightOnSurface,
+    onSurface = LightTextPrimary,
     surfaceVariant = LightSurfaceVariant,
-    onSurfaceVariant = LightOnSurfaceVariant,
-    error = Red600,
+    onSurfaceVariant = LightTextSecondary,
+    error = Error,
     onError = Color.White,
-    errorContainer = Color(0xFFFFDAD4),
-    outline = LightOutline,
-    outlineVariant = LightOutlineVariant,
-    inverseSurface = LightInverseSurface,
-    inverseOnSurface = LightInverseOnSurface,
-    inversePrimary = LightInversePrimary,
-    surfaceTint = Indigo500,
+    errorContainer = ErrorBg,
+    outline = LightBorder,
+    outlineVariant = LightBorderStrong,
+    inverseSurface = DarkSurface,
+    inverseOnSurface = DarkTextPrimary,
+    inversePrimary = Ink,
+    surfaceTint = LightBorder,
 )
 
 // ── Extended Colors (accessible via composition) ──

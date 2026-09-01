@@ -2,103 +2,140 @@ package com.agentcall.app.ui.theme
 
 import androidx.compose.ui.graphics.Color
 
-// ── The Control Board ────────────────────────
-// Machined graphite panels, brushed-aluminum hairlines, LED status lamps,
-// phosphor readouts. The app is an industrial control panel: the user is the
-// operator on watch, agents are equipment on the line, a call lights the board.
+// ── Minimal premium (Claude-inspired): warm paper + ink ──
+// One neutral stack, one primary (ink), semantic each ONE meaning.
+// Light default; dark minimal (no competing indigo/cyan).
 
-// ── Panel Surfaces (machined graphite) ───────
-val PanelDeep = Color(0xFF0D0F12)      // app ground — the dark room
-val PanelBase = Color(0xFF131519)      // base graphite
-val PanelRaised = Color(0xFF1B1E23)    // plates and cards
-val PanelRaisedAlt = Color(0xFF20242A) // pressed / raised-alt
-val Hairline = Color(0xFF2E3238)       // brushed-aluminum border
-val HairlineWeak = Color(0xFF3A3F46)   // hairline / unlit lamp
+// ── Light base ────────────────────────────
+val LightBg = Color(0xFFFAF9F7)           // warm paper
+val LightSurface = Color(0xFFFFFFFF)      // card
+val LightSurfaceVariant = Color(0xFFF2F2F0) // raised / input
+val LightSurfaceElevated = Color(0xFFEBEBEA)
+val LightBorder = Color(0xFFE8E8E6)       // hairline
+val LightBorderStrong = Color(0xFFDDDDDB)
+val LightTextPrimary = Color(0xFF111111)
+val LightTextSecondary = Color(0xFF6B6B6B)
+val LightTextTertiary = Color(0xFF9A9A9A)
 
-// ── Neutrals (kept names, remapped values) ──
-val Slate50 = Color(0xFFF2F4F6)
-val Slate100 = Color(0xFFE3E6EA)
-val Slate200 = Color(0xFFCBD0D6)
-val Slate300 = Color(0xFFAEB4BC)
-val Slate400 = Color(0xFF8A8F98)
-val Slate500 = Color(0xFF555B63)
-val Slate600 = Color(0xFF3A3F46)
-val Slate700 = Color(0xFF2E3238)
-val Slate750 = Color(0xFF20242A)
-val Slate800 = Color(0xFF1B1E23)
-val Slate850 = Color(0xFF0D0F12)
-val Slate900 = Color(0xFF131519)
-val Slate950 = Color(0xFF05060A)
+// ── Dark base ─────────────────────────────
+val DarkBg = Color(0xFF0F0F0F)
+val DarkSurface = Color(0xFF1A1A1A)
+val DarkSurfaceVariant = Color(0xFF232323)
+val DarkSurfaceElevated = Color(0xFF2A2A2A)
+val DarkBorder = Color(0xFF2C2C2E)
+val DarkBorderStrong = Color(0xFF3A3A3C)
+val DarkTextPrimary = Color(0xFFF5F5F3)
+val DarkTextSecondary = Color(0xFF9A9A9A)
+val DarkTextTertiary = Color(0xFF6B6B6B)
 
-// ── Ribbon Indigo (primary accent) ───────────
-val Indigo50 = Color(0xFFEEF1FF)
-val Indigo100 = Color(0xFFDDE2FF)
-val Indigo200 = Color(0xFFBCC6FF)
-val Indigo300 = Color(0xFF9DAAFF)
-val Indigo400 = Color(0xFF8FA2FF)
-val Indigo500 = Color(0xFF6C7CFF)
-val Indigo600 = Color(0xFF5567E8)
-val Indigo700 = Color(0xFF3E4FC9)
-val Indigo800 = Color(0xFF2A39A0)
-val Indigo900 = Color(0xFF232B5C)
+// ── Primary (ink) — ONE accent for interactive ──
+val Ink = Color(0xFF111111)
+val InkPressed = Color(0xFF000000)
+val OnInk = Color(0xFFFAF9F7)
 
-// ── Identity Ribbons (per-agent) ─────────────
-val RibbonIndigo = Color(0xFF6C7CFF)
-val RibbonOrange = Color(0xFFFF9A3D)
-val RibbonCyan = Color(0xFF35E0FF)
-val RibbonPink = Color(0xFFFF5FA2)
+// ── Semantic (each ONE meaning) ───────────
+val Success = Color(0xFF1A7F4B)       // online / completed only
+val SuccessBg = Color(0xFFE8F5E9)
+val Warning = Color(0xFFB45309)       // busy / reconnecting only
+val WarningBg = Color(0xFFFEF3C7)
+val Error = Color(0xFFDC2626)         // destructive / failed only
+val ErrorBg = Color(0xFFFEE2E2)
+val Info = Color(0xFF6B6B6B)          // informational only
+val InfoBg = Color(0xFFF2F2F0)
 
-// ── Phosphor Readouts ────────────────────────
-val Phosphor = Color(0xFF35E0FF)
-val WaveformActive = Color(0xFF35E0FF)
+// ── Dot lumps for lamps ───────────────────
+val DotOnline = Success
+val DotBusy = Warning
+val DotOffline = Color(0xFFD1D1CF)
+val DotReconnecting = Warning
+val DotError = Error
 
-// ── Accent Gradients (ribbon pairs) ──────────
-val GradientBrandStart = Color(0xFF6C7CFF)
-val GradientBrandEnd = Color(0xFF35E0FF)
-val GradientCallStart = Color(0xFF3DDC84)
-val GradientCallEnd = Color(0xFF2ECF76)
-val GradientEndStart = Color(0xFFFF3B30)
-val GradientEndEnd = Color(0xFFE02B22)
-val GradientWarningStart = Color(0xFFFFB020)
-val GradientWarningEnd = Color(0xFFF09300)
+// ── Legacy aliases (compile compat — remapped) ──
+val PanelDeep = DarkBg
+val PanelBase = DarkSurface
+val PanelRaised = DarkSurfaceVariant
+val PanelRaisedAlt = DarkSurfaceElevated
+val Hairline = DarkBorder
+val HairlineWeak = DarkBorderStrong
 
-// ── Status Lamps ─────────────────────────────
-val LampGreen = Color(0xFF3DDC84)
-val LampAmber = Color(0xFFFFB020)
-val LampRed = Color(0xFFFF3B30)
-val LampOff = Color(0xFF3A3F46)
+val Slate50 = Color(0xFFFAF9F7)
+val Slate100 = Color(0xFFF2F2F0)
+val Slate200 = Color(0xFFEBEBEA)
+val Slate300 = Color(0xFFDDDDDB)
+val Slate400 = LightTextSecondary
+val Slate500 = Color(0xFF9A9A9A)
+val Slate600 = DarkBorderStrong
+val Slate700 = DarkBorder
+val Slate750 = DarkSurfaceVariant
+val Slate800 = DarkSurface
+val Slate850 = DarkBg
+val Slate900 = DarkBg
+val Slate950 = Color(0xFF0A0A0A)
 
-// ── Status Colors (kept names, remapped) ─────
-val Green400 = Color(0xFF3DDC84)
-val Green500 = Color(0xFF2ECF76)
-val Green600 = Color(0xFF1FAE62)
-val Red400 = Color(0xFFFF6B5E)
-val Red500 = Color(0xFFFF3B30)
-val Red600 = Color(0xFFE02B22)
-val Amber300 = Color(0xFFFFD25E)
-val Amber400 = Color(0xFFFFB020)
-val Amber500 = Color(0xFFF09300)
-val Amber600 = Color(0xFFD97E00)
+val Indigo50 = Color(0xFFFAF9F7)
+val Indigo100 = Color(0xFFF2F2F0)
+val Indigo200 = Color(0xFFE8E8E6)
+val Indigo300 = LightTextSecondary
+val Indigo400 = LightTextPrimary
+val Indigo500 = Ink
+val Indigo600 = Ink
+val Indigo700 = InkPressed
+val Indigo800 = Ink
+val Indigo900 = LightSurfaceVariant
 
-// ── Plate Sheen (kept names, remapped) ───────
-val GlassWhite = Color(0x0DFFFFFF)
-val GlassWhiteLight = Color(0x14FFFFFF)
-val GlassWhiteMedium = Color(0x22FFFFFF)
-val GlassIndigo = Color(0x1A6C7CFF)
-val GlassRed = Color(0x1AFF3B30)
-val GlassGreen = Color(0x1A3DDC84)
-val GlassAmber = Color(0x1AFFB020)
+val RibbonIndigo = Ink
+val RibbonOrange = Color(0xFF9A9A9A)
+val RibbonCyan = LightTextSecondary
+val RibbonPink = Color(0xFF9A9A9A)
 
-// ── Light Theme Surface Colors ──────────────
-val LightBackground = Color(0xFFF8FAFC)
-val LightSurface = Color(0xFFFFFFFF)
-val LightSurfaceVariant = Color(0xFFF1F5F9)
-val LightSurfaceElevated = Color(0xFFE2E8F0)
-val LightOnBackground = Color(0xFF0F172A)
-val LightOnSurface = Color(0xFF1E293B)
-val LightOnSurfaceVariant = Color(0xFF475569)
-val LightOutline = Color(0xFFCBD5E1)
-val LightOutlineVariant = Color(0xFFE2E8F0)
-val LightInverseSurface = Color(0xFF334155)
-val LightInverseOnSurface = Color(0xFFF1F5F9)
-val LightInversePrimary = Color(0xFFA5B4FC)
+val Phosphor = LightTextPrimary
+val WaveformActive = LightTextSecondary
+
+val GradientBrandStart = Ink
+val GradientBrandEnd = LightTextSecondary
+val GradientCallStart = Success
+val GradientCallEnd = Success
+val GradientEndStart = Error
+val GradientEndEnd = Error
+val GradientWarningStart = Warning
+val GradientWarningEnd = Warning
+
+val LampGreen = Success
+val LampAmber = Warning
+val LampRed = Error
+val LampOff = DotOffline
+
+val Green400 = Success
+val Green500 = Success
+val Green600 = Color(0xFF166534)
+val Red400 = Error
+val Red500 = Error
+val Red600 = Color(0xFFB91C1C)
+val Amber300 = Warning
+val Amber400 = Warning
+val Amber500 = Warning
+val Amber600 = Color(0xFF92400E)
+
+val BrandPurple = Color(0xFF7867DD)
+val BrandPurplePressed = Color(0xFF6B5ACB)
+val BrandPurpleDisabled = Color(0xFF2A2A2A)
+val UserBubbleBg = Color(0xFF252036)
+val UserBubbleBorder = Color(0xFF3D3558)
+
+val GlassWhite = Color(0x0A111111)
+val GlassWhiteLight = Color(0x0F111111)
+val GlassWhiteMedium = Color(0x14111111)
+val GlassIndigo = Color(0x0A111111)
+val GlassRed = Color(0x0ADC2626)
+val GlassGreen = Color(0x0A1A7F4B)
+val GlassAmber = Color(0x0AB45309)
+
+val LightBackground = LightBg
+val LightOnBackground = LightTextPrimary
+val LightOnSurface = LightTextPrimary
+val LightOnSurfaceVariant = LightTextSecondary
+val LightOutline = LightBorder
+val LightOutlineVariant = LightBorder
+val LightInverseSurface = DarkSurface
+val LightInverseOnSurface = DarkTextPrimary
+val LightInversePrimary = Ink
