@@ -36,10 +36,15 @@ class AgentCallMessagingService : FirebaseMessagingService() {
 
     override fun onNewToken(token: String) {
         super.onNewToken(token)
+        FcmRegistrationStore.init(this)
         Log.i(TAG, "[FCM] new token registered, registering with backend")
         scope.launch {
             runCatching { callRepository.registerFcmToken(token) }
-                .onFailure { Log.w(TAG, "[FCM] token registration failed", it) }
+                .onSuccess { FcmRegistrationStore.recordSuccess(token) }
+                .onFailure {
+                    FcmRegistrationStore.recordFailure(it.message ?: "unknown")
+                    Log.w(TAG, "[FCM] token registration failed", it)
+                }
         }
     }
 

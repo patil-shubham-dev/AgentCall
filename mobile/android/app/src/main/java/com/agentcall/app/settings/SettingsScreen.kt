@@ -50,6 +50,7 @@ import com.agentcall.app.data.api.ApiService
 import com.agentcall.app.data.api.AiKeyCreateRequest
 import com.agentcall.app.data.api.AiKeyCreateResponse
 import com.agentcall.app.data.api.AiKeyItem
+import com.agentcall.app.call.FcmRegistrationStore
 import com.agentcall.app.data.repository.CallRepository
 import com.agentcall.app.ui.composables.AmbientBackground
 import com.agentcall.app.ui.composables.Plate
@@ -82,9 +83,12 @@ class SettingsViewModel @Inject constructor(
     val serverHost: StateFlow<String> = _serverHost.asStateFlow()
 
     // One-shot health + FCM status (FCM-only idle model — no persistent WS).
-    // "Ready" means backend reachable AND a Firebase token exists locally.
+    // "Ready" means backend reachable AND last POST /phone/fcm-token succeeded.
     private val _connectionStatus = MutableStateFlow("Checking...")
     val connectionStatus: StateFlow<String> = _connectionStatus.asStateFlow()
+
+    private val _fcmDetail = MutableStateFlow(FcmRegistrationStore.getStatusForSettings())
+    val fcmDetail: StateFlow<String> = _fcmDetail.asStateFlow()
 
     private val _testStatus = MutableStateFlow(ConnectionTestStatus.IDLE)
     val testStatus: StateFlow<ConnectionTestStatus> = _testStatus.asStateFlow()
@@ -114,8 +118,10 @@ class SettingsViewModel @Inject constructor(
     fun refreshConnectionStatus() {
         viewModelScope.launch {
             _connectionStatus.value = "Checking..."
+            _fcmDetail.value = FcmRegistrationStore.getStatusForSettings()
             val backendOk = checkBackendHealth()
             val fcmOk = checkFcmRegistered()
+            _fcmDetail.value = FcmRegistrationStore.getStatusForSettings()
             _connectionStatus.value = when {
                 backendOk && fcmOk -> "Ready — Backend reachable, notifications active"
                 backendOk && !fcmOk -> "Backend reachable, but push notifications not registered — calls may not ring"
@@ -140,14 +146,21 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
-    private suspend fun checkFcmRegistered(): Boolean = suspendCancellableCoroutine { cont ->
-        FirebaseMessaging.getInstance().token.addOnCompleteListener { task ->
-            if (task.isSuccessful && !task.result.isNullOrBlank()) {
-                cont.resume(true)
-            } else {
-                cont.resume(false)
+    // Now checks actual backend POST success, not just local token existence.
+    // A phone that has a token locally but never successfully POSTed it will
+    // never ring — this was previously invisible.
+    private suspend fun checkFcmRegistered(): Boolean {
+        // First, ensure we have a local token at all.
+        val hasLocalToken = suspendCancellableCoroutine<Boolean> { cont ->
+            FirebaseMessaging.getInstance().token.addOnCompleteListener { task ->
+                cont.resume(task.isSuccessful && !task.result.isNullOrBlank())
             }
         }
+        if (!hasLocalToken) return false
+        // Then check that the last POST to /phone/fcm-token actually succeeded.
+        // FcmRegistrationStore is updated on every successful register (App,
+        // onNewToken, ws-connected). If never succeeded, show warning.
+        return FcmRegistrationStore.isRegistered()
     }
 
     fun updateServerHost(host: String) {
@@ -267,6 +280,7 @@ fun SettingsScreen(
 ) {
     val serverHost by viewModel.serverHost.collectAsStateWithLifecycle()
     val connectionStatus by viewModel.connectionStatus.collectAsStateWithLifecycle()
+    val fcmDetail by viewModel.fcmDetail.collectAsStateWithLifecycle()
     val testStatus by viewModel.testStatus.collectAsStateWithLifecycle()
     val testLatency by viewModel.testLatency.collectAsStateWithLifecycle()
     val aiKeys by viewModel.aiKeys.collectAsStateWithLifecycle()
@@ -363,6 +377,13 @@ fun SettingsScreen(
                             style = MaterialTheme.typography.labelSmall,
                             color = lampColor,
                             maxLines = 3,
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "Push: $fcmDetail",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                            maxLines = 2,
                         )
 
                         Spacer(modifier = Modifier.height(12.dp))

@@ -116,7 +116,11 @@ class SignalingForegroundService : Service() {
             if (token.isNullOrBlank()) return@launch
             Log.i(TAG, "[FCM] token registration (ws connected)")
             runCatching { callRepository.registerFcmToken(token) }
-                .onFailure { Log.w(TAG, "[FCM] ws-connected registration failed", it) }
+                .onSuccess { FcmRegistrationStore.recordSuccess(token) }
+                .onFailure {
+                    FcmRegistrationStore.recordFailure(it.message ?: "unknown")
+                    Log.w(TAG, "[FCM] ws-connected registration failed", it)
+                }
         }
     }
 

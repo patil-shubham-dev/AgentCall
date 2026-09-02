@@ -8,6 +8,7 @@ import android.media.RingtoneManager
 import android.os.Build
 import android.util.Log
 import com.agentcall.app.call.CallService
+import com.agentcall.app.call.FcmRegistrationStore
 import com.agentcall.app.call.SignalingForegroundService
 import com.agentcall.app.data.api.ApiClient
 import com.agentcall.app.data.api.ApiService
@@ -27,6 +28,7 @@ class AgentCallApp : Application() {
         // Restore the persisted backend host BEFORE anything (services,
         // Hilt singletons) builds URLs from ApiClient.serverHost.
         com.agentcall.app.data.api.ApiClient.init(this)
+        FcmRegistrationStore.init(this)
         createNotificationChannels()
         checkFullScreenIntentPermission()
         ForegroundTracker.register(this)
@@ -46,15 +48,17 @@ class AgentCallApp : Application() {
                 }
                 if (token.isNullOrBlank()) {
                     Log.w("AgentCall", "[FCM] AgentCallApp token fetch returned null — FCM unavailable")
+                    FcmRegistrationStore.recordFailure("no-token")
                     return@launch
                 }
                 ApiClient.ensurePhoneToken()
                 ApiClient.create<ApiService>().let { api ->
-                    // Use CallRepository's endpoint directly via ApiService
                     api.registerFcmToken(com.agentcall.app.data.model.FcmTokenRequest(token))
                 }
+                FcmRegistrationStore.recordSuccess(token)
                 Log.i("AgentCall", "[FCM] AgentCallApp startup token registered")
             } catch (e: Exception) {
+                FcmRegistrationStore.recordFailure(e.message ?: "unknown")
                 Log.w("AgentCall", "[FCM] AgentCallApp startup registration failed", e)
             }
         }
