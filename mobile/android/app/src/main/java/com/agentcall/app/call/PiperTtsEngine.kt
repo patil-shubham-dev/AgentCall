@@ -87,49 +87,57 @@ class PiperTtsEngine(private val context: Context) {
         }
     }
 
-    /**
-     * Synthesizes one sentence and plays it through the communication
-     * audio path. Returns when the sentence has fully played out.
-     */
-    fun speakSentence(text: String, speed: Float = 1.0f): Boolean {
-        val engine = tts ?: return false
-        if (text.isBlank()) return false
-        stopRequested = false
-        val sampleRate = engine.sampleRate()
+    /** Synthesizes text to PCM without playing. Used for overlap: generate N+1 while N plays. */
+    fun synthesize(text: String, speed: Float = 1.0f): com.k2fsa.sherpa.onnx.GeneratedAudio? {
+        val engine = tts ?: return null
+        if (text.isBlank() || stopRequested) return null
+        return try {
+            engine.generate(text, 0, speed)
+        } catch (e: Throwable) {
+            Log.e(TAG, "[PIPER] synthesize failed", e)
+            null
+        }
+    }
+
+    /** Plays already-synthesized audio. Separate from synthesize for overlap. */
+    fun playAudio(audio: com.k2fsa.sherpa.onnx.GeneratedAudio): Boolean {
+        if (stopRequested) return false
+        val sampleRate = tts?.sampleRate() ?: return false
         val track = ensureAudioTrack(sampleRate) ?: return false
         return try {
             track.play()
-            // Battery-audit M3(a) follow-up: synthesize WITHOUT the JNI
-            // callback API. generateWithCallback passes the lambda across JNI
-            // and resolves it reflectively (GetMethodID "invoke([F)Integer");
-            // that lookup SIGABRT'd on device with kotlinc/D8-synthesized
-            // lambda classes (NoSuchMethodError), killing the process
-            // mid-sentence. Per this file's documented streaming contract,
-            // sentence-length input arrives as ONE batch anyway, so
-            // generate() + blocking write is behaviorally equivalent for our
-            // input sizes — minus the reflective fragility.
-            val audio = engine.generate(text, 0, speed)
-            if (!stopRequested) {
-                var offset = 0
-                while (offset < audio.samples.size) {
-                    val written = track.write(
-                        audio.samples, offset, audio.samples.size - offset,
-                        AudioTrack.WRITE_BLOCKING,
-                    )
-                    if (written < 0) {
-                        Log.e(TAG, "[PIPER] write failed code=$written")
-                        break
-                    }
-                    offset += written
-                    totalFramesWritten += written
+            var offset = 0
+            while (offset < audio.samples.size) {
+                if (stopRequested) break
+                val written = track.write(
+                    audio.samples, offset, audio.samples.size - offset,
+                    AudioTrack.WRITE_BLOCKING,
+                )
+                if (written < 0) {
+                    Log.e(TAG, "[PIPER] write failed code=$written")
+                    break
                 }
+                offset += written
+                totalFramesWritten += written
             }
             waitForDrain(track)
             true
         } catch (e: Throwable) {
-            Log.e(TAG, "[PIPER] speak failed", e)
+            Log.e(TAG, "[PIPER] play failed", e)
             false
         }
+    }
+
+    /**
+     * Synthesizes one sentence and plays it through the communication
+     * audio path. Returns when the sentence has fully played out.
+     * Kept for single-sentence callers; overlapping callers use synthesize()+playAudio().
+     */
+    fun speakSentence(text: String, speed: Float = 1.0f): Boolean {
+        if (text.isBlank()) return false
+        stopRequested = false
+        val audio = synthesize(text, speed) ?: return false
+        return playAudio(audio)
     }
 
     fun requestStop() {

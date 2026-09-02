@@ -31,6 +31,9 @@ import com.agentcall.app.data.repository.CallRepository
 import com.agentcall.app.settings.MessageTemplates
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.*
+import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.channels.Channel
 import kotlin.coroutines.coroutineContext
 import org.json.JSONObject
@@ -609,6 +612,8 @@ class CallService : Service() {
         return job
     }
 
+    private data class Synthesized(val audio: com.k2fsa.sherpa.onnx.GeneratedAudio)
+
     private suspend fun speakWithPiper(text: String) {
         val sentences = SpeechPacing.splitIntoSentences(text)
         if (sentences.isEmpty()) return
@@ -619,21 +624,36 @@ class CallService : Service() {
         isAiSpeaking = true
         CallEventBus.emit(CallEvent.AiSpeakingStarted)
         try {
-            sentences.forEachIndexed { index, sentence ->
-                if (!coroutineContext.isActive || piperEngine.stopRequested) return@forEachIndexed
-                if (index > 0) {
-                    // Breathing pause before every sentence but the first.
-                    // Battery audit M3(c): a single cancellable delay replaces
-                    // the 20 Hz stopRequested poll — every requestStop() caller
-                    // also cancels this worker job (releaseCallResources), so
-                    // cancellation propagation interrupts the pause instantly;
-                    // the post-delay check covers the flag-only path.
-                    delay(SpeechPacing.sentenceDelayMs())
-                    if (!coroutineContext.isActive || piperEngine.stopRequested) return@forEachIndexed
+            // Overlap synthesis and playback: generate sentence N+1 while N plays.
+            // Use CallService's scope so async outlives this suspend call's coroScope.
+            val deferred: List<Deferred<Synthesized?>> = sentences.map { sentence ->
+                scope.async(Dispatchers.Default) {
+                    val audio = piperEngine.synthesize(sentence, SpeechPacing.sentenceSpeed())
+                    if (audio != null) Synthesized(audio) else null
                 }
-                val speed = SpeechPacing.sentenceSpeed()
+            }
+            for (index in sentences.indices) {
+                if (!coroutineContext.isActive || piperEngine.stopRequested) {
+                    // Cancel any not-yet-started synthesizes
+                    deferred.forEach { it.cancel() }
+                    break
+                }
+                if (index > 0) {
+                    val pauseMs = SpeechPacing.delayAfterSentence(sentences[index - 1])
+                    delay(pauseMs)
+                    if (!coroutineContext.isActive || piperEngine.stopRequested) {
+                        deferred.forEach { it.cancel() }
+                        break
+                    }
+                }
+                val synthesized = try {
+                    deferred[index].await()
+                } catch (_: Exception) {
+                    null
+                } ?: continue
+                // Play on Default to keep main free, but AudioTrack write is blocking.
                 withContext(Dispatchers.Default) {
-                    piperEngine.speakSentence(sentence, speed)
+                    piperEngine.playAudio(synthesized.audio)
                 }
             }
         } finally {

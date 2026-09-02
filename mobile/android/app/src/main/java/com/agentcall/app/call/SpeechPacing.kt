@@ -31,9 +31,28 @@ object SpeechPacing {
         "(?i)\\b(?:(?:dr|mr|mrs|ms|prof|rev|sr|jr|st|mt|etc|vs|e\\.?g|i\\.?e|" +
             "u\\.?s|u\\.?k|a\\.?m|p\\.?m|approx|inc|ltd|co|corp|est|dept|min|max)|[A-Za-z])\\.$"
     )
-    private const val MIN_PAUSE_MS = 300L
-    private const val PAUSE_JITTER_MS = 200L
-    private const val SPEED_JITTER = 0.06f
+    // Punctuation-aware pauses (tunable). Values chosen to sound natural
+    // without overcorrecting into robotic gaps. All pauses include jitter
+    // so consecutive sentences never land on the same cadence.
+    object PacingConfig {
+        const val COMMA_PAUSE_MS = 180L
+        const val COMMA_JITTER_MS = 80L
+        const val PERIOD_PAUSE_MS = 380L
+        const val PERIOD_JITTER_MS = 120L
+        const val QUESTION_PAUSE_MS = 520L
+        const val QUESTION_JITTER_MS = 100L
+        const val EXCLAMATION_PAUSE_MS = 320L
+        const val EXCLAMATION_JITTER_MS = 80L
+        // Fallback for sentences that don't end with punctuation (e.g. "Hello world")
+        const val FALLBACK_PAUSE_MS = 280L
+        const val FALLBACK_JITTER_MS = 80L
+        // Speed jitter per sentence — keeps the voice from sounding flat.
+        const val SPEED_JITTER = 0.06f
+        // Overlap synthesis: start generating next sentence while current plays.
+        // No pause needed for true streaming; this is for the sentence-boundary gap.
+    }
+
+    private const val SPEED_JITTER = PacingConfig.SPEED_JITTER
 
     fun splitIntoSentences(text: String): List<String> {
         val trimmed = text.trim()
@@ -62,7 +81,22 @@ object SpeechPacing {
     }
 
     fun sentenceDelayMs(random: Random = Random.Default): Long =
-        MIN_PAUSE_MS + random.nextLong(PAUSE_JITTER_MS + 1)
+        PacingConfig.PERIOD_PAUSE_MS + random.nextLong(PacingConfig.PERIOD_JITTER_MS + 1)
+
+    /** Punctuation-aware pause for the gap *after* [previousSentence]. */
+    fun delayAfterSentence(previousSentence: String, random: Random = Random.Default): Long {
+        val trimmed = previousSentence.trim()
+        if (trimmed.isEmpty()) return sentenceDelayMs(random)
+        val lastChar = trimmed.last()
+        return when (lastChar) {
+            ',' -> PacingConfig.COMMA_PAUSE_MS + random.nextLong(PacingConfig.COMMA_JITTER_MS + 1)
+            '.', '…', '。' -> PacingConfig.PERIOD_PAUSE_MS + random.nextLong(PacingConfig.PERIOD_JITTER_MS + 1)
+            '?' -> PacingConfig.QUESTION_PAUSE_MS + random.nextLong(PacingConfig.QUESTION_JITTER_MS + 1)
+            '!' -> PacingConfig.EXCLAMATION_PAUSE_MS + random.nextLong(PacingConfig.EXCLAMATION_JITTER_MS + 1)
+            ';', ':' -> PacingConfig.COMMA_PAUSE_MS + random.nextLong(PacingConfig.COMMA_JITTER_MS + 1)
+            else -> PacingConfig.FALLBACK_PAUSE_MS + random.nextLong(PacingConfig.FALLBACK_JITTER_MS + 1)
+        }
+    }
 
     fun sentenceSpeed(random: Random = Random.Default): Float =
         1.0f + (random.nextFloat() * 2f - 1f) * SPEED_JITTER
