@@ -110,7 +110,11 @@ object ApiClient {
 
     private val httpClient: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
-        .readTimeout(120, TimeUnit.SECONDS)
+        // 15s read timeout (was 120s) — a stuck request now fails fast so the
+        // SharedPrefs retry queues (answer/complete/cancel/user-text) retry
+        // quickly. Safe because user-text carries client_message_id for
+        // idempotent dedup on the backend (VoiceBridgeService.addMessage).
+        .readTimeout(15, TimeUnit.SECONDS)
         .writeTimeout(120, TimeUnit.SECONDS)
         .addInterceptor(loggingInterceptor)
         .addInterceptor { chain ->
