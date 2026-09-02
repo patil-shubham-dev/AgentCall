@@ -1,6 +1,7 @@
-﻿package com.agentcall.app.home
+package com.agentcall.app.home
 
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
@@ -15,12 +16,15 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.agentcall.app.R
 import com.agentcall.app.data.api.AiKeyItem
 import com.agentcall.app.data.api.ApiClient
 import com.agentcall.app.data.database.entity.AiProfileEntity
@@ -53,28 +57,67 @@ fun HomeScreen(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         containerColor = MaterialTheme.colorScheme.background,
     ) { innerPadding ->
-        Column(modifier = Modifier.fillMaxSize().padding(innerPadding)) {
+        Column(
+            modifier = Modifier.fillMaxSize().padding(
+                top = (innerPadding.calculateTopPadding() - 10.dp).coerceAtLeast(0.dp),
+                bottom = innerPadding.calculateBottomPadding(),
+                start = innerPadding.calculateStartPadding(androidx.compose.ui.unit.LayoutDirection.Ltr),
+                end = innerPadding.calculateEndPadding(androidx.compose.ui.unit.LayoutDirection.Ltr),
+            )
+        ) {
             Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = Spacing.ScreenPadding, vertical = Spacing.M),
+                modifier = Modifier.fillMaxWidth().padding(horizontal = Spacing.ScreenPadding).padding(top = 0.dp, bottom = Spacing.M),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text("AgentCall", style = MaterialTheme.typography.displayLarge, color = MaterialTheme.colorScheme.onBackground)
-                    Spacer(modifier = Modifier.height(2.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Box(modifier = Modifier.size(6.dp).clip(CircleShape).background(when { state.isReconnecting -> DotReconnecting; state.isConnected -> DotOnline; else -> DotOffline }))
-                        Spacer(modifier = Modifier.width(6.dp))
+                // Brand lockup: larger transparent logo + reduced wordmark, composed as one system.
+                // Logo is centered to the two-line text block (wordmark + status) for optical balance.
+                Row(
+                    modifier = Modifier.weight(1f),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Image(
+                        painter = painterResource(R.drawable.agentcall_adaptive_foreground),
+                        contentDescription = null,
+                        modifier = Modifier.size(48.dp),
+                    )
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Column {
                         Text(
-                            text = when { state.isReconnecting -> "Reconnecting"; state.isConnected -> "Ready"; else -> "Offline" },
-                            style = MaterialTheme.typography.labelSmall,
-                            color = when { state.isReconnecting -> Warning; state.isConnected -> Success; else -> MaterialTheme.colorScheme.onSurfaceVariant },
+                            text = "AgentCall",
+                            style = MaterialTheme.typography.displayLarge.copy(
+                                fontSize = 19.sp,
+                                lineHeight = 23.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                letterSpacing = 0.12.sp,
+                            ),
+                            color = MaterialTheme.colorScheme.onBackground,
                         )
-                        if (state.isConnected) {
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("\u00B7 v1.0", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f))
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Box(
+                                modifier = Modifier.size(7.dp).clip(CircleShape)
+                                    .background(
+                                        when { state.isReconnecting -> DotReconnecting; state.isConnected -> DotOnline; else -> DotOffline }
+                                    )
+                            )
+                            Spacer(modifier = Modifier.width(7.dp))
+                            Text(
+                                text = when { state.isReconnecting -> "Reconnecting"; state.isConnected -> "Ready"; else -> "Offline" },
+                                style = MaterialTheme.typography.labelSmall,
+                                color = when { state.isReconnecting -> Warning; state.isConnected -> Success; else -> MaterialTheme.colorScheme.onSurfaceVariant },
+                            )
+                            if (state.isConnected) {
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    "\u00B7 v1.0",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                                )
+                            }
                         }
                     }
                 }
+                Spacer(modifier = Modifier.width(16.dp))
                 IconButton(onClick = onOpenSettings, modifier = Modifier.size(40.dp).clip(CircleShape).background(MaterialTheme.colorScheme.surface)) {
                     Icon(Icons.Default.Settings, contentDescription = "Settings", tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
                 }
@@ -144,7 +187,7 @@ private fun AgentRow(profile: AiProfileEntity, aiKey: AiKeyItem?, onClick: () ->
                     Text("$statusText \u00B7 $recencyLine", style = MaterialTheme.typography.labelSmall, color = if (presence == AiPresence.ONLINE || presence == AiPresence.BUSY) dotColor else MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }
-            Spacer(modifier = Modifier.width(Spacing.S))
+            Spacer(modifier = Modifier.width(10.dp))
             Icon(Icons.Default.ChevronRight, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f), modifier = Modifier.size(20.dp))
         }
     }
