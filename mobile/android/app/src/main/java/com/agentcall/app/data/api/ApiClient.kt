@@ -71,6 +71,12 @@ object ApiClient {
         return "$scheme://$serverHost$port/phone?user_id=$userId"
     }
 
+    fun getHealthUrl(): String {
+        val scheme = if (isDomainHost()) "https" else "http"
+        val port = if (isDomainHost()) "" else ":$API_PORT"
+        return "$scheme://$serverHost$port/health"
+    }
+
     fun setServerHost(host: String) {
         serverHost = host.trim().ifBlank { BuildConfig.DEFAULT_HOST }
         persistHost()

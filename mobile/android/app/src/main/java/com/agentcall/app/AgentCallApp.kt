@@ -9,7 +9,16 @@ import android.os.Build
 import android.util.Log
 import com.agentcall.app.call.CallService
 import com.agentcall.app.call.SignalingForegroundService
+import com.agentcall.app.data.api.ApiClient
+import com.agentcall.app.data.api.ApiService
+import com.google.firebase.messaging.FirebaseMessaging
 import dagger.hilt.android.HiltAndroidApp
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlin.coroutines.resume
 
 @HiltAndroidApp
 class AgentCallApp : Application() {
@@ -21,6 +30,34 @@ class AgentCallApp : Application() {
         createNotificationChannels()
         checkFullScreenIntentPermission()
         ForegroundTracker.register(this)
+        // FCM-only idle: register push token even when no FGS/WS is running.
+        // This is the primary wake path — without it, idle rings never arrive.
+        registerFcmTokenIfNeeded()
+    }
+
+    private fun registerFcmTokenIfNeeded() {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        scope.launch {
+            try {
+                val token = suspendCancellableCoroutine<String?> { cont ->
+                    FirebaseMessaging.getInstance().token.addOnCompleteListener { task ->
+                        if (task.isSuccessful) cont.resume(task.result) else cont.resume(null)
+                    }
+                }
+                if (token.isNullOrBlank()) {
+                    Log.w("AgentCall", "[FCM] AgentCallApp token fetch returned null — FCM unavailable")
+                    return@launch
+                }
+                ApiClient.ensurePhoneToken()
+                ApiClient.create<ApiService>().let { api ->
+                    // Use CallRepository's endpoint directly via ApiService
+                    api.registerFcmToken(com.agentcall.app.data.model.FcmTokenRequest(token))
+                }
+                Log.i("AgentCall", "[FCM] AgentCallApp startup token registered")
+            } catch (e: Exception) {
+                Log.w("AgentCall", "[FCM] AgentCallApp startup registration failed", e)
+            }
+        }
     }
 
     private fun checkFullScreenIntentPermission() {

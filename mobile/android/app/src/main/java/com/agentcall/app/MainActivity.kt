@@ -29,12 +29,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
-import com.agentcall.app.call.CallService
-import com.agentcall.app.call.CallStateHolder
-import com.agentcall.app.call.CallStatus
 import com.agentcall.app.call.CallActivity
-import com.agentcall.app.call.SignalingClient
-import com.agentcall.app.call.SignalingForegroundService
 import com.agentcall.app.home.HomeScreen
 import com.agentcall.app.profile.ProfileDetailScreen
 import com.agentcall.app.settings.SettingsScreen
@@ -42,13 +37,10 @@ import com.agentcall.app.settings.BatteryOptimizationScreen
 import com.agentcall.app.ui.theme.*
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.launch
-import javax.inject.Inject
 
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
 
-    @Inject
-    lateinit var signalingClient: SignalingClient
     private val notificationPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { _ -> }
@@ -103,29 +95,15 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        // Restore the websocket a previous onStop parked (or the socket a
-        // ring/answer re-established): the app being visible means the
-        // signaling path should be live again.
-        signalingClient.connectIfIdle()
+        // FCM-only idle: no persistent WS. onResume no longer restores a
+        // socket — the app is fully idle until FCM wakes it or user answers.
     }
 
     override fun onStop() {
         super.onStop()
-        // Backlog item 14 — idle self-stop: FCM is the ring-wake path, so an
-        // app in the background no longer needs an always-on websocket. Park
-        // and let the FGS decide whether it can stop itself entirely (it
-        // stays alive when a ring is in flight, a call is active, or the app
-        // is still visible elsewhere). The FGS-side guards make the race
-        // where a push arrives between park() and this notification safe: a
-        // validating push keeps the service alive until it rings or fails.
-        val state = CallStateHolder.state.value
-        if (!ForegroundTracker.isForeground &&
-            !CallService.hasActiveCall &&
-            state.status != CallStatus.RINGING
-        ) {
-            signalingClient.park()
-            SignalingForegroundService.notifyIdlePark(this)
-        }
+        // FCM-only idle: no park needed — there is no idle socket or FGS to
+        // park. CallService owns the WS only for the duration of an answered
+        // call and tears it down itself.
     }
 
     private var pendingProfileId: String? by mutableStateOf(null)

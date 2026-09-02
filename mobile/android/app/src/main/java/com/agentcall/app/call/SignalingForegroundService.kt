@@ -95,47 +95,15 @@ class SignalingForegroundService : Service() {
                 }
             }
         }
-        // WS-down fallback (battery audit M4): the poll runs only through the
-        // FallbackPollCadence.shouldRunFallbackPoll gate — genuinely
-        // DISCONNECTED, not parked, and only while a foreground app or an
-        // in-flight ring can act on what it finds. CONNECTING is "wait": the
-        // socket that is coming up will deliver the same events. Re-evaluated
-        // on every connection-state emission AND whenever ring state changes
-        // (ring()/clearRing()), since those flip the hasActiveRing input.
+        // WS-down fallback — safety net for dropped FCM, foreground-only,
+        // heavily rate-limited (5 min when idle). With FCM-only idle, this
+        // is backup, not primary. Still gated by shouldRunFallbackPoll.
         fallbackJob = scope.launch {
             signalingClient.connectionState.collect { updateFallbackPoll() }
         }
-        // If the service starts with the socket down (process restart after a
-        // system kill, sticky-service restart), establish the WebSocket from
-        // here — there is no boot receiver by design: rings wake us via FCM.
-        if (signalingClient.connectionState.value == SignalingClient.ConnectionState.DISCONNECTED) {
-            signalingClient.connect()
-        }
-        // Phase A (FCM push-to-wake): register the Firebase token at startup,
-        // not just on rotation. onNewToken only fires when the token *changes*,
-        // so an install that minted its token while the backend host was wrong
-        // (or before the endpoint existed) would never re-register — a silent
-        // gap where FCM rings can never be delivered. Fetching the current
-        // token here is idempotent and self-heals that case.
-        scope.launch {
-            // Battery audit L1: seed optimistically BEFORE the fetch so a
-            // ws-CONNECTED callback racing this coroutine cannot double-POST
-            // (observed on cold start: both registrations fired in the same
-            // millisecond when seeding waited for POST completion). On
-            // failure the seed is cleared so ws-CONNECTED doubles as retry.
-            lastFcmRegisterMs = System.currentTimeMillis()
-            val token = runCatching { awaitFcmToken() }.getOrNull()
-            if (token.isNullOrBlank()) {
-                Log.w(TAG, "[FCM] startup token fetch returned nothing — FCM unavailable?")
-            } else {
-                Log.i(TAG, "[FCM] startup token registration")
-                runCatching { callRepository.registerFcmToken(token) }
-                    .onFailure {
-                        Log.w(TAG, "[FCM] startup token registration failed", it)
-                        lastFcmRegisterMs = 0L
-                    }
-            }
-        }
+        // FCM-only idle: no auto WebSocket. Rings wake via FCM (AgentCallMessagingService
+        // → ACTION_RING_FROM_PUSH). FCM token registration moved to AgentCallApp
+        // so it runs even when this service is not alive (idle).
     }
 
     /** Debounced FCM token registration; called on WS CONNECTED. */
@@ -379,22 +347,30 @@ class SignalingForegroundService : Service() {
     }
 
     /**
-     * Backlog item 14 — idle self-stop: with FCM as the primary ring-wake
-     * path the always-on socket is no longer needed. When there is no ring
-     * in flight, no active call and no visible app, the service parks the
-     * websocket and stops itself. Any of the three conditions keeps it alive
-     * (a ring owns the WS/poll path, an active call may still need the
-     * socket, and a foreground app must keep its status truthful).
+     * FCM-only idle: no persistent FGS/WS. The service is transient — it lives
+     * only while ringing or in an active call. When neither is true, park the
+     * socket and stop, regardless of whether the app is foreground or background.
+     * The previous check `if (isForeground) return` kept a permanent "Connected"
+     * notification; that is now removed. Idle = no FGS, no notification, no WS.
+     * Rings wake via FCM (AgentCallMessagingService → ACTION_RING_FROM_PUSH),
+     * and the call itself opens WS via CallService.
      *
-     * [pendingRingValidation] also blocks parking: a push that is still
-     * being validated has not yet decided whether it rings.
+     * [pendingRingValidation] still blocks parking: a push being validated must
+     * not be killed before it rings.
+     *
+     * Fallback poller decision: the safety-net poll (pollActiveCall) is retained
+     * but heavily rate-limited (5 min when idle) and gated to foreground only
+     * via shouldRunFallbackPoll. Since this service no longer runs when idle,
+     * the foreground safety net is now also covered by HomeViewModel's
+     * foreground health poll — FGS fallback is backup for when FGS *is* alive
+     * (ringing). Pure FCM-only with zero fallback was considered but we kept
+     * the 5-min foreground poll as defense against OEM-dropped FCM.
      */
     private fun maybeParkAndStop() {
         if (ringingCallId != null) return
         if (pendingRingValidation) return
         if (CallService.hasActiveCall) return
-        if (ForegroundTracker.isForeground) return
-        Log.i(TAG, "[FGS] no ring, no call, app backgrounded — parking WS and stopping")
+        Log.i(TAG, "[FGS] no ring, no call — parking WS and stopping (FCM-only idle)")
         signalingClient.park()
         stopSelf()
     }
@@ -501,8 +477,16 @@ class SignalingForegroundService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        startForeground(NOTIFICATION_ID, createNotification(notificationTextFor(signalingClient.connectionState.value)).build())
-        foregroundStarted = true
+        // FCM-only idle: foreground only when ringing or in active call.
+        // Previously this was always-on, causing permanent "AgentCall" notification.
+        // Now: only go foreground for a ring (ACTION_RING_FROM_PUSH) or when a
+        // call is active; idle wake that is not a ring should not show a notification.
+        val shouldBeForeground = ringingCallId != null || CallService.hasActiveCall ||
+            intent?.action == ACTION_RING_FROM_PUSH
+        if (shouldBeForeground) {
+            startForeground(NOTIFICATION_ID, createNotification(notificationTextFor(signalingClient.connectionState.value)).build())
+            foregroundStarted = true
+        }
 
         when (intent?.action) {
             ACTION_RING_FROM_PUSH -> {

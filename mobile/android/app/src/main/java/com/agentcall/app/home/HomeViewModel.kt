@@ -15,8 +15,10 @@ import com.agentcall.app.data.database.entity.AiProfileEntity
 import com.agentcall.app.data.repository.CallRepository
 import com.agentcall.app.settings.BatteryOptimizationManager
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -97,46 +99,25 @@ class HomeViewModel @Inject constructor(
     private var lastAgentStatusFetchMs = 0L
 
     init {
+        // FCM-only idle: no persistent WS. Home's "Ready" reflects backend
+        // health + FCM token, not socket state. Pollers run only while
+        // foreground; going background cancels everything.
         viewModelScope.launch {
-            // Battery audit H1: isConnected is now derived from connection
-            // state itself, not from an event that was never emitted.
-            // CONNECTING leaves the flag alone (transient flap must not blink
-            // the UI false); DISCONNECTED and RECONNECTING are truthfully
-            // "not connected" — the socket cannot deliver anything right now.
-            signalingClient.connectionState.collect { state ->
-                val connected = when (state) {
-                    SignalingClient.ConnectionState.CONNECTED -> true
-                    SignalingClient.ConnectionState.DISCONNECTED -> false
-                    SignalingClient.ConnectionState.RECONNECTING -> false
-                    SignalingClient.ConnectionState.CONNECTING -> _uiState.value.isConnected
-                }
-                _uiState.value = _uiState.value.copy(
-                    isReconnecting = state == SignalingClient.ConnectionState.RECONNECTING,
-                    isConnected = connected,
-                    statusText = when (state) {
-                        SignalingClient.ConnectionState.CONNECTING -> "Connecting..."
-                        SignalingClient.ConnectionState.RECONNECTING -> "Reconnecting..."
-                        SignalingClient.ConnectionState.DISCONNECTED -> "Disconnected"
-                        SignalingClient.ConnectionState.CONNECTED -> _uiState.value.statusText
-                    },
-                )
-            }
+            refreshHealth()
         }
 
         viewModelScope.launch {
             combine(
-                signalingClient.connectionState,
+                _uiState,
                 profiles,
-            ) { connection, agents ->
-                connection == SignalingClient.ConnectionState.CONNECTED &&
+            ) { uiState, agents ->
+                uiState.isConnected &&
                     agents.isNotEmpty() &&
                     batteryOptimizationManager.shouldShowBanner()
             }.collect { visible ->
                 _showBatteryBanner.value = visible
             }
         }
-
-        connect()
 
         viewModelScope.launch {
             ServerConfigEvent.reconnectRequests.collect { count ->
@@ -148,9 +129,7 @@ class HomeViewModel @Inject constructor(
         }
 
         // A new agent profile (or a first sync) refreshes its status chip.
-        // Profiles come from Room, not the socket — the grid must render even
-        // while the WS is CONNECTING/RECONNECTING (prod proxy drops sockets),
-        // so the loading skeleton clears as soon as local data is available.
+        // Profiles come from Room — the grid must render even while offline.
         viewModelScope.launch {
             profiles.collect { list ->
                 refreshAgentStatuses()
@@ -161,22 +140,11 @@ class HomeViewModel @Inject constructor(
         }
 
         viewModelScope.launch {
-            // Battery audit H1: the availability refresh exists to keep the
-            // Home chips honest while a user can see them. Two lifecycle-aware
-            // gates replace the old always-running loop:
-            //  1. ProcessLifecycleOwner.repeatOnLifecycle(STARTED) — going to
-            //     the background CANCELS this coroutine tree, so nothing fires
-            //     for however long the process survives (critical for users
-            //     who granted battery-optimization exemption, where Doze will
-            //     not mask background work).
-            //  2. collectLatest on connectionState — each cycle is keyed to an
-            //     actual CONNECTED emission; disconnected/parked costs zero
-            //     requests because rings arrive via FCM/WS push regardless.
-            // Cadence itself lives in the pure AvailabilityPollCadence object.
+            // Availability refresh now gated on health (FCM-only), not WS.
+            // STARTED lifecycle ensures background cancels the loop.
             ProcessLifecycleOwner.get().lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
                 var failureStreak = 0
-                signalingClient.connectionState.collectLatest { state ->
-                    if (state != SignalingClient.ConnectionState.CONNECTED) return@collectLatest
+                while (true) {
                     val ok = runCatching {
                         ApiClient.ensurePhoneToken()
                         ApiClient.create<ApiService>().listAiKeys()
@@ -185,15 +153,50 @@ class HomeViewModel @Inject constructor(
                         repository.reconcileProfileKeyIds()
                     }.isSuccess
                     failureStreak = if (ok) 0 else failureStreak + 1
+                    // Also keep isConnected honest via health.
+                    if (!ok) {
+                        // Don't flip to offline on a single 5xx; streak handles it.
+                        if (failureStreak >= 2) {
+                            _uiState.value = _uiState.value.copy(isConnected = false, statusText = "Offline")
+                        }
+                    } else {
+                        _uiState.value = _uiState.value.copy(isConnected = true, statusText = "Ready")
+                    }
                     delay(AvailabilityPollCadence.computeDelayMs(ok, failureStreak))
                 }
             }
         }
     }
 
+    private suspend fun refreshHealth() {
+        val ok = withContext(kotlinx.coroutines.Dispatchers.IO) {
+            try {
+                val url = java.net.URL(ApiClient.getHealthUrl())
+                val conn = url.openConnection() as java.net.HttpURLConnection
+                conn.connectTimeout = 3000
+                conn.readTimeout = 3000
+                conn.requestMethod = "GET"
+                val code = conn.responseCode
+                conn.disconnect()
+                code == 200
+            } catch (_: Exception) { false }
+        }
+        _uiState.value = _uiState.value.copy(
+            isConnected = ok,
+            isReconnecting = false,
+            statusText = if (ok) "Ready" else "Offline",
+            isLoading = false,
+        )
+        if (ok) refreshAgentStatuses()
+    }
+
     fun connect() {
-        signalingClient.connect()
+        // No-op in FCM-only idle: WS only opens for duration of answered call
+        // (CallService). Home no longer drives a persistent socket.
+        viewModelScope.launch { refreshHealth() }
         eventsJob?.cancel()
+        // Keep lightweight event collection for in-call transitions if WS is
+        // ever opened during a call, but don't force a connect here.
         eventsJob = viewModelScope.launch {
             signalingClient.events.collect { event ->
                 when (event) {
@@ -210,11 +213,9 @@ class HomeViewModel @Inject constructor(
                         repository.saveCallEnded(event.callId, "ended")
                     }
                     is VoiceBridgeEvent.Disconnected -> {
-                        _uiState.value = _uiState.value.copy(
-                            isConnected = false,
-                            isReconnecting = false,
-                            statusText = "Disconnected",
-                        )
+                        // In FCM-only idle, a WS disconnect is expected and should
+                        // not flip the UI to "Disconnected" — health is the source.
+                        // Only reflect if we were previously showing WS-driven state.
                     }
                     is VoiceBridgeEvent.Error -> {
                         _snackbarEvents.tryEmit("Error: ${event.message}")
@@ -226,16 +227,7 @@ class HomeViewModel @Inject constructor(
     }
 
     fun reconnect() {
-        signalingClient.disconnect()
-        _uiState.value = _uiState.value.copy(
-            isConnected = false,
-            isReconnecting = true,
-            statusText = "Reconnecting...",
-        )
-        viewModelScope.launch {
-            delay(300)
-            connect()
-        }
+        viewModelScope.launch { refreshHealth() }
     }
 
     /**

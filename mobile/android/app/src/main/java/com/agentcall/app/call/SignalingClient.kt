@@ -131,7 +131,9 @@ class SignalingClient @Inject constructor(
         userDisconnected = false
         connectionJob?.cancel()
         registerNetworkCallback()
-        SignalingForegroundService.start(app)
+        // FCM-only idle: WS only for duration of answered call (CallService).
+        // Do NOT start a permanent FGS here — the app should sit idle with no
+        // socket and no notification until FCM wakes it or user answers.
         connectGeneration++
         connectionJob = scope.launch {
             connectInternal("CALLER=connect()")
@@ -473,10 +475,12 @@ class SignalingClient @Inject constructor(
     fun connectIfIdle() {
         if (userDisconnected) return
         if (parked || _connectionState.value == ConnectionState.DISCONNECTED) {
-            Log.i(TAG, "[WS] connectIfIdle — restoring connection")
+            Log.i(TAG, "[WS] connectIfIdle — restoring connection for active call")
             parked = false
             registerNetworkCallback()
-            SignalingForegroundService.start(app)
+            // FCM-only: only CallService should open WS for duration of call.
+            // This is now only called from CallService.ACTION_START_CALL, not
+            // from MainActivity idle resume.
             connectGeneration++
             connectionJob = scope.launch {
                 connectInternal("CALLER=connectIfIdle")

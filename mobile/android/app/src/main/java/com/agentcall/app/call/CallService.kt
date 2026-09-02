@@ -1006,10 +1006,13 @@ class CallService : Service() {
     }
 
     private fun endCall() {
-        // Backlog item 14: the shared ring/call truth must be updated before
-        // the FGS is asked to park — an active call is exactly the state that
-        // keeps the FGS alive.
+        // FCM-only idle: after call ends, close the call-scoped WS and return
+        // to fully idle (no FGS, no socket, no notification). hasActiveCall
+        // must be cleared before parking so maybeParkAndStop sees idle.
         hasActiveCall = false
+        // Close the WS that was opened for this call (CallService opened it via
+        // connectIfIdle on answer). FCM will handle the next wake.
+        try { signalingClient.park() } catch (_: Exception) {}
         callWatchdogJob?.cancel()
         callWatchdogJob = null
         val endedId = callId
@@ -1019,9 +1022,6 @@ class CallService : Service() {
         scheduleTtsIdleShutdown()
         callId = null
         if (firstEnd) {
-            // The FGS may have missed the terminal WS event while
-            // hasActiveCall was still true; ask it to park/stop itself now.
-            // onDestroy's second endCall() call is a no-op here.
             SignalingForegroundService.notifyIdlePark(this)
         }
     }

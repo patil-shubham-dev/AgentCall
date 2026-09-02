@@ -889,11 +889,14 @@ export function notifyPhone(userId: string, payload: Record<string, unknown>): b
 
   publishNotificationRequested(userId, msgType, payload);
 
-  // Phase A: FCM push-to-wake is a SECOND ring-delivery attempt fired alongside
-  // the WS path — always-send, the phone dedupes against the WS/poll ring.
-  // Fire-and-forget: never awaited, never alters the return value below, and
-  // a fully silent no-op when FCM_ENABLED=false. The client's recentlyRung
-  // guard makes duplicate delivery harmless.
+  // FCM push-to-wake — PRIMARY delivery for call_incoming (FCM-only idle model).
+  // Sent as high-priority DATA message (fcm.ts: android priority high, data payload)
+  // containing call_id, summary, reason, expiresAt so phone can fetch full
+  // details via single REST call and show ring without any WS. The WS path
+  // below is best-effort secondary (immediate if connected, queued for 2 min
+  // otherwise); the phone dedupes via recentlyRung. For idle phones (no WS)
+  // FCM is the ONLY leg — do NOT gate it on WS connection state.
+  // Fire-and-forget: never awaited, never alters return value, silent no-op when FCM_ENABLED=false.
   if (msgType === 'call_incoming' && config.fcm.enabled) {
     void sendFcmPush(userId, payload);
   }

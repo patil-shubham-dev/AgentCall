@@ -45,17 +45,17 @@ import com.agentcall.app.settings.CallerTuneManager
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
-import com.agentcall.app.call.SignalingClient
-import com.agentcall.app.call.SignalingClient.ConnectionState
 import com.agentcall.app.data.api.ApiClient
 import com.agentcall.app.data.api.ApiService
 import com.agentcall.app.data.api.AiKeyCreateRequest
 import com.agentcall.app.data.api.AiKeyCreateResponse
 import com.agentcall.app.data.api.AiKeyItem
+import com.agentcall.app.data.repository.CallRepository
 import com.agentcall.app.ui.composables.AmbientBackground
 import com.agentcall.app.ui.composables.Plate
 import com.agentcall.app.ui.composables.SectionLabel
 import com.agentcall.app.ui.theme.*
+import com.google.firebase.messaging.FirebaseMessaging
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -63,8 +63,10 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import javax.inject.Inject
+import kotlin.coroutines.resume
 
 enum class ConnectionTestStatus {
     IDLE, TESTING, SUCCESS, FAILED
@@ -72,13 +74,15 @@ enum class ConnectionTestStatus {
 
 @HiltViewModel
 class SettingsViewModel @Inject constructor(
-    private val signalingClient: SignalingClient,
+    private val callRepository: CallRepository,
     val callerTuneManager: CallerTuneManager,
     val quietHoursManager: QuietHoursManager,
 ) : ViewModel() {
     private val _serverHost = MutableStateFlow(ApiClient.serverHost)
     val serverHost: StateFlow<String> = _serverHost.asStateFlow()
 
+    // One-shot health + FCM status (FCM-only idle model — no persistent WS).
+    // "Ready" means backend reachable AND a Firebase token exists locally.
     private val _connectionStatus = MutableStateFlow("Checking...")
     val connectionStatus: StateFlow<String> = _connectionStatus.asStateFlow()
 
@@ -104,14 +108,44 @@ class SettingsViewModel @Inject constructor(
     val creatingKey: StateFlow<Boolean> = _creatingKey.asStateFlow()
 
     init {
+        refreshConnectionStatus()
+    }
+
+    fun refreshConnectionStatus() {
         viewModelScope.launch {
-            signalingClient.connectionState.collect { state ->
-                _connectionStatus.value = when (state) {
-                    ConnectionState.CONNECTED -> "Connected"
-                    ConnectionState.CONNECTING -> "Connecting..."
-                    ConnectionState.RECONNECTING -> "Reconnecting..."
-                    ConnectionState.DISCONNECTED -> "Disconnected"
-                }
+            _connectionStatus.value = "Checking..."
+            val backendOk = checkBackendHealth()
+            val fcmOk = checkFcmRegistered()
+            _connectionStatus.value = when {
+                backendOk && fcmOk -> "Ready — Backend reachable, notifications active"
+                backendOk && !fcmOk -> "Backend reachable, but push notifications not registered — calls may not ring"
+                !backendOk && fcmOk -> "Backend unreachable — push may not work"
+                else -> "Offline — Backend unreachable"
+            }
+        }
+    }
+
+    private suspend fun checkBackendHealth(): Boolean = withContext(Dispatchers.IO) {
+        try {
+            val url = java.net.URL(ApiClient.getHealthUrl())
+            val conn = url.openConnection() as java.net.HttpURLConnection
+            conn.connectTimeout = 3000
+            conn.readTimeout = 3000
+            conn.requestMethod = "GET"
+            val code = conn.responseCode
+            conn.disconnect()
+            code == 200
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private suspend fun checkFcmRegistered(): Boolean = suspendCancellableCoroutine { cont ->
+        FirebaseMessaging.getInstance().token.addOnCompleteListener { task ->
+            if (task.isSuccessful && !task.result.isNullOrBlank()) {
+                cont.resume(true)
+            } else {
+                cont.resume(false)
             }
         }
     }
@@ -123,6 +157,8 @@ class SettingsViewModel @Inject constructor(
     fun connect() {
         val host = _serverHost.value.trim().ifBlank { ApiClient.serverHost }
         ApiClient.setServerHost(host)
+        // Re-check health immediately after host change; no WS reconnect needed in FCM-only idle.
+        refreshConnectionStatus()
         com.agentcall.app.home.ServerConfigEvent.reconnectRequests.value++
     }
 
@@ -132,11 +168,7 @@ class SettingsViewModel @Inject constructor(
             val result = withContext(Dispatchers.IO) {
                 val start = System.currentTimeMillis()
                 try {
-                    val host = _serverHost.value.trim()
-                    val isDomain = !Regex("^[\\d.]+$").matches(host)
-                    val scheme = if (isDomain) "https" else "http"
-                    val port = if (isDomain) "" else ":4000"
-                    val url = java.net.URL("$scheme://$host$port/api/v1/health")
+                    val url = java.net.URL(ApiClient.getHealthUrl())
                     val conn = url.openConnection() as java.net.HttpURLConnection
                     conn.connectTimeout = 3000
                     conn.readTimeout = 3000
@@ -151,6 +183,8 @@ class SettingsViewModel @Inject constructor(
             }
             _testLatency.value = result.first
             _testStatus.value = result.second
+            // Also refresh the main status label so health + FCM are re-checked.
+            refreshConnectionStatus()
         }
     }
 
@@ -255,8 +289,8 @@ fun SettingsScreen(
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background),
     ) {
-        // Header with ambient background behind
-        Box(modifier = Modifier.height(80.dp)) {
+        // Header with ambient background behind — reduced top inset so header sits closer to status bar
+        Box(modifier = Modifier.height(68.dp)) {
             AmbientBackground(
                 accentColor = Indigo500,
                 density = 0.6f,
@@ -264,7 +298,7 @@ fun SettingsScreen(
                 modifier = Modifier.fillMaxSize(),
             )
             Column(modifier = Modifier.fillMaxSize()) {
-                Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(6.dp))
                 Text(
                     text = "Settings",
                     style = MaterialTheme.typography.headlineMedium,
@@ -289,11 +323,13 @@ fun SettingsScreen(
             SettingsSection(title = "SERVER CONNECTION") {
                 GlassCard {
                     Column(modifier = Modifier.padding(16.dp)) {
-                        // Status row — 12dp lamp + mono readout, then hairline
-                        val lampColor = when (connectionStatus) {
-                            "Connected" -> Green400
-                            "Connecting...", "Reconnecting..." -> Amber400
-                            else -> LampOff
+                        // Status row — FCM-only idle: no persistent WS. Green = backend + FCM,
+                        // Amber = backend ok but FCM missing, Red = backend unreachable.
+                        val lampColor = when {
+                            connectionStatus.startsWith("Ready") -> Green400
+                            connectionStatus.startsWith("Backend reachable, but") -> Amber400
+                            connectionStatus == "Checking..." -> Amber400
+                            else -> Red400
                         }
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             val dotAnim by rememberInfiniteTransition(label = "connDot").animateFloat(
@@ -305,10 +341,7 @@ fun SettingsScreen(
                                 modifier = Modifier
                                     .size(12.dp)
                                     .clip(CircleShape)
-                                    .background(
-                                        if (lampColor != LampOff) lampColor.copy(alpha = 0.5f + dotAnim * 0.5f)
-                                        else LampOff
-                                    ),
+                                    .background(lampColor.copy(alpha = 0.5f + dotAnim * 0.5f)),
                             )
                             Spacer(modifier = Modifier.width(10.dp))
                             Text(
@@ -317,16 +350,20 @@ fun SettingsScreen(
                                 color = MaterialTheme.colorScheme.onSurface,
                             )
                             Spacer(modifier = Modifier.weight(1f))
-                            Text(
-                                text = connectionStatus,
-                                style = MonoLabel,
-                                color = if (lampColor == LampOff) {
-                                    MaterialTheme.colorScheme.onSurfaceVariant
-                                } else {
-                                    lampColor
-                                },
-                            )
+                            IconButton(
+                                onClick = { viewModel.refreshConnectionStatus() },
+                                modifier = Modifier.size(32.dp),
+                            ) {
+                                Icon(Icons.Default.Refresh, "Refresh status", tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(18.dp))
+                            }
                         }
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = connectionStatus,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = lampColor,
+                            maxLines = 3,
+                        )
 
                         Spacer(modifier = Modifier.height(12.dp))
                         HorizontalDivider(color = Slate700.copy(alpha = 0.6f))
@@ -766,6 +803,31 @@ fun SettingsScreen(
                 }
             }
 
+            // ── About ─────────────────────────────────────
+            CollapsibleSettingsSection(title = "ABOUT") {
+                GlassCard {
+                    Column(modifier = Modifier.padding(4.dp)) {
+                        InfoRow(
+                            icon = Icons.Default.Info,
+                            title = "Version",
+                            subtitle = "1.0.0",
+                            onClick = {},
+                        )
+                        SettingsDivider()
+                        InfoRow(
+                            icon = Icons.Default.Code,
+                            title = "Stack",
+                            subtitle = "Kotlin \u00B7 Jetpack Compose \u00B7 MCP",
+                        )
+                        SettingsDivider()
+                        InfoRow(
+                            icon = Icons.Default.Shield,
+                            title = "Security",
+                            subtitle = "HTTPS/WSS production · HTTP/WS local",
+                        )
+                    }
+                }
+            }
             // ── Privacy & Data (backlog item 17) ───────────────
             SettingsSection(title = "PRIVACY & DATA") {
                 GlassCard {
@@ -795,41 +857,6 @@ fun SettingsScreen(
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
                             lineHeight = 16.sp,
-                        )
-                    }
-                }
-            }
-
-            // ── About ─────────────────────────────────────
-            CollapsibleSettingsSection(title = "ABOUT") {
-                GlassCard {
-                    Column(modifier = Modifier.padding(4.dp)) {
-                        Image(
-                            painter = painterResource(R.drawable.agentcall_logo_transparent),
-                            contentDescription = "AgentCall logo",
-                            modifier = Modifier
-                                .align(Alignment.CenterHorizontally)
-                                .padding(vertical = 12.dp)
-                                .size(44.dp),
-                        )
-                        SettingsDivider()
-                        InfoRow(
-                            icon = Icons.Default.Info,
-                            title = "Version",
-                            subtitle = "1.0.0",
-                            onClick = {},
-                        )
-                        SettingsDivider()
-                        InfoRow(
-                            icon = Icons.Default.Code,
-                            title = "Stack",
-                            subtitle = "Kotlin \u00B7 Jetpack Compose \u00B7 MCP",
-                        )
-                        SettingsDivider()
-                        InfoRow(
-                            icon = Icons.Default.Shield,
-                            title = "Security",
-                            subtitle = "HTTPS/WSS production · HTTP/WS local",
                         )
                     }
                 }
