@@ -44,6 +44,8 @@ export interface VoiceCallSession {
     actionItems?: string[];
   };
   createdAt: string;
+  /** Set when ring dispatch succeeded (WS or FCM). After this point MCP disconnect must not abort. */
+  ringDispatchedAt?: string;
   lastActivityAt?: string;
   connectedAt?: string;
   pausedAt?: string;

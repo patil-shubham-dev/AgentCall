@@ -15,7 +15,7 @@ import { createSignalingServer } from './signaling/server.js';
 import { DefaultEventBus, createEventLoggerHook } from './event-bus/index.js';
 import type { EventBus } from './event-bus/index.js';
 import { initializePhoneTokens } from './voicebridge/phone-tokens.js';
-import { initializeFcmTokens } from './voicebridge/fcm-tokens.js';
+import { initializeFcmTokens, removeFcmToken } from './voicebridge/fcm-tokens.js';
 import { initializeAiKeys } from './voicebridge/ai-keys.js';
 import { register as registerNotifications } from './voicebridge/notifications/index.js';
 import { register as registerPresence } from './voicebridge/presence/index.js';
@@ -190,6 +190,10 @@ async function main() {
 
   // Phase A (FCM push-to-wake): device token registry, same persistence pattern.
   await initializeFcmTokens(pool);
+  // Safe cleanup: remove known dummy diagnostic token if it exists (harmless no-op otherwise).
+  try {
+    await removeFcmToken('test-diagnostic-token-001');
+  } catch {}
 
   // Initialize the named AI keys registry (Add-AI flow)
   await initializeAiKeys(pool);

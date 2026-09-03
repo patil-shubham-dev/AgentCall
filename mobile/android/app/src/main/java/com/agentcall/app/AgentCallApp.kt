@@ -8,18 +8,11 @@ import android.media.RingtoneManager
 import android.os.Build
 import android.util.Log
 import com.agentcall.app.call.CallService
+import com.agentcall.app.call.FcmRegistrationScheduler
 import com.agentcall.app.call.FcmRegistrationStore
 import com.agentcall.app.call.SignalingForegroundService
 import com.agentcall.app.data.api.ApiClient
-import com.agentcall.app.data.api.ApiService
-import com.google.firebase.messaging.FirebaseMessaging
 import dagger.hilt.android.HiltAndroidApp
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.suspendCancellableCoroutine
-import kotlin.coroutines.resume
 
 @HiltAndroidApp
 class AgentCallApp : Application() {
@@ -33,42 +26,20 @@ class AgentCallApp : Application() {
         checkFullScreenIntentPermission()
         ForegroundTracker.register(this)
         // FCM-only idle: register push token even when no FGS/WS is running.
-        // This is the primary wake path â€” without it, idle rings never arrive.
+        // Canonical WorkManager enqueue — NetworkType.CONNECTED + exponential
+        // backoff handles cold-start timeouts without duplicating logic.
         registerFcmTokenIfNeeded()
     }
 
     private fun registerFcmTokenIfNeeded() {
-        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-        scope.launch {
-            try {
-                val token = suspendCancellableCoroutine<String?> { cont ->
-                    FirebaseMessaging.getInstance().token.addOnCompleteListener { task ->
-                        if (task.isSuccessful) cont.resume(task.result) else cont.resume(null)
-                    }
-                }
-                if (token.isNullOrBlank()) {
-                    Log.w("AgentCall", "[FCM] AgentCallApp token fetch returned null â€” FCM unavailable")
-                    FcmRegistrationStore.recordFailure("no-token")
-                    return@launch
-                }
-                ApiClient.ensurePhoneToken()
-                ApiClient.create<ApiService>().let { api ->
-                    api.registerFcmToken(com.agentcall.app.data.model.FcmTokenRequest(token))
-                }
-                FcmRegistrationStore.recordSuccess(token)
-                Log.i("AgentCall", "[FCM] AgentCallApp startup token registered")
-            } catch (e: Exception) {
-                FcmRegistrationStore.recordFailure(e.message ?: "unknown")
-                Log.w("AgentCall", "[FCM] AgentCallApp startup registration failed", e)
-            }
-        }
+        FcmRegistrationScheduler.enqueue(this)
     }
 
     private fun checkFullScreenIntentPermission() {
         if (Build.VERSION.SDK_INT >= 34) {
             val mgr = getSystemService(NotificationManager::class.java)
             if (!mgr.canUseFullScreenIntent()) {
-                Log.w("AgentCall", "[startup] USE_FULL_SCREEN_INTENT not granted â€” incoming calls will not show full-screen UI")
+                Log.w("AgentCall", "[startup] USE_FULL_SCREEN_INTENT not granted — incoming calls will not show full-screen UI")
                 CallService.showFullScreenIntentWarning(this)
             } else {
                 CallService.cancelFullScreenIntentWarning(this)
@@ -125,7 +96,7 @@ class AgentCallApp : Application() {
         manager.createNotificationChannel(quietIncoming)
 
         // Missed-call notification (backlog item 1): silent, informational
-        // only â€” fired when a ring expires while the app is backgrounded.
+        // only — fired when a ring expires while the app is backgrounded.
         val missedCalls = NotificationChannel(
             CallService.CHANNEL_MISSED_CALLS,
             "Missed Calls",

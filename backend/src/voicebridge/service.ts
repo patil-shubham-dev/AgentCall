@@ -163,10 +163,10 @@ export class VoiceBridgeService {
    * resumes so the phone gets a fresh ring window, exactly like the direct
    * resume path in LifecycleCoordinator.
    */
-  private pushCallIncoming(session: VoiceCallSession): void {
+  private async pushCallIncoming(session: VoiceCallSession): Promise<boolean> {
     const isCallback = session.resumedAt !== undefined;
     const anchor = session.resumedAt ?? session.createdAt;
-    notifyPhone(session.userId, {
+    const payload: Record<string, unknown> = {
       type: 'call_incoming',
       callId: session.id,
       callerName: session.agentId,
@@ -175,15 +175,54 @@ export class VoiceBridgeService {
       options: session.context.options,
       priority: session.priority,
       ...(isCallback ? { isCallback: true } : {}),
-      // The MCP client that requested the call (ChatGPT, Claude, OpenCode...);
-      // the phone shows it as a caller badge. Absent for older/polled calls.
       ...(session.clientInfo ? { clientInfo: session.clientInfo } : {}),
-      // Ring validity window: the phone drops the event if expiresAt has
-      // passed by the time it processes it (defense in depth against stale
-      // queued pushes and reconnect bursts).
       createdAt: anchor,
       expiresAt: new Date(Date.parse(anchor) + CALL_RING_TTL_MS).toISOString(),
-    });
+    };
+    const wsDelivered = this.deliverViaWs(session.userId, payload);
+    let fcmOk = false;
+    if (config.fcm.enabled) {
+      try {
+        const result = await sendFcmPush(session.userId, payload);
+        fcmOk = result.ok;
+        logger.info({ callId: session.id, userId: session.userId, wsDelivered, fcmOk, tokenRemoved: result.tokenRemoved }, '[ring] dispatch result');
+      } catch (err) {
+        logger.warn({ callId: session.id, err: err instanceof Error ? err.message : String(err) }, '[ring] FCM dispatch exception');
+        fcmOk = false;
+      }
+    } else {
+      logger.info({ callId: session.id, wsDelivered }, '[ring] dispatch via WS only (FCM disabled)');
+    }
+    return wsDelivered || fcmOk;
+  }
+
+  /** WS-only delivery (no FCM). Used by pushCallIncoming which awaits FCM separately. */
+  private deliverViaWs(userId: string, payload: Record<string, unknown>): boolean {
+    const start = Date.now();
+    const msgType = (payload.type as string) ?? 'unknown';
+    publishNotificationRequested(userId, msgType, payload);
+    const ws = phoneConnections.get(userId);
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      try {
+        ws.send(JSON.stringify({ type: msgType, payload, timestamp: new Date().toISOString() }));
+        logger.info({ userId, msgType, elapsed: Date.now() - start }, '[WS] -> sent to phone (ring)');
+        publishNotificationDelivered(userId, msgType);
+        return true;
+      } catch (sendErr) {
+        const errMsg = sendErr instanceof Error ? sendErr.message : String(sendErr);
+        logger.error({ err: sendErr, userId, msgType, elapsed: Date.now() - start }, '[WS] -> send failed (ring)');
+        publishNotificationFailed(userId, msgType, errMsg);
+        return false;
+      }
+    }
+    logger.warn({ userId, msgType, readyState: ws?.readyState, elapsed: Date.now() - start }, '[WS] phone not connected, queuing notification (ring)');
+    publishNotificationFailed(userId, msgType, 'phone not connected');
+    const cutoff = Date.now() - QUEUED_NOTIFICATION_TTL_MS;
+    const existing = pendingNotifications.get(userId) ?? [];
+    const fresh = existing.filter((entry) => new Date(entry.timestamp).getTime() >= cutoff);
+    fresh.push({ payload, timestamp: new Date().toISOString() });
+    pendingNotifications.set(userId, fresh);
+    return false;
   }
 
   /**
@@ -203,7 +242,31 @@ export class VoiceBridgeService {
 
     if (this.isAgentReadyForCall(callId, session.agentId)) {
       logger.info({ callId, agentId: session.agentId }, '[ring-gate] agent ready, pushing call_incoming');
-      this.pushCallIncoming(session);
+      const dispatched = await this.pushCallIncoming(session);
+      if (dispatched) {
+        // Atomic transition: hold session lock while marking dispatched so a
+        // concurrent cancelCallsByAgent cannot win after we succeeded.
+        await withSessionLock(callId, async () => {
+          const fresh = await this.sessionRepo.findById(callId);
+          if (!fresh || fresh.status !== 'pending') return;
+          if (fresh.ringDispatchedAt) return;
+          fresh.ringDispatchedAt = now();
+          await this.sessionRepo.save(fresh);
+          logger.info({ callId, ringDispatchedAt: fresh.ringDispatchedAt }, '[ring-gate] ring dispatched - call now immune to MCP disconnect');
+        });
+        return;
+      }
+      // Dispatch failed (no WS and FCM not ok) - treat as transient and retry if budget remains
+      logger.warn({ callId, agentId: session.agentId }, '[ring-gate] dispatch failed (no delivery) - scheduling retry');
+      if (attemptsLeft > 0 && this.ringRetryScheduler) {
+        const remaining = attemptsLeft - 1;
+        publishCallDelayed(session.userId, callId, 'agent_offline', remaining);
+        this.ringRetryScheduler.schedule(`ring-retry:${callId}`, Date.now() + RING_RETRY_INTERVAL_MS, () => {
+          void this.attemptRing(callId, remaining);
+        });
+        return;
+      }
+      logger.info({ callId, agentId: session.agentId }, '[ring-gate] dispatch retries exhausted; leaving to pending-TTL sweep');
       return;
     }
 
@@ -725,14 +788,20 @@ export class VoiceBridgeService {
   async cancelCallsByAgent(agentId: string, reason: string): Promise<number> {
     const sessions = await this.sessionRepo.findByAgentId(agentId);
     let aborted = 0;
+    let skippedDispatched = 0;
     for (const session of sessions) {
       if (session.status !== 'pending' && session.status !== 'active' && session.status !== 'paused') continue;
       if (this.getAiWaitStatus(session.id).active) continue;
+      if (session.ringDispatchedAt) {
+        skippedDispatched++;
+        logger.info({ callId: session.id, agentId, ringDispatchedAt: session.ringDispatchedAt }, '[agent-disconnect] skipping dispatched call (MCP disconnect cannot cancel after ring)');
+        continue;
+      }
       await this.abortCall(session.id, reason);
       aborted++;
     }
-    if (aborted > 0) {
-      logger.info({ agentId, reason, aborted }, '[agent-disconnect] aborted open calls');
+    if (aborted > 0 || skippedDispatched > 0) {
+      logger.info({ agentId, reason, aborted, skippedDispatched }, '[agent-disconnect] sweep result');
     }
     return aborted;
   }

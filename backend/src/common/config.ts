@@ -168,4 +168,16 @@ export function validateConfig(): void {
   if ((mode === 'database' || mode === 'database-read' || mode === 'v2') && !config.database.url) {
     throw new Error(`PERSISTENCE_MODE=${mode} requires DATABASE_URL to be set`);
   }
+
+  // FCM: when enabled, fail fast with a clear diagnostic — never silently degrade
+  // to "no pushes" with a misconfigured project. When disabled, missing FCM
+  // vars are harmless.
+  if (config.fcm.enabled) {
+    if (!config.fcm.projectId) {
+      throw new Error('FCM_ENABLED=true requires FCM_PROJECT_ID to be set (Firebase project ID, e.g. agentcall-prod)');
+    }
+    if (!config.fcm.serviceAccountPath) {
+      throw new Error('FCM_ENABLED=true requires FIREBASE_SERVICE_ACCOUNT_PATH to be set (path to service-account JSON)');
+    }
+  }
 }

@@ -131,19 +131,37 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
+        private val healthClient by lazy {
+        okhttp3.OkHttpClient.Builder()
+            .connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
+            .readTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
+            .build()
+    }
+
     private suspend fun checkBackendHealth(): Boolean = withContext(Dispatchers.IO) {
-        try {
-            val url = java.net.URL(ApiClient.getHealthUrl())
-            val conn = url.openConnection() as java.net.HttpURLConnection
-            conn.connectTimeout = 3000
-            conn.readTimeout = 3000
-            conn.requestMethod = "GET"
-            val code = conn.responseCode
-            conn.disconnect()
-            code == 200
-        } catch (_: Exception) {
-            false
+        // Render cold-start: first request can timeout while instance wakes (15-30s).
+        // Retry once after a short delay so a transient timeout is not shown as
+        // permanent Offline. Reuses canonical timeout semantics (15s) without
+        // altering global ApiClient timeouts.
+        for (attempt in 0..1) {
+            try {
+                val request = okhttp3.Request.Builder()
+                    .url(ApiClient.getHealthUrl())
+                    .get()
+                    .build()
+                healthClient.newCall(request).execute().use { resp ->
+                    if (resp.code == 200) return@withContext true
+                }
+                return@withContext false
+            } catch (_: Exception) {
+                if (attempt == 0) {
+                    try { kotlinx.coroutines.delay(2000) } catch (_: Exception) {}
+                    continue
+                }
+                return@withContext false
+            }
         }
+        false
     }
 
     // Now checks actual backend POST success, not just local token existence.
@@ -180,19 +198,30 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch {
             val result = withContext(Dispatchers.IO) {
                 val start = System.currentTimeMillis()
-                try {
-                    val url = java.net.URL(ApiClient.getHealthUrl())
-                    val conn = url.openConnection() as java.net.HttpURLConnection
-                    conn.connectTimeout = 3000
-                    conn.readTimeout = 3000
-                    conn.requestMethod = "GET"
-                    val responseCode = conn.responseCode
-                    val elapsed = System.currentTimeMillis() - start
-                    conn.disconnect()
-                    Pair(elapsed, if (responseCode == 200) ConnectionTestStatus.SUCCESS else ConnectionTestStatus.FAILED)
-                } catch (_: Exception) {
-                    Pair(System.currentTimeMillis() - start, ConnectionTestStatus.FAILED)
+                var responseCode: Int? = null
+                var lastError: Exception? = null
+                for (attempt in 0..1) {
+                    try {
+                        val request = okhttp3.Request.Builder()
+                            .url(ApiClient.getHealthUrl())
+                            .get()
+                            .build()
+                        healthClient.newCall(request).execute().use { resp ->
+                            responseCode = resp.code
+                        }
+                        lastError = null
+                        break
+                    } catch (e: Exception) {
+                        lastError = e
+                        if (attempt == 0) {
+                            try { Thread.sleep(2000) } catch (_: Exception) {}
+                            continue
+                        }
+                    }
                 }
+                val elapsed = System.currentTimeMillis() - start
+                if (lastError != null) Pair(elapsed, ConnectionTestStatus.FAILED)
+                else Pair(elapsed, if (responseCode == 200) ConnectionTestStatus.SUCCESS else ConnectionTestStatus.FAILED)
             }
             _testLatency.value = result.first
             _testStatus.value = result.second
@@ -1087,7 +1116,7 @@ private fun KeySnippet(
 @Composable
 private fun SettingsSection(title: String, content: @Composable () -> Unit) {
     Column(modifier = Modifier.padding(horizontal = 20.dp)) {
-        Spacer(modifier = Modifier.height(24.dp))
+        Spacer(modifier = Modifier.height(12.dp))
         SectionLabel(title = title)
         Spacer(modifier = Modifier.height(10.dp))
         content()

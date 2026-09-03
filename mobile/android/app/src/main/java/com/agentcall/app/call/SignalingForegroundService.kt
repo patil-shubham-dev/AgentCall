@@ -106,34 +106,13 @@ class SignalingForegroundService : Service() {
         // so it runs even when this service is not alive (idle).
     }
 
-    /** Debounced FCM token registration; called on WS CONNECTED. */
+    /** Debounced FCM token reconciliation via canonical WorkManager path. */
     private fun maybeRegisterFcmToken() {
         val now = System.currentTimeMillis()
         if (now - lastFcmRegisterMs < FCM_REGISTER_DEBOUNCE_MS) return
         lastFcmRegisterMs = now
-        scope.launch {
-            val token = runCatching { awaitFcmToken() }.getOrNull()
-            if (token.isNullOrBlank()) return@launch
-            Log.i(TAG, "[FCM] token registration (ws connected)")
-            runCatching { callRepository.registerFcmToken(token) }
-                .onSuccess { FcmRegistrationStore.recordSuccess(token) }
-                .onFailure {
-                    FcmRegistrationStore.recordFailure(it.message ?: "unknown")
-                    Log.w(TAG, "[FCM] ws-connected registration failed", it)
-                }
-        }
-    }
-
-    /** Wraps FirebaseMessaging.getInstance().token (a Task) in a coroutine. */
-    private suspend fun awaitFcmToken(): String? = kotlinx.coroutines.suspendCancellableCoroutine { cont ->
-        com.google.firebase.messaging.FirebaseMessaging.getInstance().token
-            .addOnCompleteListener { task ->
-                if (task.isSuccessful) {
-                    cont.resume(task.result)
-                } else {
-                    cont.resume(null)
-                }
-            }
+        Log.i(TAG, "[FCM] ws-connected — enqueuing reconciliation")
+        FcmRegistrationScheduler.enqueue(this)
     }
 
     private suspend fun handleEvent(event: VoiceBridgeEvent) {

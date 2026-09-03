@@ -85,6 +85,9 @@ dependencies {
     // FCM push-to-wake (Phase A)
     implementation(libs.firebase.messaging)
 
+    // WorkManager for durable FCM registration retry (cold-start resilience)
+    implementation(libs.work.runtime)
+
     // Bundled offline Piper TTS (backlog item 11): sherpa-onnx AAR with the
     // model bundled in assets/piper. File dependency (RepositoriesMode
     // FAIL_ON_PROJECT_REPOS forbids maven() project repos).
