@@ -49,3 +49,13 @@ mobile/ios/AgentCall/DerivedData/
 # Docker
 infra/caddy_data/
 infra/caddy_config/
+
+# Ad-hoc QA artifacts & scratch output (never commit)
+qa-screenshots/
+verification_screenshots/
+tmp/
+mobile/android/*.png
+mobile/android/ui*.xml
+mobile/android/app/libs/*.zip
+*.db
+wav_export_test.wav
