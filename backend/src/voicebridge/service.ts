@@ -164,6 +164,8 @@ export class VoiceBridgeService {
    * resume path in LifecycleCoordinator.
    */
   private async pushCallIncoming(session: VoiceCallSession): Promise<boolean> {
+    const diagPushStartMs = Date.now();
+    logger.info({ callId: session.id, userId: session.userId }, '[diag:pushCallIncoming] start');
     const isCallback = session.resumedAt !== undefined;
     const anchor = session.resumedAt ?? session.createdAt;
     const payload: Record<string, unknown> = {
@@ -183,16 +185,21 @@ export class VoiceBridgeService {
     let fcmOk = false;
     if (config.fcm.enabled) {
       try {
+        logger.info({ callId: session.id, wsDelivered }, '[diag:fcm_send_start] before sendFcmPush');
         const result = await sendFcmPush(session.userId, payload);
         fcmOk = result.ok;
-        logger.info({ callId: session.id, userId: session.userId, wsDelivered, fcmOk, tokenRemoved: result.tokenRemoved }, '[ring] dispatch result');
+        const fcmMessageId = result.fcmMessageId;
+        logger.info({ callId: session.id, userId: session.userId, wsDelivered, fcmOk, fcmMessageId, tokenRemoved: result.tokenRemoved, elapsedMs: Date.now() - diagPushStartMs }, '[ring] dispatch result');
+        logger.info({ callId: session.id, fcmOk, fcmMessageId, elapsedMs: Date.now() - diagPushStartMs }, '[diag:pushCallIncoming] fcm result');
       } catch (err) {
-        logger.warn({ callId: session.id, err: err instanceof Error ? err.message : String(err) }, '[ring] FCM dispatch exception');
+        logger.warn({ callId: session.id, err: err instanceof Error ? err.message : String(err), elapsedMs: Date.now() - diagPushStartMs }, '[ring] FCM dispatch exception');
+        logger.warn({ callId: session.id, elapsedMs: Date.now() - diagPushStartMs }, '[diag:pushCallIncoming] exception');
         fcmOk = false;
       }
     } else {
-      logger.info({ callId: session.id, wsDelivered }, '[ring] dispatch via WS only (FCM disabled)');
+      logger.info({ callId: session.id, wsDelivered, elapsedMs: Date.now() - diagPushStartMs }, '[ring] dispatch via WS only (FCM disabled)');
     }
+    logger.info({ callId: session.id, wsDelivered, fcmOk, elapsedMs: Date.now() - diagPushStartMs }, '[diag:pushCallIncoming] done');
     return wsDelivered || fcmOk;
   }
 
@@ -231,17 +238,33 @@ export class VoiceBridgeService {
    * retry. Re-entrant: also used as the retry callback itself.
    */
   async attemptRing(callId: string, attemptsLeft: number = MAX_RING_RETRIES): Promise<void> {
+    const diagAttemptStartMs = Date.now();
     const session = await this.sessionRepo.findById(callId);
-    if (!session || session.status !== 'pending') return;
+    if (!session || session.status !== 'pending') {
+      logger.info({ callId, attemptsLeft, found: !!session, status: session?.status }, '[diag:attemptRing] no pending session, abort');
+      return;
+    }
+    logger.info({ callId, attemptsLeft, agentId: session.agentId, status: session.status }, '[diag:attemptRing] entered');
 
     const anchorMs = Date.parse(session.resumedAt ?? session.createdAt);
     if (Date.now() >= anchorMs + CALL_RING_TTL_MS) {
-      logger.info({ callId, userId: session.userId }, '[ring-gate] ring window expired; pending-TTL sweep will cancel');
+      logger.info({ callId, userId: session.userId, elapsedMs: Date.now() - diagAttemptStartMs }, '[ring-gate] ring window expired; pending-TTL sweep will cancel');
+      logger.info({ callId, attemptsLeft, elapsedMs: Date.now() - diagAttemptStartMs }, '[diag:attemptRing] window expired');
       return;
     }
 
-    if (this.isAgentReadyForCall(callId, session.agentId)) {
-      logger.info({ callId, agentId: session.agentId }, '[ring-gate] agent ready, pushing call_incoming');
+    // Diagnostic: explicit readiness with reason (mirrors isAgentReadyForCall logic without side effects)
+    const diagReady = this.isAgentReadyForCall(callId, session.agentId);
+    let diagReason: string;
+    if (config.serviceToken === DEV_SERVICE_TOKEN) diagReason = 'dev-mode-always-ready';
+    else if (this.getAiWaitStatus(callId).active) diagReason = 'ai_wait_active';
+    else if (!this.agentPresenceProvider) diagReason = 'no_presence_provider';
+    else if (this.agentPresenceProvider().has(session.agentId)) diagReason = 'presence_has_agent';
+    else diagReason = 'presence_missing_agent_offline';
+    logger.info({ callId, agentId: session.agentId, ready: diagReady, reason: diagReason, attemptsLeft, aiWaitActive: this.getAiWaitStatus(callId).active, hasProvider: !!this.agentPresenceProvider }, '[diag:agent_ready] result');
+
+    if (diagReady) {
+      logger.info({ callId, agentId: session.agentId, elapsedMs: Date.now() - diagAttemptStartMs }, '[ring-gate] agent ready, pushing call_incoming');
       const dispatched = await this.pushCallIncoming(session);
       if (dispatched) {
         // Atomic transition: hold session lock while marking dispatched so a
@@ -257,16 +280,18 @@ export class VoiceBridgeService {
         return;
       }
       // Dispatch failed (no WS and FCM not ok) - treat as transient and retry if budget remains
-      logger.warn({ callId, agentId: session.agentId }, '[ring-gate] dispatch failed (no delivery) - scheduling retry');
+      logger.warn({ callId, agentId: session.agentId, elapsedMs: Date.now() - diagAttemptStartMs }, '[ring-gate] dispatch failed (no delivery) - scheduling retry');
       if (attemptsLeft > 0 && this.ringRetryScheduler) {
         const remaining = attemptsLeft - 1;
+        logger.info({ callId, agentId: session.agentId, attemptsLeft, remaining, elapsedMs: Date.now() - diagAttemptStartMs }, '[diag:attemptRing] dispatch failed, scheduling retry');
         publishCallDelayed(session.userId, callId, 'agent_offline', remaining);
         this.ringRetryScheduler.schedule(`ring-retry:${callId}`, Date.now() + RING_RETRY_INTERVAL_MS, () => {
           void this.attemptRing(callId, remaining);
         });
         return;
       }
-      logger.info({ callId, agentId: session.agentId }, '[ring-gate] dispatch retries exhausted; leaving to pending-TTL sweep');
+      logger.info({ callId, agentId: session.agentId, elapsedMs: Date.now() - diagAttemptStartMs }, '[ring-gate] dispatch retries exhausted; leaving to pending-TTL sweep');
+      logger.info({ callId, attemptsLeft, elapsedMs: Date.now() - diagAttemptStartMs }, '[diag:attemptRing] dispatch exhausted');
       return;
     }
 
@@ -276,9 +301,10 @@ export class VoiceBridgeService {
         ? 'agent_busy'
         : 'agent_offline';
       logger.info(
-        { callId, agentId: session.agentId, reason: delayReason, remaining },
+        { callId, agentId: session.agentId, reason: delayReason, remaining, elapsedMs: Date.now() - diagAttemptStartMs },
         '[ring-gate] agent not ready; scheduling retry',
       );
+      logger.info({ callId, agentId: session.agentId, reason: delayReason, attemptsLeft, remaining, elapsedMs: Date.now() - diagAttemptStartMs }, '[diag:agent_retry] scheduling');
       publishCallDelayed(session.userId, callId, delayReason, remaining);
       this.ringRetryScheduler.schedule(`ring-retry:${callId}`, Date.now() + RING_RETRY_INTERVAL_MS, () => {
         void this.attemptRing(callId, remaining);
@@ -286,7 +312,8 @@ export class VoiceBridgeService {
       return;
     }
 
-    logger.info({ callId, agentId: session.agentId }, '[ring-gate] retries exhausted; leaving to pending-TTL sweep');
+    logger.info({ callId, agentId: session.agentId, elapsedMs: Date.now() - diagAttemptStartMs }, '[ring-gate] retries exhausted; leaving to pending-TTL sweep');
+    logger.info({ callId, agentId: session.agentId, attemptsLeft, elapsedMs: Date.now() - diagAttemptStartMs }, '[diag:attemptRing] exhausted');
   }
 
   /**
@@ -463,6 +490,7 @@ export class VoiceBridgeService {
     };
 
     logger.info({ callId: session.id, elapsed: Date.now() - start }, '[createCall] session object built');
+    logger.info({ callId: session.id, userId: session.userId, agentId: session.agentId, timestamp: new Date().toISOString() }, '[diag:create_call] created');
 
     await this.sessionRepo.create(session);
     logger.info({ callId: session.id, elapsed: Date.now() - start }, '[createCall] session stored');
@@ -470,12 +498,14 @@ export class VoiceBridgeService {
     publishCallCreated(session.userId, session.id);
 
     logger.info({ callId: session.id, userId: session.userId, elapsed: Date.now() - start }, '[createCall] before ring gate');
+    logger.info({ callId: session.id, attemptsLeft: MAX_RING_RETRIES, timestamp: new Date().toISOString() }, '[diag:attemptRing] scheduling initial');
     // Phase-2 gate: push the ring now if the agent is online/ready, otherwise
     // defer (bounded retries, then the pending-TTL sweep cancels the call).
     // Every call is agent-originated — the phone's outbound path was removed —
     // so the gate always applies.
     await this.attemptRing(session.id, MAX_RING_RETRIES);
     logger.info({ callId: session.id, elapsed: Date.now() - start }, '[createCall] after ring gate');
+    logger.info({ callId: session.id, elapsed: Date.now() - start }, '[diag:create_call] after ring gate');
 
     logger.info({ callId: session.id, elapsed: Date.now() - start }, 'Call session created');
     return session;

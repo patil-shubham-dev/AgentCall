@@ -40,6 +40,8 @@ export interface FcmSendResult {
   /** true when the token was deleted because FCM rejected it as dead. */
   tokenRemoved: boolean;
   error?: string;
+  /** Google FCM message name on success: projects/<id>/messages/<msgId> — for send↔receipt correlation. */
+  fcmMessageId?: string;
 }
 
 let auth: GoogleAuth | undefined;
@@ -82,9 +84,13 @@ export async function sendFcmPush(userId: string, payload: Record<string, unknow
     return { ok: false, tokenRemoved: false, error: 'not-configured' };
   }
   try {
+    const diagCallId = (payload.callId as string) || (payload.call_id as string) || 'unknown';
+    const diagFcmStartMs = Date.now();
+    logger.info({ userId, callId: diagCallId, msgType: payload.type }, '[diag:fcm_send_start] sending FCM');
     const accessToken = await authInstance.getAccessToken();
     if (!accessToken) {
-      logger.error('[fcm] failed to mint access token');
+      logger.error({ userId, callId: diagCallId }, '[fcm] failed to mint access token');
+      logger.warn({ userId, callId: diagCallId, elapsedMs: Date.now() - diagFcmStartMs }, '[diag:fcm_response] token-mint-failed');
       return { ok: false, tokenRemoved: false, error: 'token-mint-failed' };
     }
     const body = {
@@ -106,7 +112,8 @@ export async function sendFcmPush(userId: string, payload: Record<string, unknow
       // Token no longer valid (UNREGISTERED is a 404 in HTTP v1). Drop it so
       // the next ring doesn't waste a send on a dead token.
       await removeFcmToken(token);
-      logger.warn({ userId, status: response.status }, '[fcm] token rejected as dead, removed');
+      logger.warn({ userId, callId: diagCallId, status: response.status, elapsedMs: Date.now() - diagFcmStartMs }, '[fcm] token rejected as dead, removed');
+      logger.warn({ userId, callId: diagCallId, status: response.status, elapsedMs: Date.now() - diagFcmStartMs }, '[diag:fcm_response] dead token removed');
       return { ok: false, tokenRemoved: true, error: `fcm-${response.status}` };
     }
     if (response.status === 400) {
@@ -120,20 +127,32 @@ export async function sendFcmPush(userId: string, payload: Record<string, unknow
       const text = await response.text().catch(() => '');
       if (/registration token/i.test(text) && /not a valid/i.test(text)) {
         await removeFcmToken(token);
-        logger.warn({ userId, status: 400 }, '[fcm] token rejected as dead (400 INVALID_ARGUMENT), removed');
+        logger.warn({ userId, callId: diagCallId, status: 400, elapsedMs: Date.now() - diagFcmStartMs }, '[fcm] token rejected as dead (400 INVALID_ARGUMENT), removed');
+        logger.warn({ userId, callId: diagCallId, status: 400, elapsedMs: Date.now() - diagFcmStartMs }, '[diag:fcm_response] dead token 400 removed');
         return { ok: false, tokenRemoved: true, error: 'fcm-400-invalid-token' };
       }
-      logger.warn({ userId, status: 400, text: text.slice(0, 200) }, '[fcm] send failed (payload error, kept token)');
+      logger.warn({ userId, callId: diagCallId, status: 400, text: text.slice(0, 200), elapsedMs: Date.now() - diagFcmStartMs }, '[fcm] send failed (payload error, kept token)');
+      logger.warn({ userId, callId: diagCallId, status: 400, elapsedMs: Date.now() - diagFcmStartMs }, '[diag:fcm_response] 400 payload error');
       return { ok: false, tokenRemoved: false, error: 'fcm-400' };
     }
     if (!response.ok) {
       // 5xx / 429 etc — server-side or transient. Keep the token; next ring retries.
       const text = await response.text().catch(() => '');
-      logger.warn({ userId, status: response.status, text: text.slice(0, 200) }, '[fcm] send failed (transient)');
+      logger.warn({ userId, callId: diagCallId, status: response.status, text: text.slice(0, 200), elapsedMs: Date.now() - diagFcmStartMs }, '[fcm] send failed (transient)');
+      logger.warn({ userId, callId: diagCallId, status: response.status, elapsedMs: Date.now() - diagFcmStartMs }, '[diag:fcm_response] transient failure');
       return { ok: false, tokenRemoved: false, error: `fcm-${response.status}` };
     }
-    logger.info({ userId, msgType: payload.type }, '[fcm] ring push delivered');
-    return { ok: true, tokenRemoved: false };
+    // Google FCM v1 returns {name: "projects/<id>/messages/<msgId>"} on success — this is the correlation ID.
+    let fcmMessageId: string | undefined;
+    try {
+      const json = (await response.clone().json()) as { name?: string };
+      fcmMessageId = json?.name;
+    } catch {
+      // ignore parse failure; still a success
+    }
+    logger.info({ userId, callId: diagCallId, msgType: payload.type, fcmMessageId, elapsedMs: Date.now() - diagFcmStartMs }, '[fcm] ring push delivered');
+    logger.info({ userId, callId: diagCallId, fcmMessageId, elapsedMs: Date.now() - diagFcmStartMs }, '[diag:fcm_response] ok');
+    return { ok: true, tokenRemoved: false, fcmMessageId };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     logger.warn({ userId, err: message }, '[fcm] transport error (kept token, retry next ring)');
