@@ -158,8 +158,7 @@ class CallViewModel @Inject constructor(
                 )
                 // 3a — the opening summary must exist as a persistent transcript bubble, not only as the transient banner.
                 if (!terminal && summary.isNotBlank()) {
-                    val alreadyHasAi = _uiState.value.messages.any { it.role == "ai" && it.text == summary }
-                    if (!alreadyHasAi) addAiMessage(summary)
+                    addAiMessage(summary, "summary-${summary.hashCode()}")
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "[connect] setup failed callId=$callId", e)
@@ -170,8 +169,7 @@ class CallViewModel @Inject constructor(
                     callContext = CallContextInfo(summary = fallback),
                 )
                 if (fallback.isNotBlank()) {
-                    val alreadyHasAi = _uiState.value.messages.any { it.role == "ai" && it.text == fallback }
-                    if (!alreadyHasAi) addAiMessage(fallback)
+                    addAiMessage(fallback, "summary-${fallback.hashCode()}")
                 }
             }
         }
@@ -182,7 +180,7 @@ class CallViewModel @Inject constructor(
                 when (event) {
                     is CallEvent.AiMessage -> {
                         applyMachineEvent(CallMachineEvent.FIRST_AI_MESSAGE)
-                        addAiMessage(event.text)
+                        addAiMessage(event.text, event.messageId)
                     }
                     is CallEvent.UserMessage -> addUserTranscript(event.messageId, event.text)
                     is CallEvent.UserTextSent -> markUserTextSent(event.messageId)
@@ -215,6 +213,10 @@ class CallViewModel @Inject constructor(
                     is CallEvent.AiSpeakingFinished -> setAiSpeaking(false)
                     is CallEvent.AiWaitStatusChanged ->
                         setAiResponding(event.active, event.activeUntilMs, event.agentOnline)
+                    is CallEvent.BargeInDetected -> {
+                        // Surface barge-in in transcript for debugging; statusText is transient.
+                        _uiState.value = _uiState.value.copy(statusText = "Interrupted — listening...")
+                    }
                 }
             }
         }
@@ -285,9 +287,20 @@ class CallViewModel @Inject constructor(
         }
     }
 
-    fun addAiMessage(text: String) {
+    fun addAiMessage(text: String, stableId: String? = null) {
+        val id = stableId ?: "ai_${messageCounter++}"
+        // Idempotent insertion — same id never inserted twice (protects against
+        // WS push + transcript poll + summary seeding racing for the same text).
+        if (_uiState.value.messages.any { it.id == id }) return
+        // Also guard against identical content already present under a different
+        // deterministic summary id (e.g. summary hash vs server messageId with same text).
+        // For server-originated messages with a real id, id check is sufficient,
+        // but summaries seeded locally use content hash.
+        if (stableId != null && stableId.startsWith("summary-")) {
+            if (_uiState.value.messages.any { it.role == "ai" && it.text == text }) return
+        }
         val msg = ChatBubble(
-            id = "ai_${messageCounter++}",
+            id = id,
             role = "ai",
             text = text,
             timestamp = System.currentTimeMillis(),
@@ -300,6 +313,7 @@ class CallViewModel @Inject constructor(
     }
 
     fun addUserTranscript(messageId: String, text: String) {
+        if (_uiState.value.messages.any { it.id == messageId }) return
         val msg = ChatBubble(
             id = messageId,
             role = "user",
@@ -314,6 +328,8 @@ class CallViewModel @Inject constructor(
 
     fun sendTextMessage(text: String, messageId: String = UUID.randomUUID().toString()) {
         if (text.isBlank() || isSending) return
+        // Idempotent: typed message that already exists (retry / double tap)
+        if (_uiState.value.messages.any { it.id == messageId }) return
         isSending = true
         val cid = _uiState.value.callId
         if (cid.isBlank()) { isSending = false; return }
@@ -476,19 +492,25 @@ class CallViewModel @Inject constructor(
             msgs.forEach { m ->
                 if (m.role != "ai" || m.content.isBlank()) return@forEach
                 val key = "ai|${m.content}|${m.createdAt}"
-                if (seenTranscriptKeys.add(key)) {
-                    addAiMessage(m.content)
-                    // The WS-down fallback path never pushes ai_message, so the
-                    // voice session would stay silent and "Repeat last" would
-                    // have nothing recorded. Forward the polled message to
-                    // CallService so it is spoken and remembered (idempotent:
-                    // CallService only speaks, dedupe lives in this set).
-                    appContext.startService(Intent(appContext, CallService::class.java).apply {
-                        action = CallService.ACTION_SPEAK
-                        putExtra(CallService.EXTRA_CALL_ID, current.callId)
-                        putExtra(CallService.EXTRA_TEXT, m.content)
-                    })
-                }
+                if (!seenTranscriptKeys.add(key)) return@forEach
+                // Dedupe against already-visible messages (summary seeding or
+                // prior poll). Use the transcript key as stable id so the same
+                // server message never inserts twice even after process recreation.
+                val stableId = "transcript-${m.createdAt}-${m.content.hashCode()}"
+                if (_uiState.value.messages.any { it.id == stableId }) return@forEach
+                // Also guard identical text already shown as summary
+                if (_uiState.value.messages.any { it.role == "ai" && it.text == m.content }) return@forEach
+                addAiMessage(m.content, stableId)
+                // The WS-down fallback path never pushes ai_message, so the
+                // voice session would stay silent and "Repeat last" would
+                // have nothing recorded. Forward the polled message to
+                // CallService so it is spoken and remembered (idempotent:
+                // CallService only speaks, dedupe lives in this set).
+                appContext.startService(Intent(appContext, CallService::class.java).apply {
+                    action = CallService.ACTION_SPEAK
+                    putExtra(CallService.EXTRA_CALL_ID, current.callId)
+                    putExtra(CallService.EXTRA_TEXT, m.content)
+                })
             }
         }
     }

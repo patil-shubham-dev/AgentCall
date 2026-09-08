@@ -273,6 +273,7 @@ class CallRepository @Inject constructor(
 
     suspend fun checkActiveCall(userId: String): ActiveCall? {
         return try {
+            ApiClient.ensurePhoneToken()
             val response = withContext(Dispatchers.IO) { api.getActiveCall(userId) }
             response.activeCall
         } catch (_: Exception) {
@@ -282,6 +283,7 @@ class CallRepository @Inject constructor(
 
     suspend fun getCallStatus(callId: String): String? {
         return try {
+            ApiClient.ensurePhoneToken()
             withContext(Dispatchers.IO) { api.getCall(callId) }.status
         } catch (_: Exception) {
             null
@@ -290,6 +292,7 @@ class CallRepository @Inject constructor(
 
     suspend fun getCallDetails(callId: String): CallResponse? {
         return try {
+            ApiClient.ensurePhoneToken()
             withContext(Dispatchers.IO) { api.getCall(callId) }
         } catch (_: Exception) {
             null

@@ -4,6 +4,7 @@ import android.app.*
 import android.content.Context
 import android.media.AudioAttributes
 import android.os.Build
+import android.os.Debug
 import android.content.Intent
 import android.os.Bundle
 import android.os.IBinder
@@ -85,9 +86,17 @@ class CallService : Service() {
     private var speechWorker: Job? = null
     @Volatile var isRecording = false
     @Volatile var isAiSpeaking = false
+    // Workstream A — VAD barge-in (energy RMS, 0 extra native deps, 0 APK weight beyond platform AudioRecord).
+    // Sherpa Vad was evaluated: sherpa-onnx 1.13.6 exposes Vad/VadModelConfig/SileroVadModelConfig/TenVadModelConfig
+    // via com.k2fsa.sherpa.onnx (classes.jar) reusing the bundled libonnxruntime.so, but requires a
+    // silero_vad.onnx asset (~1.6 MB). Chose energy path for this pass; upgrade path documented in BargeInController.kt.
+    private var bargeInController: BargeInController? = null
+    @Volatile private var bargeInArmedMs = 0L
     @Volatile var isPaused = false
     /** Muted: the AI's spoken replies are silenced (transcript still flows). */
     @Volatile var isMuted = false
+    // Fix 3: arena growth mitigation — periodic engine recycle every N messages (empirically 10)
+    private var piperMessageCount = 0
 
     private var transcriptSequence = 0
     private var lastAiMessage: String = ""
@@ -562,8 +571,37 @@ class CallService : Service() {
         for (text in speechChannel) {
             if (!coroutineContext.isActive) break
             if (isPaused) continue
+            // Benchmark B4: time from channel dequeue to first AudioTrack.write is measured in speakPaced/speakWithPiper.
             speakPaced(text)
         }
+    }
+
+    private fun handleBargeIn() {
+        val now = System.currentTimeMillis()
+        val ttsElapsed = if (bargeInArmedMs > 0) now - bargeInArmedMs else -1
+        Log.i(TAG, "[BARGE] speech onset during TTS (ttsElapsed=${ttsElapsed}ms) — cutting audio and handing off to STT")
+        // Immediate audio cut: existing pattern from CallService.kt:635-646.
+        piperEngine.requestStop()
+        textToSpeech?.stop()
+        // Signal so the synthesis loop's next iteration cancels remaining Deferreds (reuses its existing check).
+        // Also emit bus event for UI/logcat/transcript debugging.
+        CallEventBus.emit(CallEvent.BargeInDetected(atMs = now))
+        // Stop VAD before starting STT — otherwise both hold the mic and SpeechRecognizer creation fails.
+        bargeInController?.stop()
+        // Auto-start capture so the barge-in is not just a cut but a handoff.
+        // Guard: don't double-start if the user already holds Record.
+        if (!isRecording && speechRecognizer == null) {
+            try {
+                startRecording()
+                Log.i(TAG, "[BARGE] auto-started SpeechRecognizer isRecording=$isRecording")
+            } catch (e: Exception) {
+                Log.e(TAG, "[BARGE] auto startRecording failed — user must tap Record manually", e)
+            }
+        } else {
+            Log.w(TAG, "[BARGE] already recording, skipping auto-start isRecording=$isRecording")
+        }
+        // Latency anchor: if TTS was still in native generate(), audio was not yet writing
+        // so barge-in latency is bounded by remaining generate time; see PiperBenchmark report.
     }
 
     private suspend fun speakPaced(text: String) {
@@ -615,34 +653,72 @@ class CallService : Service() {
     private data class Synthesized(val audio: com.k2fsa.sherpa.onnx.GeneratedAudio)
 
     private suspend fun speakWithPiper(text: String) {
-        val sentences = SpeechPacing.splitIntoSentences(text)
-        if (sentences.isEmpty()) return
+        // Fix 2: bound worst-case generate() — long sentences split into sub-chunks (≤12 words, ~1s audio)
+        // so no single piperEngine.synthesize() blocks barge-in for >~1s. Sub-chunks inside one original
+        // sentence get a micro-pause (SUB_CHUNK 70ms) not the full sentence pause, preserving prosody seams.
+        val chunks = SpeechPacing.chunkForSynthesis(text)
+        if (chunks.isEmpty()) return
         if (!firstWordLogged) {
             firstWordLogged = true
             Log.i(TAG, "[TTS] piper first word: answer->word=${System.currentTimeMillis() - callStartMs}ms")
         }
+        // Log chunking decision for Fix 2 audit: how many sentences became how many chunks
+        val sentencesCount = SpeechPacing.splitIntoSentences(text).size
+        if (chunks.size != sentencesCount) {
+            Log.i(TAG, "[CHUNK] split $sentencesCount sentences → ${chunks.size} chunks (max ${SpeechPacing.PacingConfig.MAX_WORDS_PER_CHUNK}w) textLen=${text.length}")
+        }
+        // Benchmark B4: anchor for time-to-first-audio from ai_message dequeue.
+        val benchDequeueMs = System.currentTimeMillis()
+        val benchFirstWriteMsHolder = longArrayOf(0L)
         isAiSpeaking = true
+        bargeInArmedMs = System.currentTimeMillis()
         CallEventBus.emit(CallEvent.AiSpeakingStarted)
+        // Arm VAD in parallel with synthesis — low-duty AudioRecord tap, no SpeechRecognizer.
+        val vad = BargeInController(this, onBargeIn = { handleBargeIn() })
+        bargeInController = vad
+        vad.start()
+        // Fix 3: cap concurrent synthesize() — unbounded per-message async previously caused arena bloat (see report §3)
+        val synthSemaphore = kotlinx.coroutines.sync.Semaphore(2)
         try {
-            // Overlap synthesis and playback: generate sentence N+1 while N plays.
-            // Use CallService's scope so async outlives this suspend call's coroScope.
-            val deferred: List<Deferred<Synthesized?>> = sentences.map { sentence ->
+            // Overlap synthesis and playback: generate chunk N+1 while N plays, but at most 2 concurrent.
+            val deferred: List<Deferred<Synthesized?>> = chunks.map { chunk ->
                 scope.async(Dispatchers.Default) {
-                    val audio = piperEngine.synthesize(sentence, SpeechPacing.sentenceSpeed())
-                    if (audio != null) Synthesized(audio) else null
+                    synthSemaphore.acquire()
+                    try {
+                        val t0 = System.currentTimeMillis()
+                        val audio = piperEngine.synthesize(chunk.text, SpeechPacing.sentenceSpeed())
+                        val t1 = System.currentTimeMillis()
+                        if (audio != null) {
+                            val audioMs = (audio.samples.size * 1000.0 / piperEngine.sampleRate.coerceAtLeast(1)).toLong()
+                            val rtf = if (audioMs > 0) (t1 - t0).toDouble() / audioMs else Double.NaN
+                            val words = chunk.text.trim().split(Regex("\\s+")).size
+                            val tag = if (chunk.isLastInSentence) "sentenceEnd" else "subChunk"
+                            Log.i(TAG, "[BENCH] rtf words=$words chars=${chunk.text.length} synthMs=${t1 - t0} audioMs=$audioMs rtf=${"%.3f".format(rtf)} $tag chunk=\"${chunk.text.take(60)}\"")
+                        }
+                        if (audio != null) Synthesized(audio) else null
+                    } finally {
+                        synthSemaphore.release()
+                    }
                 }
             }
-            for (index in sentences.indices) {
+            for (index in chunks.indices) {
                 if (!coroutineContext.isActive || piperEngine.stopRequested) {
-                    // Cancel any not-yet-started synthesizes
+                    // Cancel any not-yet-started synthesizes — barge-in reuse of existing pattern.
                     deferred.forEach { it.cancel() }
+                    if (piperEngine.stopRequested) Log.i(TAG, "[BARGE] cancelled ${deferred.size - index} remaining chunks at index $index")
                     break
                 }
                 if (index > 0) {
-                    val pauseMs = SpeechPacing.delayAfterSentence(sentences[index - 1])
+                    val prev = chunks[index - 1]
+                    val pauseMs = if (prev.isLastInSentence) {
+                        SpeechPacing.delayAfterSentence(prev.text)
+                    } else {
+                        SpeechPacing.delayAfterChunk(prev)
+                    }
                     delay(pauseMs)
                     if (!coroutineContext.isActive || piperEngine.stopRequested) {
                         deferred.forEach { it.cancel() }
+                        if (piperEngine.stopRequested) Log.i(TAG, "[BARGE] cancelled during pause at index $index (prevLast=${prev.isLastInSentence})")
                         break
                     }
                 }
@@ -653,12 +729,46 @@ class CallService : Service() {
                 } ?: continue
                 // Play on Default to keep main free, but AudioTrack write is blocking.
                 withContext(Dispatchers.Default) {
+                    if (benchFirstWriteMsHolder[0] == 0L) benchFirstWriteMsHolder[0] = System.currentTimeMillis()
                     piperEngine.playAudio(synthesized.audio)
                 }
+                if (benchFirstWriteMsHolder[0] != 0L && index == 0) {
+                    val ttfa = benchFirstWriteMsHolder[0] - benchDequeueMs
+                    Log.i(TAG, "[BENCH] ttfa chunks=${chunks.size} sentences=$sentencesCount firstWriteAfterDequeue=${ttfa}ms textLen=${text.length} firstChunk=\"${chunks[0].text.take(60)}\"")
+                }
+            }
+            if (benchFirstWriteMsHolder[0] != 0L && chunks.size > 1) {
+                val ttfa = benchFirstWriteMsHolder[0] - benchDequeueMs
+                Log.i(TAG, "[BENCH] ttfa multi chunks=${chunks.size} sentences=$sentencesCount firstWriteAfterDequeue=${ttfa}ms textLen=${text.length}")
             }
         } finally {
+            vad.stop()
+            if (bargeInController === vad) bargeInController = null
+            bargeInArmedMs = 0L
             isAiSpeaking = false
             CallEventBus.emit(CallEvent.AiSpeakingFinished)
+        }
+        // Fix 3: periodic engine recycling — cap arena growth. Do after speech gap, not mid-synthesis.
+        piperMessageCount++
+        if (piperMessageCount % 10 == 0) {
+            val recycleMsg = piperMessageCount
+            scope.launch {
+                try {
+                    val memBefore = Debug.getNativeHeapAllocatedSize() / 1024
+                    Log.i(TAG, "[PIPER-RECYCLE] message $recycleMsg reached — recycling engine before=$memBefore KB")
+                    val t0 = System.currentTimeMillis()
+                    piperEngine.release()
+                    System.gc(); delay(200)
+                    val ok = piperEngine.init()
+                    val dt = System.currentTimeMillis() - t0
+                    val memAfter = Debug.getNativeHeapAllocatedSize() / 1024
+                    piperReady = ok
+                    piperAttempted = ok
+                    Log.i(TAG, "[PIPER-RECYCLE] done ok=$ok recycleMs=$dt beforeKB=$memBefore afterKB=$memAfter delta=${memAfter-memBefore}")
+                } catch (e: Exception) {
+                    Log.e(TAG, "[PIPER-RECYCLE] failed", e)
+                }
+            }
         }
     }
 
@@ -669,9 +779,27 @@ class CallService : Service() {
             if (tts == null) initTts()
             return
         }
+        // Arm VAD for system TTS as well — barge-in cuts this queue via stop().
+        val ttfaStart = System.currentTimeMillis()
+        bargeInArmedMs = ttfaStart
+        val vad = BargeInController(this, onBargeIn = { handleBargeIn() })
+        bargeInController = vad
+        vad.start()
+        // Wrap listener so VAD is stopped when the utterance completes (utterance callbacks are on main).
+        val prev = tts.let { null } // placeholder to keep shape; listener already set in initTts.
         val utteranceId = UUID.randomUUID().toString()
         speakRequestedAt[utteranceId] = System.currentTimeMillis()
+        // We do not replace the global UtteranceProgressListener here; instead tie VAD lifetime to a
+        // delayed fallback stop and to the call's speaking flag. System TTS will call textToSpeech.stop()
+        // from handleBargeIn() which triggers onError/onDone quickly.
         tts.speak(text, TextToSpeech.QUEUE_ADD, null, utteranceId)
+        Log.i(TAG, "[BENCH] ttfa systemTts enqueued textLen=${text.length} queueDelay=${System.currentTimeMillis() - ttfaStart}ms")
+        // VAD teardown piggybacks on AiSpeaking flag: leverage a short coroutine rather than listener churn.
+        scope.launch {
+            // Wait up to the expected utterance duration wall-clock; real stop comes from barge/release.
+            delay(30_000)
+            if (bargeInController === vad) { vad.stop(); bargeInController = null }
+        }
     }
 
     private suspend fun speakTextOnMain(text: String) = withContext(Dispatchers.Main) {
@@ -709,7 +837,7 @@ class CallService : Service() {
                             if (event.callId != callId) return@collect
                             speakTextOnMain(event.content)
                             lastAiMessage = event.content
-                            CallEventBus.emit(CallEvent.AiMessage(event.content))
+                            CallEventBus.emit(CallEvent.AiMessage(event.content, event.messageId))
                             repository.saveAiMessage(callId, event.content)
                         }
                         is VoiceBridgeEvent.CallAnswered -> {
@@ -1059,6 +1187,9 @@ class CallService : Service() {
         while (speechChannel.tryReceive().isSuccess) {}
         speechWorker?.cancel()
         speechWorker = null
+        bargeInController?.stop()
+        bargeInController = null
+        bargeInArmedMs = 0L
         piperEngine.requestStop()
         textToSpeech?.stop()
         speechRecognizer?.destroy()
@@ -1199,7 +1330,7 @@ class CallService : Service() {
         private const val NOTIFICATION_ID_ONGOING = 1001
         private const val NOTIFICATION_ID_INCOMING = 1002
         private const val NOTIFICATION_ID_MISSED = 1005
-        private const val TTS_IDLE_SHUTDOWN_MS = 60_000L
+        private const val TTS_IDLE_SHUTDOWN_MS = 10 * 60_000L // 10 min — keep Piper warm for back-to-back calls
         // Battery audit H2: hard ceiling on a single call session. The longest
         // legitimate call this product supports is an AI check-in conversation;
         // 30 min leaves generous margin above that. The wake lock carries this

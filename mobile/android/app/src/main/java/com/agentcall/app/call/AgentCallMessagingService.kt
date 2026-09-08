@@ -6,11 +6,12 @@ import com.agentcall.app.data.repository.CallRepository
 import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
 import dagger.hilt.android.AndroidEntryPoint
+import androidx.core.content.ContextCompat
 import javax.inject.Inject
 
 /**
  * Phase A (FCM push-to-wake): a SECOND ring-delivery path alongside the
- * WS/poll system — additive only, nothing about existing delivery is removed
+ * WS/poll system ï¿½ additive only, nothing about existing delivery is removed
  * or reordered.
  *
  * The backend pushes call_incoming as a high-priority DATA message. This
@@ -18,7 +19,7 @@ import javax.inject.Inject
  *  - onNewToken: enqueues canonical WorkManager reconciliation (FcmRegistrationWorker)
  *    so token rotation survives cold-start and process death.
  *  - onMessageReceived: for ring messages, hands the payload to the existing
- *    ring machinery — SignalingForegroundService — which already dedupes
+ *    ring machinery ï¿½ SignalingForegroundService ï¿½ which already dedupes
  *    against WS/poll rings (recentlyRung guard) and validates the call is
  *    still pending before ringing.
  */
@@ -31,7 +32,7 @@ class AgentCallMessagingService : FirebaseMessagingService() {
         super.onNewToken(token)
         FcmRegistrationStore.init(this)
         // Never log full token
-        Log.i(TAG, "[FCM] new token ${token.take(12)}... — enqueuing reconciliation")
+        Log.i(TAG, "[FCM] new token ${token.take(12)}... ï¿½ enqueuing reconciliation")
         FcmRegistrationScheduler.enqueue(this)
     }
 
@@ -44,10 +45,12 @@ class AgentCallMessagingService : FirebaseMessagingService() {
             return
         }
         val callId = data["callId"]?.takeIf { it.isNotBlank() } ?: run {
-            Log.w(TAG, "[FCM] ring push missing callId — dropping")
+            Log.w(TAG, "[FCM] ring push missing callId ï¿½ dropping")
             return
         }
         Log.i(TAG, "[FCM] ring push received callId=$callId")
+        // Diagnostic: correlate backend send â†’ Android receipt with wall-clock and same call_id
+        Log.i(TAG, "[DIAG] fcm_received callId=$callId expiresAt=${data["expiresAt"]} createdAt=${data["createdAt"]} receivedAtMs=${System.currentTimeMillis()}")
         try {
             startService(Intent(this, CallService::class.java).apply {
                 action = CallService.ACTION_PREWARM_TTS
@@ -55,7 +58,10 @@ class AgentCallMessagingService : FirebaseMessagingService() {
         } catch (e: Exception) {
             Log.w(TAG, "[FCM] prewarm start failed", e)
         }
-        startService(
+        val fgsStartMs = System.currentTimeMillis()
+        Log.i(TAG, "[DIAG] fgs_start_attempt callId=$callId atMs=$fgsStartMs")
+        ContextCompat.startForegroundService(
+            this,
             Intent(this, SignalingForegroundService::class.java).apply {
                 action = SignalingForegroundService.ACTION_RING_FROM_PUSH
                 putExtra(SignalingForegroundService.EXTRA_RING_CALL_ID, callId)
@@ -65,6 +71,7 @@ class AgentCallMessagingService : FirebaseMessagingService() {
                 putExtra(SignalingForegroundService.EXTRA_RING_EXPIRES_AT, data["expiresAt"])
             }
         )
+        Log.i(TAG, "[DIAG] fgs_start_dispatched callId=$callId elapsedMs=${System.currentTimeMillis() - fgsStartMs}")
     }
 
     companion object {

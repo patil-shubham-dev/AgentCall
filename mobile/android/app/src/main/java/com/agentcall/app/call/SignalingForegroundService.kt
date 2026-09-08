@@ -111,7 +111,7 @@ class SignalingForegroundService : Service() {
         val now = System.currentTimeMillis()
         if (now - lastFcmRegisterMs < FCM_REGISTER_DEBOUNCE_MS) return
         lastFcmRegisterMs = now
-        Log.i(TAG, "[FCM] ws-connected � enqueuing reconciliation")
+        Log.i(TAG, "[FCM] ws-connected � enqueuing reconciliation")
         FcmRegistrationScheduler.enqueue(this)
     }
 
@@ -206,15 +206,20 @@ class SignalingForegroundService : Service() {
         // The shared flow replays its last event on collector start, and queued
         // pushes can arrive for calls that were already resolved while we were
         // offline. Verify the call is still live before ringing.
+        Log.i(TAG, "[DIAG] ring_validation_start callId=${event.callId} expiresAtMs=${event.expiresAtMs} nowMs=${System.currentTimeMillis()}")
         if (event.expiresAtMs != null && event.expiresAtMs <= System.currentTimeMillis()) {
             Log.w(TAG, "[RING] skipping expired call_incoming callId=${event.callId}")
+            Log.i(TAG, "[DIAG] ring_validation_expired callId=${event.callId}")
             return
         }
+        val diagGetStartMs = System.currentTimeMillis()
+        Log.i(TAG, "[DIAG] get_calls_start callId=${event.callId} atMs=$diagGetStartMs")
         val session = try {
             callRepository.getCallStatus(event.callId)
         } catch (_: Exception) {
             null
         }
+        Log.i(TAG, "[DIAG] get_calls_response callId=${event.callId} status=$session elapsedMs=${System.currentTimeMillis() - diagGetStartMs}")
         if (session != null && (session == "pending" || session == "active")) {
             val agentId = event.callerName.lowercase().replace("\\s+".toRegex(), "-")
             // Canonical profile id: survives server-side renames (the slug may
@@ -238,6 +243,7 @@ class SignalingForegroundService : Service() {
         rememberRung(callId)
         noteActivity()
         Log.i(TAG, "[RING] ringing callId=$callId caller=$callerName")
+        Log.i(TAG, "[DIAG] ring_start callId=$callId atMs=${System.currentTimeMillis()}")
         logRingDiagnostics()
         ringCallers[callId] = Triple(callerName, summary, clientInfoName)
         ringingCallId = callId
@@ -256,7 +262,9 @@ class SignalingForegroundService : Service() {
         // an important call. The AI learns about the window through the
         // auto-decline note below — never by assuming, never without a call.
         val quiet = quietHoursManager.isQuietNow(callerName)
+        val diagNotifStartMs = System.currentTimeMillis()
         CallService.showIncomingCallNotification(this, callId, callerName, summary, quiet = quiet, clientInfoName = clientInfoName)
+        Log.i(TAG, "[DIAG] notification_posted callId=$callId quiet=$quiet elapsedMs=${System.currentTimeMillis() - diagNotifStartMs}")
         // Pre-bind and warm the TTS engine now so the first spoken word after
         // the user answers never pays the engine bind/voice-load cost.
         try {
@@ -473,6 +481,8 @@ class SignalingForegroundService : Service() {
 
         when (intent?.action) {
             ACTION_RING_FROM_PUSH -> {
+                // Diagnostic: correlate FCM send → FGS start → validation
+                Log.i(TAG, "[DIAG] fgs_onStartCommand action=${intent?.action} callId=${intent.getStringExtra(EXTRA_RING_CALL_ID)} atMs=${System.currentTimeMillis()} isForeground=${ForegroundTracker.isForeground}")
                 // Phase A (FCM push-to-wake): a ring delivered via FCM instead
                 // of the WS/poll path. Routes through the SAME ringFromEvent
                 // machinery — status re-validation, profile record, recentlyRung
