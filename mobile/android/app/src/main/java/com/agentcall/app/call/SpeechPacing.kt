@@ -48,6 +48,10 @@ object SpeechPacing {
         const val FALLBACK_JITTER_MS = 80L
         // Speed jitter per sentence — keeps the voice from sounding flat.
         const val SPEED_JITTER = 0.06f
+        // Sub-chunk split (Fix 2): intra-sentence splits for cancellability must NOT get sentence-level pause.
+        const val SUB_CHUNK_PAUSE_MS = 70L
+        const val SUB_CHUNK_JITTER_MS = 30L
+        const val MAX_WORDS_PER_CHUNK = 12
         // Overlap synthesis: start generating next sentence while current plays.
         // No pause needed for true streaming; this is for the sentence-boundary gap.
     }
@@ -100,4 +104,90 @@ object SpeechPacing {
 
     fun sentenceSpeed(random: Random = Random.Default): Float =
         1.0f + (random.nextFloat() * 2f - 1f) * SPEED_JITTER
+
+    /**
+     * Fix 2 — bound worst-case generate() length.
+     * Any sentence over [PacingConfig.MAX_WORDS_PER_CHUNK] (~12 words, ~0.8–1.0s synth at RTF 0.2)
+     * is further split on commas/conjunctions/clause boundaries so no single generate() exceeds ~1s audio.
+     * Returns chunks annotated with [isLastInSentence] so callers can distinguish real sentence ends
+     * (full pause) from sub-chunk seams (micro-pause).
+     */
+    data class Chunk(val text: String, val isLastInSentence: Boolean)
+
+    private val conjunctions = setOf(
+        "and", "but", "or", "so", "yet", "however", "which", "that", "because",
+        "while", "when", "where", "although", "though", "if", "as", "then", "thus", "therefore"
+    )
+
+    fun chunkForSynthesis(text: String): List<Chunk> {
+        val sentences = splitIntoSentences(text)
+        if (sentences.isEmpty()) return emptyList()
+        val out = mutableListOf<Chunk>()
+        for (sentence in sentences) {
+            val subs = splitLongSentence(sentence, PacingConfig.MAX_WORDS_PER_CHUNK)
+            for (i in subs.indices) {
+                out += Chunk(subs[i], isLastInSentence = i == subs.lastIndex)
+            }
+        }
+        return out
+    }
+
+    private fun splitLongSentence(sentence: String, maxWords: Int): List<String> {
+        val words = sentence.trim().split(Regex("\\s+"))
+        if (words.size <= maxWords) return listOf(sentence.trim())
+        // Natural break after word index i if: word ends with , ; : — –  OR next word is conjunction
+        val naturalBreaks = mutableSetOf<Int>() // word index after which to allow split (0-based, break after i)
+        for (i in words.indices) {
+            val w = words[i]
+            if (w.endsWith(",") || w.endsWith(";") || w.endsWith(":") || w.endsWith("—") || w.endsWith("–")) {
+                naturalBreaks.add(i)
+            }
+            if (i + 1 < words.size) {
+                val nextLower = words[i + 1].lowercase().trimEnd(',', ';', ':', '.', '!', '?')
+                if (nextLower in conjunctions) {
+                    naturalBreaks.add(i) // break before conjunction (i.e., after current word)
+                }
+            }
+        }
+
+        val chunks = mutableListOf<String>()
+        var start = 0
+        while (start < words.size) {
+            var end = minOf(start + maxWords, words.size) // exclusive
+            if (end - start <= maxWords && end < words.size) {
+                // Look backwards for a natural break within the window to prefer it over hard split
+                var bestBreak: Int? = null
+                for (b in naturalBreaks) {
+                    if (b in start until end && b >= start + 3) { // avoid tiny 1-2 word leading chunk
+                        if (bestBreak == null || b > bestBreak) bestBreak = b
+                    }
+                }
+                if (bestBreak != null) {
+                    end = bestBreak + 1
+                } else if (end < words.size) {
+                    // No natural break: hard split at maxWords (mid-clause) — unavoidable
+                    // keep end as maxWords; prosody seam flagged in report
+                }
+            }
+            // If this is the last chunk and remainder is tiny (1-2 words), merge with previous to avoid click
+            if (words.size - end in 1..2 && chunks.isNotEmpty() && (end - start) > 4) {
+                // merge tiny tail into this chunk
+                end = words.size
+            }
+            val chunkText = words.subList(start, end).joinToString(" ")
+            chunks += chunkText
+            start = end
+        }
+        return chunks
+    }
+
+    /** Pause after a chunk: real sentence end uses full delay, sub-chunk uses micro-pause. */
+    fun delayAfterChunk(chunk: Chunk, originalSentence: String? = null, random: Random = Random.Default): Long {
+        return if (chunk.isLastInSentence) {
+            // Real boundary — use original sentence's terminal punctuation if available
+            delayAfterSentence(originalSentence ?: chunk.text, random)
+        } else {
+            PacingConfig.SUB_CHUNK_PAUSE_MS + random.nextLong(PacingConfig.SUB_CHUNK_JITTER_MS + 1)
+        }
+    }
 }

@@ -5,7 +5,7 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 
 sealed class CallEvent {
-    data class AiMessage(val text: String) : CallEvent()
+    data class AiMessage(val text: String, val messageId: String? = null) : CallEvent()
     data class UserMessage(val messageId: String, val text: String) : CallEvent()
     data class UserTextSent(val messageId: String) : CallEvent()
     data class UserTextFailed(val messageId: String, val text: String) : CallEvent()
@@ -21,6 +21,9 @@ sealed class CallEvent {
         val lastActiveAtMs: Long?,
         val agentOnline: Boolean = true,
     ) : CallEvent()
+
+    /** Barge-in: user speech detected while TTS was playing; audio cut and STT handoff started. */
+    data class BargeInDetected(val atMs: Long = System.currentTimeMillis()) : CallEvent()
 }
 
 object CallEventBus {

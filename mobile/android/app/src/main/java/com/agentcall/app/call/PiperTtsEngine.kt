@@ -62,11 +62,18 @@ class PiperTtsEngine(private val context: Context) {
     val isReady: Boolean
         get() = tts != null
 
+    val sampleRate: Int
+        get() = tts?.sampleRate() ?: 22050
+
     /** Loads the engine + model. Returns false on any failure (caller falls back to system TTS). */
     fun init(): Boolean {
         if (tts != null) return true
         return try {
+            val copyStart = System.currentTimeMillis()
             val dir = extractModelIfNeeded()
+            val copyMs = System.currentTimeMillis() - copyStart
+            Log.i(TAG, "[PIPER] copy check took ${copyMs}ms (should be 0-10ms if already extracted)")
+            val onnxStart = System.currentTimeMillis()
             val config = OfflineTtsConfig(
                 model = OfflineTtsModelConfig(
                     vits = OfflineTtsVitsModelConfig(
@@ -78,7 +85,9 @@ class PiperTtsEngine(private val context: Context) {
                 ),
             )
             tts = OfflineTts(config = config)
-            Log.i(TAG, "[PIPER] ready sampleRate=${tts?.sampleRate()} speakers=${tts?.numSpeakers()}")
+            stopRequested = false
+            val onnxMs = System.currentTimeMillis() - onnxStart
+            Log.i(TAG, "[PIPER] ONNX load took ${onnxMs}ms, ready sampleRate=${tts?.sampleRate()} speakers=${tts?.numSpeakers()}")
             true
         } catch (e: Throwable) {
             Log.e(TAG, "[PIPER] init failed — falling back to system TTS", e)
@@ -92,7 +101,14 @@ class PiperTtsEngine(private val context: Context) {
         val engine = tts ?: return null
         if (text.isBlank() || stopRequested) return null
         return try {
-            engine.generate(text, 0, speed)
+            val t0 = System.nanoTime()
+            val audio = engine.generate(text, 0, speed)
+            val dtMs = (System.nanoTime() - t0) / 1_000_000
+            // Benchmark B3/B4: per-sentence synth timing vs audio duration (RTF logged by caller too; this is the engine-level stamp).
+            val sr = tts?.sampleRate() ?: 22050
+            val audioMs = if (audio != null) (audio.samples.size * 1000.0 / sr).toLong() else -1
+            Log.d(TAG, "[PIPER] synth done chars=${text.length} synthMs=$dtMs audioMs=$audioMs")
+            audio
         } catch (e: Throwable) {
             Log.e(TAG, "[PIPER] synthesize failed", e)
             null
@@ -105,14 +121,18 @@ class PiperTtsEngine(private val context: Context) {
         val sampleRate = tts?.sampleRate() ?: return false
         val track = ensureAudioTrack(sampleRate) ?: return false
         return try {
+            val tPlay = System.currentTimeMillis()
             track.play()
+            Log.d(TAG, "[PIPER] play start samples=${audio.samples.size} sampleRate=$sampleRate")
             var offset = 0
+            var firstWriteMs = 0L
             while (offset < audio.samples.size) {
                 if (stopRequested) break
                 val written = track.write(
                     audio.samples, offset, audio.samples.size - offset,
                     AudioTrack.WRITE_BLOCKING,
                 )
+                if (firstWriteMs == 0L) firstWriteMs = System.currentTimeMillis() - tPlay
                 if (written < 0) {
                     Log.e(TAG, "[PIPER] write failed code=$written")
                     break
@@ -120,6 +140,8 @@ class PiperTtsEngine(private val context: Context) {
                 offset += written
                 totalFramesWritten += written
             }
+            if (stopRequested) Log.i(TAG, "[PIPER] play cut by barge-in after offset=$offset/${audio.samples.size} firstWriteMs=$firstWriteMs")
+            else Log.d(TAG, "[PIPER] write complete firstWriteMs=$firstWriteMs written=$offset")
             waitForDrain(track)
             true
         } catch (e: Throwable) {
