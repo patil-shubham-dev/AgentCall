@@ -11,9 +11,26 @@
             android:name=".call.CallActivity"
             android:exported="true" />
 
+        <activity
+            android:name=".debug.DebugBenchmarkActivity"
+            android:exported="true"
+            android:theme="@style/Theme.AgentCall" />
+        <activity
+            android:name=".debug.DebugEchoTestActivity"
+            android:exported="true"
+            android:theme="@style/Theme.AgentCall" />
+        <activity
+            android:name=".debug.DebugWavExportActivity"
+            android:exported="true"
+            android:theme="@style/Theme.AgentCall" />
+        <activity
+            android:name=".debug.DebugMemoryLongevityActivity"
+            android:exported="true"
+            android:theme="@style/Theme.AgentCall" />
+
         <!-- Debug-only test hook (battery-audit H2 verification): lets adb start
-             a real call session on ROMs that block shell starts of non-exported
-             services. Not present in release builds (src/debug overlay). -->
+              a real call session on ROMs that block shell starts of non-exported
+              services. Not present in release builds (src/debug overlay). -->
         <receiver
             android:name=".debug.DebugCallTriggerReceiver"
             android:exported="true" />

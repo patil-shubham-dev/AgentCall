@@ -175,6 +175,12 @@ fun MainApp(
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
+        // Single source of truth for top insets: this Scaffold passes zero so
+        // each screen handles its OWN status-bar inset exactly once. The
+        // default systemBars inset here used to stack with per-screen
+        // statusBarsPadding() calls, doubling the top inset (~30dp of dead
+        // space above every screen's header).
+        contentWindowInsets = WindowInsets(0, 0, 0, 0),
     ) { innerPadding ->
         NavHost(
             navController = navController,

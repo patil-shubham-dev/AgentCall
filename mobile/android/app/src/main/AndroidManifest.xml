@@ -44,6 +44,12 @@
             </intent-filter>
         </activity>
 
+        <!-- adjustNothing: on a REAL call this activity hosts ActiveCallScreen
+             after the user answers (showCall=true) — CallActivity is skipped
+             (EXTRA_LAUNCH_UI=false). The composer owns the IME inset
+             exclusively (safeDrawing bottom); the window must never resize or
+             pan for the keyboard or the two systems double-compensate and
+             leave a keyboard-height dead zone above the IME. -->
         <activity
             android:name=".call.IncomingCallActivity"
             android:excludeFromRecents="true"
@@ -51,15 +57,22 @@
             android:showOnLockScreen="true"
             android:showWhenLocked="true"
             android:turnScreenOn="true"
+            android:windowSoftInputMode="adjustNothing"
             android:theme="@style/Theme.AgentCall" />
 
+        <!-- adjustNothing: the window must NEVER resize or pan for the IME.
+             The activity is edge-to-edge and the composer owns the IME inset
+             exclusively via WindowInsets.safeDrawing (single inset owner).
+             adjustResize resized the window AND imePadding() padded the
+             composer — both consumed the keyboard height once each, leaving
+             a full keyboard-height of dead space above the keyboard. -->
         <activity
             android:name=".call.CallActivity"
             android:excludeFromRecents="true"
             android:launchMode="singleInstance"
             android:showWhenLocked="true"
             android:turnScreenOn="true"
-            android:windowSoftInputMode="adjustResize"
+            android:windowSoftInputMode="adjustNothing"
             android:theme="@style/Theme.AgentCall" />
 
         <service

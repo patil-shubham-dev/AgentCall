@@ -116,7 +116,8 @@ val Amber400 = Warning
 val Amber500 = Warning
 val Amber600 = Color(0xFF92400E)
 
-val BrandPurple = Color(0xFF7867DD)
+val BrandPurple = Color(0xFF7967DE)
+val BrandPurpleLight = Color(0xFFB8A9F0)
 val BrandPurplePressed = Color(0xFF6B5ACB)
 val BrandPurpleDisabled = Color(0xFF2A2A2A)
 val UserBubbleBg = Color(0xFF252036)

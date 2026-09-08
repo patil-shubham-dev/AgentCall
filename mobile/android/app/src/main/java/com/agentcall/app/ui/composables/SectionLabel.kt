@@ -9,7 +9,9 @@ import androidx.compose.ui.unit.sp
 
 /**
  * Uppercase section label used above every grouped block of settings or
- * content (e.g. "SERVER CONNECTION", "YOUR AI AGENTS").
+ * content (e.g. "SERVER CONNECTION", "YOUR AI AGENTS"). Deliberately SMALLER
+ * than the page title (displaySmall): labelLarge keeps section headers clearly
+ * subordinate — organizational labels, not competing headings.
  */
 @Composable
 fun SectionLabel(
@@ -18,9 +20,9 @@ fun SectionLabel(
 ) {
     Text(
         text = title,
-        style = MaterialTheme.typography.labelSmall,
+        style = MaterialTheme.typography.labelLarge,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
-        fontWeight = FontWeight.Medium,
+        fontWeight = FontWeight.SemiBold,
         letterSpacing = 1.2.sp,
         modifier = modifier,
     )

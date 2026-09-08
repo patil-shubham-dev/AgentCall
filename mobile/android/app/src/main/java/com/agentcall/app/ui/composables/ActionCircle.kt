@@ -47,6 +47,7 @@ fun ActionCircle(
     iconTint: Color = MaterialTheme.colorScheme.onSurface,
     labelColor: Color = MaterialTheme.colorScheme.onSurfaceVariant,
     bgColor: Color = Color.Transparent,
+    shadowElevation: Dp? = null,
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val isPressed by interactionSource.collectIsPressedAsState()
@@ -95,7 +96,7 @@ fun ActionCircle(
                 shape = CircleShape,
                 color = bgColor,
                 tonalElevation = 0.dp,
-                shadowElevation = pressElevation,
+                shadowElevation = shadowElevation ?: pressElevation,
                 interactionSource = interactionSource,
             ) {
                 Box(modifier = Modifier.size(size).scale(pressScale), contentAlignment = Alignment.Center) {
