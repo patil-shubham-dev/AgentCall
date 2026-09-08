@@ -62,6 +62,7 @@ import com.agentcall.app.ui.composables.GradientAvatar
 import com.agentcall.app.ui.composables.Notice
 import com.agentcall.app.ui.ClientBadge
 import com.agentcall.app.ui.theme.*
+import com.agentcall.app.ui.theme.Spacing
 import dagger.hilt.android.AndroidEntryPoint
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import kotlinx.coroutines.delay
@@ -72,6 +73,7 @@ import java.util.UUID
 class CallActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        androidx.core.view.WindowCompat.setDecorFitsSystemWindows(window, false)
         val callId = intent.getStringExtra("call_id") ?: run { finish(); return }
         val callerName = intent.getStringExtra("caller_name") ?: "AI Agent"
         // Voice-first: keep the screen lit for the duration of the call.
@@ -138,9 +140,35 @@ fun ActiveCallScreen(
         }
     }
 
+    // Auto-scroll: keep latest message visible when new messages arrive,
+    // but respect intentional scroll-up (only force if near bottom).
     LaunchedEffect(state.messages.size) {
         if (state.messages.isNotEmpty()) {
-            listState.animateScrollToItem(state.messages.size - 1)
+            val layoutInfo = listState.layoutInfo
+            val total = layoutInfo.totalItemsCount
+            val lastVisible = layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
+            val isNearBottom = lastVisible >= total - 3 || total <= 2
+            if (isNearBottom || state.messages.size == 1) {
+                listState.animateScrollToItem(state.messages.size - 1)
+            }
+        }
+    }
+
+    // When keyboard opens, keep latest message visible if user was near bottom.
+    // Read-only inset observation for SCROLL TIMING only — layout never uses
+    // this value; the composer's position comes exclusively from its
+    // safeDrawing bottom inset (single owner, see the composer layer below).
+    val imeBottom = androidx.compose.foundation.layout.WindowInsets.ime.getBottom(androidx.compose.ui.platform.LocalDensity.current)
+    LaunchedEffect(imeBottom) {
+        if (imeBottom > 0 && state.messages.isNotEmpty()) {
+            val layoutInfo = listState.layoutInfo
+            val total = layoutInfo.totalItemsCount
+            val lastVisible = layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
+            val isNearBottom = lastVisible >= total - 3
+            if (isNearBottom) {
+                // Immediate scroll so message sits just above composer (imePadding already shrinks viewport)
+                listState.animateScrollToItem(state.messages.size - 1)
+            }
         }
     }
 
@@ -165,16 +193,20 @@ fun ActiveCallScreen(
             density = if (state.isAiSpeaking || state.isRecording) 1.2f else 0.6f,
         )
 
-        Column(modifier = Modifier.fillMaxSize().statusBarsPadding()) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .statusBarsPadding()
+        ) {
             Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp),
+                modifier = Modifier.fillMaxWidth().padding(horizontal = Spacing.ScreenPadding, vertical = Spacing.M),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 val dotAnim by infiniteTransition.animateFloat(0f, 1f,
                     infiniteRepeatable(tween(1200, easing = EaseInOutSine), RepeatMode.Reverse), label = "statusDot")
                 Box(modifier = Modifier.size(8.dp).clip(CircleShape)
                     .background(if (state.isConnected) Green500.copy(alpha = 0.5f + dotAnim * 0.5f) else Amber400))
-                Spacer(modifier = Modifier.width(8.dp))
+                Spacer(modifier = Modifier.width(12.dp))
                 Column(modifier = Modifier.weight(1f)) {
                     // Voice-first: the agent's name is the identity on screen.
                     Text(agentName, style = MaterialTheme.typography.titleMedium, color = Slate50,
@@ -207,7 +239,7 @@ fun ActiveCallScreen(
                     text = "Reconnecting — the call stays live",
                     lampColor = Amber400,
                     containerColor = MaterialTheme.colorScheme.surfaceVariant,
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
                 )
             }
 
@@ -223,7 +255,7 @@ fun ActiveCallScreen(
                     },
                     lampColor = Slate400,
                     containerColor = MaterialTheme.colorScheme.surfaceVariant,
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
                 )
             }
 
@@ -231,19 +263,19 @@ fun ActiveCallScreen(
                 enter = slideInVertically(animationSpec = spring(dampingRatio = 0.8f)) + fadeIn(),
                 exit = slideOutVertically() + fadeOut()) {
                 Surface(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
                     shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surface,
                     border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
                     tonalElevation = 0.dp
                 ) {
-                    Row(modifier = Modifier.padding(14.dp), verticalAlignment = Alignment.Top) {
+                    Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.Top) {
                         Icon(Icons.Default.Info, "AI calling about", modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Spacer(modifier = Modifier.width(10.dp))
+                        Spacer(modifier = Modifier.width(12.dp))
                         Column {
                             Text("AI is calling about:",
                                 style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 fontWeight = FontWeight.SemiBold)
-                            Spacer(modifier = Modifier.height(4.dp))
+                            Spacer(modifier = Modifier.height(12.dp))
                             Text(state.callContext.summary,
                                 style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
                         }
@@ -254,9 +286,9 @@ fun ActiveCallScreen(
             // Transcript Messages
             LazyColumn(
                 state = listState,
-                modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 16.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-                contentPadding = PaddingValues(vertical = 8.dp),
+                modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = Spacing.ScreenPadding),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                contentPadding = PaddingValues(top = 12.dp, bottom = Spacing.XS),
             ) {
                 items(state.messages, key = { it.id }) { msg ->
                     MessageBubble(
@@ -284,7 +316,7 @@ fun ActiveCallScreen(
                             Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                                 Icon(Icons.Default.PauseCircle, "Call paused", tint = Amber400,
                                     modifier = Modifier.size(20.dp))
-                                Spacer(modifier = Modifier.width(8.dp))
+                                Spacer(modifier = Modifier.width(12.dp))
                                 Text("Call paused — press Record when you're ready",
                                     style = MaterialTheme.typography.labelMedium, color = Amber300)
                             }
@@ -293,20 +325,36 @@ fun ActiveCallScreen(
                 }
             }
 
-            // Waveform
-            WaveformBar(
-                levels = state.waveformLevels,
-                isActive = state.isRecording || state.isAiSpeaking,
-                isRecording = state.isRecording,
-            )
-
-            // Text Input + Controls — imePadding keeps transcript visible above keyboard
-            Surface(
-                modifier = Modifier.fillMaxWidth().imePadding(),
-                color = MaterialTheme.colorScheme.background,
-                tonalElevation = 0.dp,
+            // Composer layer — bottom-anchored foreground surface. Inset
+            // ownership (exactly one owner per responsibility):
+            //   • status bar  → the root Column's statusBarsPadding() above
+            //   • nav bar+IME → WindowInsets.safeDrawing.only(Bottom) INSIDE
+            //     the composer surface below (max of keyboard/nav-bar; when
+            //     the keyboard opens it grows, the surface extends behind the
+            //     keyboard, and the weight(1f) message list shrinks naturally)
+            //   • design gap  → Spacing.M (8dp) inside the surface
+            // The window itself never resizes or pans (adjustNothing in the
+            // manifest), so this padding is the ONLY consumer of the keyboard
+            // height — no double compensation, no dead space above the IME.
+            Column(
+                modifier = Modifier.fillMaxWidth()
             ) {
-                Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+                HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f), thickness = 1.dp)
+                WaveformBar(
+                    levels = state.waveformLevels,
+                    isActive = state.isRecording || state.isAiSpeaking,
+                    isRecording = state.isRecording,
+                )
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    color = MaterialTheme.colorScheme.surfaceVariant,
+                    tonalElevation = 0.dp,
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom))
+                            .padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = Spacing.M)
+                    ) {
                     // Text input row
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -345,17 +393,17 @@ fun ActiveCallScreen(
                                         false
                                     }
                                 },
-                            placeholder = { Text("Type your answer...", color = Slate400) },
+                            placeholder = { Text("Type your answer...", color = MaterialTheme.colorScheme.onSurfaceVariant) },
                             singleLine = false,
                             maxLines = 2,
                             colors = OutlinedTextFieldDefaults.colors(
-                                focusedBorderColor = Indigo400,
-                                unfocusedBorderColor = Slate700,
-                                cursorColor = Indigo400,
-                                focusedTextColor = Slate50,
-                                unfocusedTextColor = Slate50,
-                                focusedContainerColor = Slate800,
-                                unfocusedContainerColor = Slate800,
+                                focusedBorderColor = BrandPurple,
+                                unfocusedBorderColor = MaterialTheme.colorScheme.outline,
+                                cursorColor = BrandPurple,
+                                focusedTextColor = MaterialTheme.colorScheme.onSurface,
+                                unfocusedTextColor = MaterialTheme.colorScheme.onSurface,
+                                focusedContainerColor = MaterialTheme.colorScheme.surface,
+                                unfocusedContainerColor = MaterialTheme.colorScheme.surface,
                             ),
                             shape = RoundedCornerShape(12.dp),
                             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
@@ -363,7 +411,7 @@ fun ActiveCallScreen(
                                 onSend = { sendDraft() }
                             ),
                         )
-                        Spacer(modifier = Modifier.width(8.dp))
+                        Spacer(modifier = Modifier.width(12.dp))
                         FilledIconButton(
                             onClick = { sendDraft() },
                             modifier = Modifier.size(48.dp),
@@ -371,8 +419,8 @@ fun ActiveCallScreen(
                             colors = IconButtonDefaults.filledIconButtonColors(
                                 containerColor = BrandPurple,
                                 contentColor = Color.White,
-                                disabledContainerColor = Slate700,
-                                disabledContentColor = Slate500,
+                                disabledContainerColor = BrandPurpleLight,
+                                disabledContentColor = Color.White.copy(alpha = 0.7f),
                             ),
                             enabled = textInput.isNotBlank(),
                         ) {
@@ -380,7 +428,7 @@ fun ActiveCallScreen(
                         }
                     }
 
-                    Spacer(modifier = Modifier.height(8.dp))
+                    Spacer(modifier = Modifier.height(12.dp))
 
                     // Quick-reply chips offered by the AI at call creation
                     if (state.callContext.options.isNotEmpty() && !optionsPicked) {
@@ -398,23 +446,24 @@ fun ActiveCallScreen(
                                 })
                             },
                         )
-                        Spacer(modifier = Modifier.height(8.dp))
+                        Spacer(modifier = Modifier.height(12.dp))
                     }
 
                     // 5-inline control row — icon-only per design system; Mute uses crossed speaker (VolumeOff) not MicOff
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         InlineControl(modifier = Modifier.weight(1f), icon = if (state.isRecording) Icons.Default.StopCircle else Icons.Default.Mic, contentDescription = if (state.isRecording) "Stop recording" else "Start recording", active = state.isRecording, onClick = { context.startService(Intent(context, CallService::class.java).apply { action = if (state.isRecording) CallService.ACTION_STOP_RECORDING else CallService.ACTION_START_RECORDING }); viewModel.setRecording(!state.isRecording) })
                         InlineControl(modifier = Modifier.weight(1f), icon = Icons.AutoMirrored.Filled.VolumeOff, contentDescription = if (state.isMuted) "Unmute AI voice" else "Mute AI voice", active = state.isMuted, onClick = { viewModel.setMuted(context, !state.isMuted) })
                         InlineControl(modifier = Modifier.weight(1f), icon = if (state.isSpeakerOn) Icons.AutoMirrored.Filled.VolumeUp else Icons.AutoMirrored.Filled.VolumeDown, contentDescription = if (state.isSpeakerOn) "Speaker on" else "Speaker off", active = state.isSpeakerOn, onClick = { viewModel.toggleSpeaker() })
                         InlineControl(modifier = Modifier.weight(1f), icon = Icons.Default.Replay, contentDescription = "Repeat last message", active = false, onClick = { context.startService(Intent(context, CallService::class.java).apply { action = CallService.ACTION_REPEAT_LAST }) })
-                        Surface(onClick = { val cid = state.callId.ifBlank { callId }; onEndCall(cid) }, modifier = Modifier.weight(1f).height(48.dp), shape = RoundedCornerShape(Radii.Field), color = Error, border = androidx.compose.foundation.BorderStroke(6.dp, ErrorBg)) { Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Icon(Icons.AutoMirrored.Filled.PhoneForwarded, contentDescription = "End call", tint = Color.White, modifier = Modifier.size(20.dp)) } }
+                        Surface(onClick = { val cid = state.callId.ifBlank { callId }; onEndCall(cid) }, modifier = Modifier.weight(1f).height(48.dp), shape = RoundedCornerShape(Radii.Field), color = Error) { Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Icon(Icons.AutoMirrored.Filled.PhoneForwarded, contentDescription = "End call", tint = Color.White, modifier = Modifier.size(20.dp)) } }
                     }
                 }
             }
+        }
         }
     }
 }
@@ -427,8 +476,8 @@ private fun QuickReplyChips(
 ) {
     FlowRow(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         options.forEach { option ->
             Surface(
@@ -445,13 +494,13 @@ private fun QuickReplyChips(
                         Icons.Default.Quickreply,
                         contentDescription = null,
                         modifier = Modifier.size(15.dp),
-                        tint = Indigo300,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
                         option,
                         style = MaterialTheme.typography.labelMedium,
-                        color = Indigo100,
+                        color = MaterialTheme.colorScheme.onSurface,
                         fontWeight = FontWeight.Medium,
                     )
                 }
@@ -503,7 +552,7 @@ private fun MessageBubble(msg: ChatBubble, isAi: Boolean, onRetry: (() -> Unit)?
         ) {
             if (isAi) {
                 GradientAvatar(size = 32.dp)
-                Spacer(modifier = Modifier.width(8.dp))
+                Spacer(modifier = Modifier.width(12.dp))
             }
 
             Surface(
@@ -513,22 +562,22 @@ private fun MessageBubble(msg: ChatBubble, isAi: Boolean, onRetry: (() -> Unit)?
                     topEnd = if (isAi) 16.dp else 4.dp,
                     bottomStart = 16.dp, bottomEnd = 16.dp,
                 ),
-                color = if (isAi) Slate800 else UserBubbleBg,
+                color = if (isAi) MaterialTheme.colorScheme.surfaceVariant else UserBubbleBg,
                 border = if (isAi) null else BorderStroke(1.dp, UserBubbleBorder),
                 tonalElevation = 0.dp,
             ) {
                 Column(modifier = Modifier.padding(12.dp)) {
                     if (isAi) {
                         Text("AI", style = MaterialTheme.typography.labelSmall,
-                            color = Indigo400, fontWeight = FontWeight.Bold)
-                        Spacer(modifier = Modifier.height(4.dp))
+                            color = MaterialTheme.colorScheme.onSurfaceVariant, fontWeight = FontWeight.Bold)
+                        Spacer(modifier = Modifier.height(12.dp))
                     }
                     Text(msg.text, style = MaterialTheme.typography.bodyMedium, color = if (isAi) Slate100 else Slate50)
                 }
             }
 
             if (!isAi) {
-                Spacer(modifier = Modifier.width(8.dp))
+                Spacer(modifier = Modifier.width(12.dp))
                 Box(
                     modifier = Modifier.size(32.dp).clip(CircleShape).background(Slate700),
                     contentAlignment = Alignment.Center,
@@ -547,7 +596,7 @@ private fun MessageBubble(msg: ChatBubble, isAi: Boolean, onRetry: (() -> Unit)?
                 ) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
                     ) {
                         Icon(Icons.Default.Warning, "not sent", modifier = Modifier.size(14.dp), tint = Amber400)
                         Spacer(modifier = Modifier.width(6.dp))
@@ -562,20 +611,20 @@ private fun MessageBubble(msg: ChatBubble, isAi: Boolean, onRetry: (() -> Unit)?
 @Composable
 private fun TypingIndicator() {
     Row(
-        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+        modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         GradientAvatar(size = 28.dp, contentDescription = "AI")
-        Spacer(modifier = Modifier.width(8.dp))
-        Surface(shape = RoundedCornerShape(4.dp, 16.dp, 16.dp, 16.dp), color = Slate800) {
-            Row(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+        Spacer(modifier = Modifier.width(12.dp))
+        Surface(shape = RoundedCornerShape(4.dp, 16.dp, 16.dp, 16.dp), color = MaterialTheme.colorScheme.surfaceVariant) {
+            Row(modifier = Modifier.padding(horizontal = 12.dp, vertical = 12.dp),
                 verticalAlignment = Alignment.CenterVertically) {
                 repeat(3) { i ->
                     val dotDelay by rememberInfiniteTransition(label = "dot$i").animateFloat(0f, 1f,
                         infiniteRepeatable(tween(1200, delayMillis = i * 200, easing = EaseInOutSine), RepeatMode.Reverse),
                         label = "dotAnim$i")
                     Box(modifier = Modifier.size(8.dp).clip(CircleShape)
-                        .background(Indigo400.copy(alpha = 0.3f + dotDelay * 0.7f)))
+                        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.3f + dotDelay * 0.7f)))
                     if (i < 2) Spacer(modifier = Modifier.width(6.dp))
                 }
             }
@@ -591,7 +640,7 @@ private fun WaveformBar(levels: List<Float>, isActive: Boolean, isRecording: Boo
 
     val waveformColor = WaveformActive
 
-    Canvas(modifier = Modifier.fillMaxWidth().height(40.dp).padding(horizontal = 20.dp)) {
+    Canvas(modifier = Modifier.fillMaxWidth().height(40.dp).padding(horizontal = 12.dp)) {
         val barWidth = size.width / (levels.size * 2 - 1)
         val centerY = size.height / 2
         levels.forEachIndexed { i, level ->

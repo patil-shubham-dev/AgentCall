@@ -36,13 +36,16 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.foundation.Image
 import androidx.compose.ui.graphics.*
-import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.agentcall.app.R
 import com.agentcall.app.data.api.ApiClient
 import com.agentcall.app.data.api.ApiService
 import com.agentcall.app.settings.CallerTuneManager
@@ -178,18 +181,16 @@ private var currentClientInfoName by mutableStateOf<String?>(null)
         currentCallerName = intent.getStringExtra("caller_name") ?: "AI Agent"
         currentContextSummary = intent.getStringExtra("context_summary") ?: ""
         currentClientInfoName = intent.getStringExtra("client_info_name")
-        // Backlog item 14 — stale-FSI guard: a full-screen intent for an
-        // already-answered/ended call (relaunch from recents, racing
-        // duplicate notification, stale push) must never re-ring. Validate
-        // against the shared ring truth BEFORE telling the FGS the ring UI is
-        // open, so the service's 60s timeout stays armed when the guard
-        // finishes — a rejected launch must not leave the ring ungoverned.
-        val state = CallStateHolder.state.value
-        if (state.status != CallStatus.RINGING || state.callId != currentCallId) {
-            Log.i(TAG, "[LAUNCH] stale FSI for $currentCallId (${state.status}) — finishing")
-            isProcessing.set(false)
-            finish()
-            return
+        val isDebugForce = intent.getBooleanExtra("debug_force", false)
+        // Backlog item 14 — stale-FSI guard (skipped for debug_force visual QA)
+        if (!isDebugForce) {
+            val state = CallStateHolder.state.value
+            if (state.status != CallStatus.RINGING || state.callId != currentCallId) {
+                Log.i(TAG, "[LAUNCH] stale FSI for $currentCallId (${state.status}) — finishing")
+                isProcessing.set(false)
+                finish()
+                return
+            }
         }
         // The ring UI now owns the timeout: the service's 60s fallback (meant
         // for a notification that was never opened) would otherwise fire under
@@ -350,7 +351,7 @@ private var currentClientInfoName by mutableStateOf<String?>(null)
         // Backlog item 14 — a stale FSI can surface after the call already
         // resolved (relaunch from recents, racing duplicate intent): leave
         // the ring UI immediately instead of ringing a dead call.
-        if (!showCall) {
+        if (!showCall && !intent.getBooleanExtra("debug_force", false)) {
             val state = CallStateHolder.state.value
             if (state.status != CallStatus.RINGING || state.callId != currentCallId) {
                 Log.i(TAG, "[RESUME] stale FSI for $currentCallId (${state.status}) — finishing")
@@ -439,37 +440,53 @@ fun IncomingCallScreen(
 
     val infiniteTransition = rememberInfiniteTransition(label = "incoming")
 
-    val ring1 by infiniteTransition.animateFloat(0f, 1f,
-        infiniteRepeatable(tween(1800, easing = FastOutSlowInEasing), RepeatMode.Restart), label = "ring1")
-    val ring2 by infiniteTransition.animateFloat(0f, 1f,
-        infiniteRepeatable(tween(1800, easing = FastOutSlowInEasing, delayMillis = 600), RepeatMode.Restart), label = "ring2")
-    val ring3 by infiniteTransition.animateFloat(0f, 1f,
-        infiniteRepeatable(tween(1800, easing = FastOutSlowInEasing, delayMillis = 1200), RepeatMode.Restart), label = "ring3")
-
     val pulseDot by infiniteTransition.animateFloat(0f, 1f,
         infiniteRepeatable(tween(2000, easing = EaseInOutSine), RepeatMode.Reverse), label = "pulseDot")
-    val glowSweep by infiniteTransition.animateFloat(0f, 1f,
-        infiniteRepeatable(tween(4000, easing = EaseInOutSine), RepeatMode.Reverse), label = "glowSweep")
+    // Gentle breathing on the brand mark while the phone rings.
+    val logoBreath by infiniteTransition.animateFloat(0.97f, 1.03f,
+        infiniteRepeatable(tween(1600, easing = EaseInOutSine), RepeatMode.Reverse), label = "logoBreath")
 
     Box(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
-        AmbientBackground(
-            accentColor = Indigo400,
-            secondaryColor = GradientBrandEnd,
-            speedMultiplier = 1f,
-            density = 1.5f,
+        // Premium atmospheric: subtle brand-purple vertical wash + radial halo behind avatar
+        // Keeps dark identity, avoids flat black; very low alpha so it never reads as neon.
+        Box(
+            modifier = Modifier.fillMaxSize().background(
+                Brush.verticalGradient(
+                    colors = listOf(BrandPurple.copy(alpha = 0.09f), Color.Transparent),
+                    startY = 0f,
+                    endY = 820f
+                )
+            )
         )
+        AmbientBackground(
+            accentColor = BrandPurple,
+            secondaryColor = BrandPurple.copy(alpha = 0.55f),
+            speedMultiplier = 0.7f,
+            density = 0.9f,
+        )
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            drawCircle(
+                brush = Brush.radialGradient(
+                    colors = listOf(BrandPurple.copy(alpha = 0.13f), Color.Transparent),
+                    center = Offset(size.width * 0.5f, size.height * 0.36f),
+                    radius = size.width * 0.62f
+                ),
+                radius = size.width * 0.62f,
+                center = Offset(size.width * 0.5f, size.height * 0.36f)
+            )
+        }
 
-        Column(modifier = Modifier.fillMaxSize().statusBarsPadding().padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        Column(modifier = Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().padding(horizontal = Spacing.ScreenPadding, vertical = Spacing.L), horizontalAlignment = Alignment.CenterHorizontally) {
             Spacer(modifier = Modifier.weight(0.12f))
 
-            Surface(shape = RoundedCornerShape(100.dp), color = Indigo400.copy(alpha = 0.12f)) {
-                Row(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Surface(shape = RoundedCornerShape(100.dp), color = BrandPurple.copy(alpha = 0.13f)) {
+                Row(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                     Box(modifier = Modifier.size(8.dp).clip(CircleShape)
-                        .background(Indigo400.copy(alpha = 0.5f + pulseDot * 0.5f)))
-                    Spacer(modifier = Modifier.width(8.dp))
+                        .background(BrandPurple.copy(alpha = 0.55f + pulseDot * 0.45f)))
+                    Spacer(modifier = Modifier.width(12.dp))
                     Text("Incoming AI Call",
                         style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 1.sp),
-                        color = Indigo400, fontWeight = FontWeight.SemiBold)
+                        color = BrandPurple, fontWeight = FontWeight.SemiBold)
                 }
             }
 
@@ -494,69 +511,42 @@ fun IncomingCallScreen(
                         )
                     }
                 }
-                Spacer(modifier = Modifier.height(8.dp))
-            }
+                Spacer(modifier = Modifier.height(12.dp))
+            }            // AgentCall brand mark — the same asset Home uses, presented as a
+            // brand logo (bare, over the dark ambient halo) and NOT inside a
+            // purple avatar disc: the brand logo is not an AI avatar. No
+            // enclosing rings; the countdown lives in "Auto-decline in Ns".
+            Image(
+                painter = painterResource(R.drawable.agentcall_logo_transparent),
+                contentDescription = "AgentCall",
+                modifier = Modifier
+                    .size(120.dp)
+                    .scale(logoBreath),
+            )
 
-            Box(
-                modifier = Modifier.size(170.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                Canvas(modifier = Modifier.fillMaxSize()) {
-                    val r = size.minDimension / 2
-                    val ringRadius = r * (0.5f + ring1 * 0.5f)
-                    drawCircle(color = Indigo400.copy(alpha = 0.12f * (1f - ring1)), radius = ringRadius)
-                }
-                Canvas(modifier = Modifier.fillMaxSize()) {
-                    val r = size.minDimension / 2
-                    val ringRadius = r * (0.5f + ring2 * 0.5f)
-                    drawCircle(color = Indigo400.copy(alpha = 0.08f * (1f - ring2)), radius = ringRadius)
-                }
-                Canvas(modifier = Modifier.fillMaxSize()) {
-                    val r = size.minDimension / 2
-                    val ringRadius = r * (0.5f + ring3 * 0.5f)
-                    drawCircle(color = Indigo400.copy(alpha = 0.05f * (1f - ring3)), radius = ringRadius)
-                }
-
-                // Avatar 120dp with a thin countdown progress arc around it;
-            // the rotating sweep arc gives way to the meaningful readout.
-                Box(modifier = Modifier.size(120.dp).clip(CircleShape)
-                    .background(Brush.linearGradient(listOf(Indigo500, GradientBrandEnd))),
-                    contentAlignment = Alignment.Center) {
-                    Canvas(modifier = Modifier.size(120.dp)) {
-                        drawCircle(color = Color.White.copy(alpha = 0.08f + glowSweep * 0.08f),
-                            radius = size.minDimension / 2 * 0.85f)
-                    }
-                    Icon(Icons.Default.Call, "Incoming call", modifier = Modifier.size(60.dp), tint = Slate50)
-                }
-                Canvas(modifier = Modifier.size(128.dp)) {
-                    val progress = secondsLeft / timeoutSeconds.toFloat()
-                    drawArc(color = Slate400.copy(alpha = 0.55f),
-                        startAngle = -90f, sweepAngle = 360f * progress, useCenter = false,
-                        style = Stroke(width = 2.dp.toPx()),
-                        topLeft = Offset(4f, 4f),
-                        size = androidx.compose.ui.geometry.Size(size.width - 8f, size.height - 8f))
-                }
-            }
-
-            Spacer(modifier = Modifier.height(20.dp))
+            Spacer(modifier = Modifier.height(12.dp))
             Text(callerName, style = MaterialTheme.typography.headlineMedium,
-                color = MaterialTheme.colorScheme.onBackground)
+                color = MaterialTheme.colorScheme.onBackground, fontWeight = FontWeight.SemiBold)
 
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(if (clientInfoName != null) "AI Agent \u00B7 via $clientInfoName" else "AI Agent",
+                style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Spacer(modifier = Modifier.height(8.dp))
             ClientBadge(clientInfoName = clientInfoName)
 
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(12.dp))
 
             if (contextSummary.isNotBlank()) {
                 Surface(
                     modifier = Modifier.fillMaxWidth(0.85f),
-                    shape = RoundedCornerShape(16.dp),
-                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f),
+                    shape = RoundedCornerShape(Radii.Panel),
+                    color = MaterialTheme.colorScheme.surfaceVariant,
+                    border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
                 ) {
-                    Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.Top) {
+                    Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.Top) {
                         Icon(Icons.Default.Info, "Call context", modifier = Modifier.size(18.dp),
                             tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Spacer(modifier = Modifier.width(10.dp))
+                        Spacer(modifier = Modifier.width(12.dp))
                         Text(contextSummary, style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurface, textAlign = TextAlign.Start)
                     }
@@ -572,7 +562,7 @@ fun IncomingCallScreen(
                         shape = RoundedCornerShape(20.dp), color = MaterialTheme.colorScheme.surface,
                     ) {
                         Column(
-                            modifier = Modifier.padding(16.dp),
+                            modifier = Modifier.padding(12.dp),
                             horizontalAlignment = Alignment.CenterHorizontally,
                         ) {
                         Row(
@@ -588,7 +578,7 @@ fun IncomingCallScreen(
                                 Icon(Icons.Default.Close, "Back to call", tint = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
                         }
-                        Spacer(modifier = Modifier.height(8.dp))
+                        Spacer(modifier = Modifier.height(12.dp))
                         Column(
                             modifier = Modifier
                                 .weight(1f)
@@ -603,20 +593,20 @@ fun IncomingCallScreen(
                                     .padding(vertical = 3.dp)
                                     .clickable { selectedMinutes = mins },
                                 shape = RoundedCornerShape(12.dp),
-                                color = if (isSelected) Indigo800 else MaterialTheme.colorScheme.surfaceVariant,
+                                color = if (isSelected) BrandPurple.copy(alpha = 0.14f) else MaterialTheme.colorScheme.surfaceVariant,
                             ) {
-                                Row(modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                                Row(modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
                                     verticalAlignment = Alignment.CenterVertically) {
                                     Box(
                                         modifier = Modifier
                                             .size(20.dp)
                                             .border(
                                                 2.dp,
-                                                if (isSelected) Indigo400 else MaterialTheme.colorScheme.onSurfaceVariant,
+                                                if (isSelected) BrandPurple else MaterialTheme.colorScheme.onSurfaceVariant,
                                                 CircleShape,
                                             )
                                             .background(
-                                                if (isSelected) Indigo400 else Color.Transparent,
+                                                if (isSelected) BrandPurple else Color.Transparent,
                                                 CircleShape,
                                             ),
                                         contentAlignment = Alignment.Center,
@@ -625,17 +615,17 @@ fun IncomingCallScreen(
                                             Box(Modifier.size(8.dp).background(Color.White, CircleShape))
                                         }
                                     }
-                                    Spacer(modifier = Modifier.width(10.dp))
+                                    Spacer(modifier = Modifier.width(12.dp))
                                     Text(label, style = MaterialTheme.typography.bodyLarge,
                                         color = MaterialTheme.colorScheme.onSurface)
                                 }
                             }
                         }
                         }
-                        Spacer(modifier = Modifier.height(8.dp))
+                        Spacer(modifier = Modifier.height(12.dp))
                         Button(onClick = { onLater(selectedMinutes) },
                             modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp),
-                            colors = ButtonDefaults.buttonColors(containerColor = Indigo600)) {
+                            colors = ButtonDefaults.buttonColors(containerColor = BrandPurple)) {
                             Text("Call me back in $selectedMinutes min")
                         }
                         }
@@ -647,6 +637,7 @@ fun IncomingCallScreen(
                         icon = Icons.AutoMirrored.Filled.PhoneForwarded,
                         label = "Decline", iconTint = Red400, labelColor = Red400,
                         bgColor = GlassRed, size = 64.dp, onClick = onDecline,
+                        shadowElevation = 0.dp,
                     )
 
                     ActionCircle(
@@ -665,12 +656,12 @@ fun IncomingCallScreen(
                 }
             }
 
-            Spacer(modifier = Modifier.height(24.dp))
+            Spacer(modifier = Modifier.height(12.dp))
             if (!showLaterPicker) {
                 Text("Answer, decline, or schedule for later",
                     style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Center)
-                Spacer(modifier = Modifier.height(4.dp))
+                Spacer(modifier = Modifier.height(12.dp))
                 Text("Auto-decline in ${secondsLeft}s",
                     style = MonoLabel,
                     color = Slate400,
