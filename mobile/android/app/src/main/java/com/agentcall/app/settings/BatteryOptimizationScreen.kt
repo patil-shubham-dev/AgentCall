@@ -149,16 +149,19 @@ fun BatteryOptimizationScreen(
                 .padding(innerPadding)
                 .background(MaterialTheme.colorScheme.background),
         ) {
-            // Header
-            Box(modifier = Modifier.height(80.dp)) {
+            Spacer(modifier = Modifier.height(Spacing.XS))
+            // Header: SYSTEM INSET (via Scaffold innerPadding) + 12dp breathing.
+            // matchParentSize keeps the ambient backdrop inside the wrapped
+            // header — fillMaxSize made this Box swallow the whole screen.
+            Box(modifier = Modifier.fillMaxWidth()) {
                 AmbientBackground(
-                    accentColor = Indigo500,
+                    accentColor = MaterialTheme.colorScheme.primary,
                     density = 0.6f,
                     speedMultiplier = 0.5f,
-                    modifier = Modifier.fillMaxSize(),
+                    modifier = Modifier.matchParentSize(),
                 )
                 Row(
-                    modifier = Modifier.fillMaxSize().padding(horizontal = 8.dp),
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = Spacing.ScreenPadding),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     IconButton(onClick = onBack) {
@@ -168,21 +171,27 @@ fun BatteryOptimizationScreen(
                             tint = MaterialTheme.colorScheme.onBackground,
                         )
                     }
-                    Spacer(modifier = Modifier.width(8.dp))
+                    Spacer(modifier = Modifier.width(Spacing.M))
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
                             text = "Call Reliability",
-                            style = MaterialTheme.typography.headlineMedium,
+                            style = MaterialTheme.typography.displaySmall,
                             color = MaterialTheme.colorScheme.onBackground,
                         )
+                        Spacer(modifier = Modifier.height(2.dp))
                         Text(
                             text = "Keep AgentCall reachable for calls",
-                            style = MaterialTheme.typography.bodySmall,
+                            style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
                 }
             }
+
+            HorizontalDivider(
+                color = MaterialTheme.colorScheme.outline.copy(alpha = 0.6f),
+                modifier = Modifier.padding(start = Spacing.ScreenPadding, end = Spacing.ScreenPadding, top = Spacing.S),
+            )
 
             Column(
                 modifier = Modifier
@@ -191,7 +200,7 @@ fun BatteryOptimizationScreen(
             ) {
                 // ── Battery optimization status ──────────
                 BatterySection(title = "BATTERY OPTIMIZATION") {
-                    Column(modifier = Modifier.padding(16.dp)) {
+                    Column(modifier = Modifier.padding(Spacing.CardPadding)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Box(
                                 modifier = Modifier
@@ -199,7 +208,7 @@ fun BatteryOptimizationScreen(
                                     .clip(CircleShape)
                                     .background(if (exempt) Green400 else Amber400),
                             )
-                            Spacer(modifier = Modifier.width(10.dp))
+                            Spacer(modifier = Modifier.width(Spacing.M))
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
                                     text = if (exempt) "Exempt from battery optimization" else "Battery optimization is ON",
@@ -226,19 +235,22 @@ fun BatteryOptimizationScreen(
 
                         if (!exempt) {
                             Spacer(modifier = Modifier.height(12.dp))
-                            HorizontalDivider(color = Slate700.copy(alpha = 0.6f))
+                            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.6f))
                             Spacer(modifier = Modifier.height(12.dp))
                             Button(
                                 onClick = { requestExemption() },
                                 modifier = Modifier.fillMaxWidth(),
                                 shape = RoundedCornerShape(12.dp),
-                                colors = ButtonDefaults.buttonColors(containerColor = Indigo600),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = MaterialTheme.colorScheme.primary,
+                                    contentColor = MaterialTheme.colorScheme.onPrimary,
+                                ),
                             ) {
                                 Icon(Icons.Default.BatteryChargingFull, "Request exemption", modifier = Modifier.size(18.dp))
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Text("Request battery exemption")
                             }
-                            Spacer(modifier = Modifier.height(8.dp))
+                            Spacer(modifier = Modifier.height(12.dp))
                             Text(
                                 text = "Android will ask you to allow AgentCall to run without " +
                                     "battery restrictions.",
@@ -252,7 +264,7 @@ fun BatteryOptimizationScreen(
 
                 // ── Manufacturer-specific guidance ───────
                 BatterySection(title = "YOUR PHONE — ${oem.displayName.uppercase()}") {
-                    Column(modifier = Modifier.padding(16.dp)) {
+                    Column(modifier = Modifier.padding(Spacing.CardPadding)) {
                         Text(
                             text = oem.instructions,
                             style = MaterialTheme.typography.bodyMedium,
@@ -262,31 +274,37 @@ fun BatteryOptimizationScreen(
                         Spacer(modifier = Modifier.height(12.dp))
                         Row(
                             modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Button(
                                 onClick = { openOemSettings() },
-                                modifier = Modifier.weight(1f),
+                                modifier = Modifier.weight(1f).height(42.dp),
                                 shape = RoundedCornerShape(12.dp),
-                                colors = ButtonDefaults.buttonColors(containerColor = Indigo600),
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = MaterialTheme.colorScheme.primary,
+                                    contentColor = MaterialTheme.colorScheme.onPrimary,
+                                ),
                             ) {
-                                Icon(Icons.Default.Settings, "Open phone settings", modifier = Modifier.size(18.dp))
+                                Icon(Icons.Default.Settings, "Open phone settings", modifier = Modifier.size(16.dp))
                                 Spacer(modifier = Modifier.width(6.dp))
-                                Text("Open phone settings")
+                                Text("Phone settings", style = MaterialTheme.typography.labelMedium)
                             }
                             OutlinedButton(
                                 onClick = { openDontKillMyApp() },
-                                modifier = Modifier.weight(1f),
+                                modifier = Modifier.weight(1f).height(42.dp),
                                 shape = RoundedCornerShape(12.dp),
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
                                 colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.onSurfaceVariant),
-                                border = null,
+                                border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
                             ) {
-                                Icon(Icons.Default.OpenInNew, "Guided instructions", modifier = Modifier.size(18.dp))
+                                Icon(Icons.Default.OpenInNew, "Guided instructions", modifier = Modifier.size(16.dp))
                                 Spacer(modifier = Modifier.width(6.dp))
-                                Text("Guided")
+                                Text("Guided", style = MaterialTheme.typography.labelMedium)
                             }
                         }
-                        Spacer(modifier = Modifier.height(8.dp))
+                        Spacer(modifier = Modifier.height(12.dp))
                         Text(
                             text = "Plain-text guide: ${oem.supportUrl}",
                             style = MonoLabel,
@@ -297,7 +315,7 @@ fun BatteryOptimizationScreen(
 
                 // ── Local audit log ───────────────────────
                 BatterySection(title = "LOCAL LOG") {
-                    Column(modifier = Modifier.padding(16.dp)) {
+                    Column(modifier = Modifier.padding(Spacing.CardPadding)) {
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -316,7 +334,7 @@ fun BatteryOptimizationScreen(
                                 Icon(
                                     imageVector = if (showLogs) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
                                     contentDescription = if (showLogs) "Collapse log" else "Expand log",
-                                    tint = Indigo400,
+                                    tint = MaterialTheme.colorScheme.primary,
                                     modifier = Modifier.size(18.dp),
                                 )
                             }
@@ -349,7 +367,7 @@ fun BatteryOptimizationScreen(
                     }
                 }
 
-                Spacer(modifier = Modifier.height(24.dp))
+                Spacer(modifier = Modifier.height(12.dp))
                 Button(
                     onClick = {
                         manager.onboardingShown = true
@@ -357,13 +375,16 @@ fun BatteryOptimizationScreen(
                     },
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 20.dp),
+                        .padding(horizontal = Spacing.ScreenPadding),
                     shape = RoundedCornerShape(12.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = Indigo600),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.primary,
+                        contentColor = MaterialTheme.colorScheme.onPrimary,
+                    ),
                 ) {
                     Text("Done", style = MaterialTheme.typography.labelLarge)
                 }
-                Spacer(modifier = Modifier.height(32.dp))
+                Spacer(modifier = Modifier.height(Spacing.XXL))
             }
         }
     }
@@ -371,10 +392,10 @@ fun BatteryOptimizationScreen(
 
 @Composable
 private fun BatterySection(title: String, content: @Composable () -> Unit) {
-    Column(modifier = Modifier.padding(horizontal = 20.dp)) {
-        Spacer(modifier = Modifier.height(24.dp))
+    Column(modifier = Modifier.padding(horizontal = Spacing.ScreenPadding)) {
+        Spacer(modifier = Modifier.height(Spacing.SectionGap))
         SectionLabel(title = title)
-        Spacer(modifier = Modifier.height(10.dp))
+        Spacer(modifier = Modifier.height(Spacing.SectionLabelGap))
         GlassCard { content() }
     }
 }

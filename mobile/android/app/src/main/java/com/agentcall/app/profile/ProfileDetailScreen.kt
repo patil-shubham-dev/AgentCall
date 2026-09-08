@@ -76,6 +76,7 @@ import com.agentcall.app.ui.theme.Slate400
 import com.agentcall.app.ui.theme.Slate50
 import com.agentcall.app.ui.theme.Slate750
 import com.agentcall.app.ui.theme.Slate800
+import com.agentcall.app.ui.theme.Spacing
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -111,7 +112,7 @@ fun ProfileDetailScreen(
                 },
                 actions = {
                     IconButton(onClick = { showEditSheet = true }) {
-                        Icon(Icons.Default.Edit, "Edit name", tint = Indigo400)
+                        Icon(Icons.Default.Edit, "Edit name", tint = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent),
@@ -130,17 +131,17 @@ fun ProfileDetailScreen(
             val p = profile
             if (p != null) {
                 LazyColumn(
-                    modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.fillMaxSize().padding(horizontal = Spacing.ScreenPadding),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
                     item {
-                        Spacer(modifier = Modifier.height(16.dp))
+                        Spacer(modifier = Modifier.height(12.dp))
                         ProfileDetailHeader(
                             name = p.name,
                             callCount = p.callCount,
                             lastCalledAt = p.lastCalledAt,
                         )
-                        Spacer(modifier = Modifier.height(16.dp))
+                        Spacer(modifier = Modifier.height(12.dp))
                         Text(
                             "Call History",
                             style = MaterialTheme.typography.titleSmall,
@@ -148,7 +149,7 @@ fun ProfileDetailScreen(
                             fontWeight = FontWeight.SemiBold,
                             letterSpacing = 0.5.sp,
                         )
-                        Spacer(modifier = Modifier.height(8.dp))
+                        Spacer(modifier = Modifier.height(12.dp))
                     }
 
                     if (calls.isEmpty()) {
@@ -170,7 +171,7 @@ fun ProfileDetailScreen(
                         CallHistoryItem(call = call, viewModel = viewModel)
                     }
 
-                    item { Spacer(modifier = Modifier.height(16.dp)) }
+                    item { Spacer(modifier = Modifier.height(Spacing.XXL)) }
                 }
             }
         }
@@ -207,7 +208,7 @@ private fun ProfileDetailHeader(name: String, callCount: Int, lastCalledAt: Long
         }
         Spacer(modifier = Modifier.height(12.dp))
         Text(name, style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.onBackground, fontWeight = FontWeight.Bold)
-        Spacer(modifier = Modifier.height(4.dp))
+        Spacer(modifier = Modifier.height(12.dp))
         val lastCall = lastCalledAt?.let { formatRelativeTime(it) } ?: "Never"
         Text(
             "$callCount calls · Last: $lastCall",
@@ -228,7 +229,7 @@ fun CallHistoryItem(call: CallRecordEntity, viewModel: ProfileDetailViewModel) {
         "cancelled" -> Red400
         "aborted" -> Red500
         "expired" -> Amber400
-        "ringing" -> Indigo400
+        "ringing" -> Slate50
         else -> Slate400
     }
     val statusIcon = when (call.status) {
@@ -247,14 +248,14 @@ fun CallHistoryItem(call: CallRecordEntity, viewModel: ProfileDetailViewModel) {
     ) {
         Column {
             Row(
-                modifier = Modifier.fillMaxWidth().clickable { expanded = !expanded }.padding(14.dp),
+                modifier = Modifier.fillMaxWidth().clickable { expanded = !expanded }.padding(12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Icon(
                     statusIcon, "Status: ${call.status}",
                     modifier = Modifier.size(20.dp), tint = statusColor,
                 )
-                Spacer(modifier = Modifier.width(10.dp))
+                Spacer(modifier = Modifier.width(12.dp))
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         formatCallDate(call.startedAt),
@@ -268,7 +269,7 @@ fun CallHistoryItem(call: CallRecordEntity, viewModel: ProfileDetailViewModel) {
                     )
                     // Backlog item 3: the AI-generated recap, when one exists.
                     if (call.summary.isNotBlank()) {
-                        Spacer(modifier = Modifier.height(4.dp))
+                        Spacer(modifier = Modifier.height(12.dp))
                         Text(
                             call.summary,
                             style = MaterialTheme.typography.bodySmall,
@@ -293,7 +294,7 @@ fun CallHistoryItem(call: CallRecordEntity, viewModel: ProfileDetailViewModel) {
                 exit = fadeOut(),
             ) {
                 Surface(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp).padding(bottom = 14.dp),
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp).padding(bottom = 14.dp),
                     shape = RoundedCornerShape(12.dp),
                     color = Slate750,
                 ) {
@@ -301,10 +302,10 @@ fun CallHistoryItem(call: CallRecordEntity, viewModel: ProfileDetailViewModel) {
                         Text(
                             "Transcript",
                             style = MaterialTheme.typography.labelSmall,
-                            color = Indigo400,
+                            color = Slate200,
                             fontWeight = FontWeight.SemiBold,
                         )
-                        Spacer(modifier = Modifier.height(8.dp))
+                        Spacer(modifier = Modifier.height(12.dp))
                         if (transcript.isEmpty()) {
                             Text(
                                 "No transcript available",
@@ -319,7 +320,7 @@ fun CallHistoryItem(call: CallRecordEntity, viewModel: ProfileDetailViewModel) {
                                     style = MaterialTheme.typography.bodySmall,
                                     color = if (msg.role == "ai") Slate200 else Slate50,
                                 )
-                                Spacer(modifier = Modifier.height(4.dp))
+                                Spacer(modifier = Modifier.height(12.dp))
                             }
                         }
                     }

@@ -330,32 +330,42 @@ fun SettingsScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background),
+            .background(MaterialTheme.colorScheme.background)
+            .statusBarsPadding()
+            .navigationBarsPadding(),
     ) {
-        // Header with ambient background behind — reduced top inset so header sits closer to status bar
-        Box(modifier = Modifier.height(68.dp)) {
+        // Header: SYSTEM INSET (statusBarsPadding above) + 12dp breathing.
+        // matchParentSize keeps the ambient backdrop inside the header's
+        // wrapped height — fillMaxSize here made this Box swallow the whole
+        // screen, reserving dead space below the title.
+        Spacer(modifier = Modifier.height(Spacing.XS))
+        Box(modifier = Modifier.fillMaxWidth()) {
             AmbientBackground(
-                accentColor = Indigo500,
+                accentColor = MaterialTheme.colorScheme.primary,
                 density = 0.6f,
                 speedMultiplier = 0.5f,
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier.matchParentSize(),
             )
-            Column(modifier = Modifier.fillMaxSize()) {
-                Spacer(modifier = Modifier.height(6.dp))
+            Column {
                 Text(
                     text = "Settings",
-                    style = MaterialTheme.typography.headlineMedium,
+                    style = MaterialTheme.typography.displaySmall,
                     color = MaterialTheme.colorScheme.onBackground,
-                    modifier = Modifier.padding(horizontal = 20.dp),
+                    modifier = Modifier.padding(horizontal = Spacing.ScreenPadding),
                 )
+                Spacer(modifier = Modifier.height(2.dp))
                 Text(
                     text = "Configure your connection",
-                    style = MaterialTheme.typography.bodySmall,
+                    style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 20.dp),
+                    modifier = Modifier.padding(horizontal = Spacing.ScreenPadding),
                 )
             }
         }
+        HorizontalDivider(
+            color = MaterialTheme.colorScheme.outline.copy(alpha = 0.6f),
+            modifier = Modifier.padding(start = Spacing.ScreenPadding, end = Spacing.ScreenPadding, top = Spacing.S),
+        )
 
         Column(
             modifier = Modifier
@@ -365,7 +375,7 @@ fun SettingsScreen(
             // ── Server Connection ────────────────────────
             SettingsSection(title = "SERVER CONNECTION") {
                 GlassCard {
-                    Column(modifier = Modifier.padding(16.dp)) {
+                    Column(modifier = Modifier.padding(Spacing.CardPadding)) {
                         // Status row — FCM-only idle: no persistent WS. Green = backend + FCM,
                         // Amber = backend ok but FCM missing, Red = backend unreachable.
                         val lampColor = when {
@@ -386,7 +396,7 @@ fun SettingsScreen(
                                     .clip(CircleShape)
                                     .background(lampColor.copy(alpha = 0.5f + dotAnim * 0.5f)),
                             )
-                            Spacer(modifier = Modifier.width(10.dp))
+                            Spacer(modifier = Modifier.width(Spacing.M))
                             Text(
                                 text = "Backend Server",
                                 style = MaterialTheme.typography.titleMedium,
@@ -400,14 +410,14 @@ fun SettingsScreen(
                                 Icon(Icons.Default.Refresh, "Refresh status", tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(18.dp))
                             }
                         }
-                        Spacer(modifier = Modifier.height(4.dp))
+                        Spacer(modifier = Modifier.height(12.dp))
                         Text(
                             text = connectionStatus,
                             style = MaterialTheme.typography.labelSmall,
                             color = lampColor,
                             maxLines = 3,
                         )
-                        Spacer(modifier = Modifier.height(4.dp))
+                        Spacer(modifier = Modifier.height(12.dp))
                         Text(
                             text = "Push: $fcmDetail",
                             style = MaterialTheme.typography.labelSmall,
@@ -416,7 +426,7 @@ fun SettingsScreen(
                         )
 
                         Spacer(modifier = Modifier.height(12.dp))
-                        HorizontalDivider(color = Slate700.copy(alpha = 0.6f))
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.6f))
                         Spacer(modifier = Modifier.height(12.dp))
 
                         Text(
@@ -425,7 +435,7 @@ fun SettingsScreen(
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
 
-                        Spacer(modifier = Modifier.height(10.dp))
+                        Spacer(modifier = Modifier.height(12.dp))
 
                         // IP input
                         OutlinedTextField(
@@ -461,7 +471,7 @@ fun SettingsScreen(
                         // Buttons row
                         Row(
                             modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
                         ) {
                             Button(
                                 onClick = { focusManager.clearFocus(); viewModel.connect(); onReconnect() },
@@ -501,7 +511,7 @@ fun SettingsScreen(
 
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Icon(Icons.Default.Speed, "Test connection speed", tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(18.dp))
-                            Spacer(modifier = Modifier.width(8.dp))
+                            Spacer(modifier = Modifier.width(Spacing.M))
                             Text("Test Connection",
                                 style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurface,
                                 fontWeight = FontWeight.Medium)
@@ -531,14 +541,14 @@ fun SettingsScreen(
                                     ConnectionTestStatus.SUCCESS -> {
                                         Row(verticalAlignment = Alignment.CenterVertically) {
                                             Icon(Icons.Default.CheckCircle, "Connection test passed", tint = Green400, modifier = Modifier.size(18.dp))
-                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Spacer(modifier = Modifier.width(Spacing.M))
                                             Text("${testLatency}ms", style = MaterialTheme.typography.labelSmall, color = Green400)
                                         }
                                     }
                                     ConnectionTestStatus.FAILED -> {
                                         Row(verticalAlignment = Alignment.CenterVertically) {
                                             Icon(Icons.Default.Error, "Connection test failed", tint = Red400, modifier = Modifier.size(18.dp))
-                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Spacer(modifier = Modifier.width(Spacing.M))
                                             Text("Failed", style = MaterialTheme.typography.labelSmall, color = Red400)
                                         }
                                     }
@@ -578,7 +588,7 @@ fun SettingsScreen(
                             }
                         }
 
-                        Spacer(modifier = Modifier.height(8.dp))
+                        Spacer(modifier = Modifier.height(12.dp))
 
                         Text(
                             text = "Default connects to production. Use a LAN IP (e.g. 192.168.1.100) for local dev.",
@@ -593,7 +603,7 @@ fun SettingsScreen(
             // ── Call Reliability ────────────────────────
             SettingsSection(title = "CALL RELIABILITY") {
                 GlassCard {
-                    Column(modifier = Modifier.padding(4.dp)) {
+                    Column(modifier = Modifier.padding(Spacing.CardPadding)) {
                         InfoRow(
                             icon = Icons.Default.BatteryAlert,
                             title = "Battery optimization & autostart",
@@ -622,7 +632,7 @@ fun SettingsScreen(
 
             SettingsSection(title = "CALLER TUNE") {
                 GlassCard {
-                    Column(modifier = Modifier.padding(4.dp)) {
+                    Column(modifier = Modifier.padding(Spacing.CardPadding)) {
                         InfoRow(
                             icon = Icons.Default.MusicNote,
                             title = "Ringtone",
@@ -644,8 +654,7 @@ fun SettingsScreen(
 
             // ── Call Messages ────────────────────────────
             CollapsibleSettingsSection(title = "CALL MESSAGES") {
-                GlassCard {
-                    Column(modifier = Modifier.padding(16.dp)) {
+                Column {
                         var declineSaved by remember { mutableStateOf(false) }
                         var laterSaved by remember { mutableStateOf(false) }
                         var laterMissingPlaceholder by remember { mutableStateOf(false) }
@@ -670,7 +679,7 @@ fun SettingsScreen(
                                 declineSaved = false
                             }
                         }
-                        Spacer(modifier = Modifier.height(16.dp))
+                        Spacer(modifier = Modifier.height(12.dp))
                         TemplateEditor(
                             title = "Call-back-later message",
                             subtitle = "Sent when you pick a time; {X} is replaced with the minutes you choose",
@@ -704,7 +713,6 @@ fun SettingsScreen(
                         }
                     }
                 }
-            }
 
             // ── Quiet Hours (backlog item 6) ────────────────────
             SettingsSection(title = "QUIET HOURS") {
@@ -714,7 +722,7 @@ fun SettingsScreen(
             // ── AI Connections ────────────────────────────
             SettingsSection(title = "AI CONNECTIONS") {
                 GlassCard {
-                    Column(modifier = Modifier.padding(16.dp)) {
+                    Column(modifier = Modifier.padding(Spacing.CardPadding)) {
                         Text(
                             text = "Connect AI assistants (ChatGPT, Claude, Opencode, ...) to your phone so they can call you.",
                             style = MaterialTheme.typography.bodySmall,
@@ -732,20 +740,20 @@ fun SettingsScreen(
                                     color = Red400,
                                 )
                             }
-                            Spacer(modifier = Modifier.height(8.dp))
+                            Spacer(modifier = Modifier.height(12.dp))
                         }
 
                         if (aiKeysLoading && aiKeys.isEmpty()) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-                                Spacer(modifier = Modifier.width(8.dp))
+                                Spacer(modifier = Modifier.width(Spacing.M))
                                 Text("Loading keys...", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
                         }
 
                         aiKeys.forEach { key ->
                             Row(
-                                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
                                 Icon(
@@ -754,7 +762,7 @@ fun SettingsScreen(
                                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                     modifier = Modifier.size(20.dp),
                                 )
-                                Spacer(modifier = Modifier.width(10.dp))
+                                Spacer(modifier = Modifier.width(Spacing.M))
                                 Text(
                                     text = key.name,
                                     style = MaterialTheme.typography.bodyMedium,
@@ -830,8 +838,7 @@ fun SettingsScreen(
 
             // ── Network Info ──────────────────────────────
             CollapsibleSettingsSection(title = "NETWORK INFO") {
-                GlassCard {
-                    Column(modifier = Modifier.padding(4.dp)) {
+                Column {
                         InfoRow(
                             icon = Icons.Default.Link,
                             title = "HTTP API",
@@ -851,16 +858,14 @@ fun SettingsScreen(
                         )
                     }
                 }
-            }
 
             // ── About ─────────────────────────────────────
             CollapsibleSettingsSection(title = "ABOUT") {
-                GlassCard {
-                    Column(modifier = Modifier.padding(4.dp)) {
+                Column {
                         InfoRow(
                             icon = Icons.Default.Info,
                             title = "Version",
-                            subtitle = "1.0.0",
+                            subtitle = com.agentcall.app.BuildConfig.VERSION_NAME,
                             onClick = {},
                         )
                         SettingsDivider()
@@ -877,11 +882,10 @@ fun SettingsScreen(
                         )
                     }
                 }
-            }
             // ── Privacy & Data (backlog item 17) ───────────────
             SettingsSection(title = "PRIVACY & DATA") {
                 GlassCard {
-                    Column(modifier = Modifier.padding(16.dp)) {
+                    Column(modifier = Modifier.padding(Spacing.CardPadding)) {
                         Text(
                             text = "Your voice stays on your device.",
                             style = MaterialTheme.typography.titleSmall,
@@ -912,7 +916,7 @@ fun SettingsScreen(
                 }
             }
 
-            Spacer(modifier = Modifier.height(96.dp))
+            Spacer(modifier = Modifier.height(Spacing.XXL))
         }
     }
 }
@@ -945,9 +949,14 @@ private fun AddAiDialog(
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedTextColor = MaterialTheme.colorScheme.onSurface,
                         unfocusedTextColor = MaterialTheme.colorScheme.onSurface,
-                        cursorColor = Indigo400,
-                        focusedBorderColor = Indigo600,
+                        cursorColor = MaterialTheme.colorScheme.primary,
+                        focusedBorderColor = MaterialTheme.colorScheme.primary,
                         unfocusedBorderColor = MaterialTheme.colorScheme.outline,
+                        focusedContainerColor = MaterialTheme.colorScheme.surface,
+                        unfocusedContainerColor = MaterialTheme.colorScheme.surface,
+                        disabledContainerColor = MaterialTheme.colorScheme.surface,
+                        disabledBorderColor = MaterialTheme.colorScheme.outline,
+                        disabledTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
                     ),
                     shape = RoundedCornerShape(12.dp),
                 )
@@ -1016,9 +1025,11 @@ private fun CreatedKeyCard(
 
     Surface(
         shape = RoundedCornerShape(12.dp),
-        color = Indigo600.copy(alpha = 0.12f),
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+        tonalElevation = 1.dp,
     ) {
-        Column(modifier = Modifier.padding(14.dp)) {
+        Column(modifier = Modifier.padding(Spacing.CardPadding)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(Icons.Default.CheckCircle, "Key created", tint = Green400, modifier = Modifier.size(18.dp))
                 Spacer(modifier = Modifier.width(6.dp))
@@ -1029,17 +1040,17 @@ private fun CreatedKeyCard(
                     fontWeight = FontWeight.Medium,
                 )
             }
-            Spacer(modifier = Modifier.height(4.dp))
+            Spacer(modifier = Modifier.height(12.dp))
             Text(
                 text = "This key is shown only once. Copy it now — it is not stored on the server.",
                 style = MaterialTheme.typography.labelSmall,
                 color = Red400,
             )
 
-            Spacer(modifier = Modifier.height(10.dp))
+            Spacer(modifier = Modifier.height(12.dp))
             KeySnippet(text = created.key, copyLabel = "Copy key", onCopy = { copy(created.key) })
 
-            Spacer(modifier = Modifier.height(10.dp))
+            Spacer(modifier = Modifier.height(12.dp))
             Text(
                 text = "Header-based clients (Claude, Opencode, Cursor)",
                 style = MaterialTheme.typography.labelSmall,
@@ -1048,7 +1059,7 @@ private fun CreatedKeyCard(
             )
             KeySnippet(text = headerSnippet, copyLabel = "Copy", onCopy = { copy(headerSnippet) })
 
-            Spacer(modifier = Modifier.height(10.dp))
+            Spacer(modifier = Modifier.height(12.dp))
             Text(
                 text = "ChatGPT (set Authentication to \u201CNone\u201D and paste this URL)",
                 style = MaterialTheme.typography.labelSmall,
@@ -1057,7 +1068,7 @@ private fun CreatedKeyCard(
             )
             KeySnippet(text = urlSnippet, copyLabel = "Copy", onCopy = { copy(urlSnippet) })
 
-            Spacer(modifier = Modifier.height(10.dp))
+            Spacer(modifier = Modifier.height(12.dp))
             Text(
                 text = "claude_desktop_config.json (Claude Desktop)",
                 style = MaterialTheme.typography.labelSmall,
@@ -1066,7 +1077,7 @@ private fun CreatedKeyCard(
             )
             KeySnippet(text = desktopJson, copyLabel = "Copy JSON", onCopy = { copy(desktopJson) }, maxLines = 10)
 
-            Spacer(modifier = Modifier.height(10.dp))
+            Spacer(modifier = Modifier.height(12.dp))
             Text(
                 text = "opencode.json (OpenCode)",
                 style = MaterialTheme.typography.labelSmall,
@@ -1078,7 +1089,7 @@ private fun CreatedKeyCard(
             Spacer(modifier = Modifier.height(12.dp))
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                 TextButton(onClick = onDismiss) {
-                    Text("Done", color = Indigo400)
+                    Text("Done", color = MaterialTheme.colorScheme.primary)
                 }
             }
         }
@@ -1094,19 +1105,21 @@ private fun KeySnippet(
 ) {
     Surface(
         shape = RoundedCornerShape(8.dp),
-        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.8f),
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+        tonalElevation = 1.dp,
     ) {
-        Column(modifier = Modifier.padding(10.dp)) {
+        Column(modifier = Modifier.padding(Spacing.CardPadding)) {
             Text(
                 text = text,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MonoBody.copy(color = MaterialTheme.colorScheme.onSurface),
+                color = MaterialTheme.colorScheme.onSurface,
                 maxLines = maxLines,
             )
             Spacer(modifier = Modifier.height(6.dp))
             TextButton(onClick = onCopy, modifier = Modifier.padding(0.dp)) {
                 Icon(Icons.Default.ContentCopy, "Copy", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(14.dp))
-                Spacer(modifier = Modifier.width(4.dp))
+                Spacer(modifier = Modifier.width(Spacing.M))
                 Text(copyLabel, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
             }
         }
@@ -1115,10 +1128,10 @@ private fun KeySnippet(
 
 @Composable
 private fun SettingsSection(title: String, content: @Composable () -> Unit) {
-    Column(modifier = Modifier.padding(horizontal = 20.dp)) {
-        Spacer(modifier = Modifier.height(12.dp))
+    Column(modifier = Modifier.padding(horizontal = Spacing.ScreenPadding)) {
+        Spacer(modifier = Modifier.height(Spacing.SectionGap))
         SectionLabel(title = title)
-        Spacer(modifier = Modifier.height(10.dp))
+        Spacer(modifier = Modifier.height(Spacing.SectionLabelGap))
         content()
     }
 }
@@ -1135,31 +1148,44 @@ private fun CollapsibleSettingsSection(title: String, content: @Composable () ->
         animationSpec = tween(200),
         label = "chevron",
     )
-    Column(modifier = Modifier.padding(horizontal = 20.dp)) {
-        Spacer(modifier = Modifier.height(24.dp))
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(Radii.Pill))
-                .clickable { expanded = !expanded }
-                .padding(vertical = 14.dp, horizontal = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
+    Column(modifier = Modifier.padding(horizontal = Spacing.ScreenPadding)) {
+        Spacer(modifier = Modifier.height(Spacing.SectionGap))
+        // Material 3 list-item pattern adapted to AgentCall's plate language:
+        // one tonal interactive container — label row + trailing expand icon
+        // (48dp+ target) — with the expanded content inside the same surface,
+        // so collapsed sections never look like floating labels in empty space.
+        androidx.compose.material3.Surface(
+            onClick = { expanded = !expanded },
+            shape = RoundedCornerShape(Radii.Panel),
+            color = MaterialTheme.colorScheme.surface,
+            border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+            tonalElevation = 0.dp,
         ) {
-            SectionLabel(title = title, modifier = Modifier.weight(1f))
-            Icon(
-                imageVector = Icons.Default.ExpandMore,
-                contentDescription = if (expanded) "Collapse $title" else "Expand $title",
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(20.dp).rotate(chevronRotation),
-            )
-        }
-        Spacer(modifier = Modifier.height(10.dp))
-        AnimatedVisibility(
-            visible = expanded,
-            enter = fadeIn() + expandVertically(),
-            exit = fadeOut() + shrinkVertically(),
-        ) {
-            content()
+            Column {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = Spacing.CardPadding, vertical = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    SectionLabel(title = title, modifier = Modifier.weight(1f))
+                    Icon(
+                        imageVector = Icons.Default.ExpandMore,
+                        contentDescription = if (expanded) "Collapse $title" else "Expand $title",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(20.dp).rotate(chevronRotation),
+                    )
+                }
+                AnimatedVisibility(
+                    visible = expanded,
+                    enter = fadeIn() + expandVertically(),
+                    exit = fadeOut() + shrinkVertically(),
+                ) {
+                    Column(modifier = Modifier.padding(start = Spacing.CardPadding, end = Spacing.CardPadding, bottom = Spacing.CardPadding)) {
+                        content()
+                    }
+                }
+            }
         }
     }
 }
@@ -1185,7 +1211,7 @@ private fun InfoRow(
     ) {
         Row(
             modifier = Modifier
-                .padding(horizontal = 16.dp, vertical = 14.dp)
+                .padding(horizontal = 12.dp, vertical = 14.dp)
                 .fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -1203,7 +1229,7 @@ private fun InfoRow(
                     modifier = Modifier.size(20.dp),
                 )
             }
-            Spacer(modifier = Modifier.width(14.dp))
+            Spacer(modifier = Modifier.width(Spacing.M))
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = title,
@@ -1221,7 +1247,7 @@ private fun InfoRow(
                 }
             }
             if (onClick != null) {
-                Spacer(modifier = Modifier.width(8.dp))
+                Spacer(modifier = Modifier.width(Spacing.M))
                 Icon(Icons.Default.ChevronRight, "View $title", tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f), modifier = Modifier.size(18.dp))
             }
         }
@@ -1232,7 +1258,9 @@ private fun InfoRow(
 private fun SettingsDivider() {
     HorizontalDivider(
         color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
-        modifier = Modifier.padding(start = 66.dp, end = 16.dp),
+        // Aligns with the text column inside InfoRows: row padding (16) + icon
+        // box (36) + gap (8) = 60dp from the card's padded content edge.
+        modifier = Modifier.padding(start = 60.dp, end = 16.dp),
     )
 }
 
@@ -1258,10 +1286,10 @@ private fun QuietHoursCard(manager: QuietHoursManager) {
     }
 
     GlassCard {
-        Column(modifier = Modifier.padding(16.dp)) {
+        Column(modifier = Modifier.padding(Spacing.CardPadding)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(Icons.Default.Nightlight, "Quiet hours", tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
-                Spacer(modifier = Modifier.width(10.dp))
+                Spacer(modifier = Modifier.width(Spacing.M))
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = "Quiet hours",
@@ -1275,7 +1303,7 @@ private fun QuietHoursCard(manager: QuietHoursManager) {
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-                Spacer(modifier = Modifier.width(12.dp))
+                Spacer(modifier = Modifier.width(Spacing.M))
                 Switch(
                     checked = enabled,
                     onCheckedChange = { on -> enabled = on; manager.globalEnabled = on },
@@ -1304,7 +1332,7 @@ private fun QuietHoursCard(manager: QuietHoursManager) {
                     subtitle = QuietHoursManager.minutesToLabel(endMin),
                     onClick = { openPicker(endMin) { endMin = it; manager.setGlobalRange(startMin, it) } },
                 )
-                Spacer(modifier = Modifier.height(4.dp))
+                Spacer(modifier = Modifier.height(12.dp))
 
                 val nowMinutes = java.time.LocalTime.now().toSecondOfDay() / 60
                 val isActiveNow = QuietHoursManager.isMinutesInRange(nowMinutes, startMin, endMin)
@@ -1352,7 +1380,7 @@ private fun TemplateEditor(
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        Spacer(modifier = Modifier.height(10.dp))
+        Spacer(modifier = Modifier.height(12.dp))
         OutlinedTextField(
             value = value,
             onValueChange = onValueChange,
@@ -1363,11 +1391,13 @@ private fun TemplateEditor(
             colors = OutlinedTextFieldDefaults.colors(
                 focusedTextColor = MaterialTheme.colorScheme.onSurface,
                 unfocusedTextColor = MaterialTheme.colorScheme.onSurface,
-                cursorColor = Indigo400,
-                focusedBorderColor = Indigo600,
+                cursorColor = MaterialTheme.colorScheme.primary,
+                focusedBorderColor = MaterialTheme.colorScheme.primary,
                 unfocusedBorderColor = MaterialTheme.colorScheme.outline,
                 focusedContainerColor = MaterialTheme.colorScheme.surface,
                 unfocusedContainerColor = MaterialTheme.colorScheme.surface,
+                errorBorderColor = MaterialTheme.colorScheme.error,
+                errorCursorColor = MaterialTheme.colorScheme.error,
             ),
             shape = RoundedCornerShape(12.dp),
         )
@@ -1395,7 +1425,7 @@ private fun TemplateEditor(
                 if (isSaved) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(Icons.Default.CheckCircle, "Saved", tint = Green400, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(4.dp))
+                        Spacer(modifier = Modifier.width(Spacing.M))
                         Text("Saved", style = MaterialTheme.typography.labelMedium, color = Green400)
                     }
                 } else {

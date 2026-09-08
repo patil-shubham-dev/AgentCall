@@ -57,42 +57,44 @@ fun HomeScreen(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         containerColor = MaterialTheme.colorScheme.background,
     ) { innerPadding ->
+        // Top inset is applied exactly once: this screen's own Scaffold
+        // innerPadding already carries the status-bar inset (MainApp's
+        // Scaffold passes zero insets — see MainActivity). App spacing below
+        // it is 12dp; the section gap before "Your agents" is Spacing.Section.
         Column(
-            modifier = Modifier.fillMaxSize().padding(
-                top = (innerPadding.calculateTopPadding() - 10.dp).coerceAtLeast(0.dp),
-                bottom = innerPadding.calculateBottomPadding(),
-                start = innerPadding.calculateStartPadding(androidx.compose.ui.unit.LayoutDirection.Ltr),
-                end = innerPadding.calculateEndPadding(androidx.compose.ui.unit.LayoutDirection.Ltr),
-            )
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding)
+                .padding(top = Spacing.XS)
         ) {
             Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = Spacing.ScreenPadding).padding(top = 0.dp, bottom = Spacing.M),
+                modifier = Modifier.fillMaxWidth().padding(horizontal = Spacing.ScreenPadding),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                // Brand lockup: larger transparent logo + reduced wordmark, composed as one system.
-                // Logo is centered to the two-line text block (wordmark + status) for optical balance.
+                // Brand lockup: logo + wordmark as one composition on a single
+                // line; live status/version sit in the right-hand block.
                 Row(
-                    modifier = Modifier.weight(1f),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
+                    // Canonical brand mark: docs/assets/agentcall-logo.svg (agentcall_logo_transparent)
                     Image(
-                        painter = painterResource(R.drawable.agentcall_adaptive_foreground),
+                        painter = painterResource(R.drawable.agentcall_logo_transparent),
                         contentDescription = null,
-                        modifier = Modifier.size(48.dp),
+                        modifier = Modifier.size(36.dp),
                     )
-                    Spacer(modifier = Modifier.width(12.dp))
-                    Column {
-                        Text(
-                            text = "AgentCall",
-                            style = MaterialTheme.typography.displayLarge.copy(
-                                fontSize = 19.sp,
-                                lineHeight = 23.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                letterSpacing = 0.12.sp,
-                            ),
-                            color = MaterialTheme.colorScheme.onBackground,
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Text(
+                        text = "AgentCall",
+                        style = MaterialTheme.typography.displayLarge.copy(
+                            fontSize = 26.sp,
+                            lineHeight = 30.sp,
+                        ),
+                        color = MaterialTheme.colorScheme.onBackground,
+                    )
+                }
+                Spacer(modifier = Modifier.weight(1f))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(horizontalAlignment = Alignment.End) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Box(
                                 modifier = Modifier.size(7.dp).clip(CircleShape)
@@ -100,29 +102,32 @@ fun HomeScreen(
                                         when { state.isReconnecting -> DotReconnecting; state.isConnected -> DotOnline; else -> DotOffline }
                                     )
                             )
-                            Spacer(modifier = Modifier.width(7.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
                             Text(
                                 text = when { state.isReconnecting -> "Reconnecting"; state.isConnected -> "Ready"; else -> "Offline" },
-                                style = MaterialTheme.typography.labelSmall,
+                                style = MaterialTheme.typography.labelMedium,
                                 color = when { state.isReconnecting -> Warning; state.isConnected -> Success; else -> MaterialTheme.colorScheme.onSurfaceVariant },
                             )
-                            if (state.isConnected) {
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                    "\u00B7 v1.0",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                                )
-                            }
                         }
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            "v${com.agentcall.app.BuildConfig.VERSION_NAME}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(12.dp))
+                    IconButton(onClick = onOpenSettings, modifier = Modifier.size(40.dp).clip(CircleShape).background(MaterialTheme.colorScheme.surface)) {
+                        Icon(Icons.Default.Settings, contentDescription = "Settings", tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
                     }
                 }
-                Spacer(modifier = Modifier.width(16.dp))
-                IconButton(onClick = onOpenSettings, modifier = Modifier.size(40.dp).clip(CircleShape).background(MaterialTheme.colorScheme.surface)) {
-                    Icon(Icons.Default.Settings, contentDescription = "Settings", tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
-                }
             }
-            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.6f))
+            HorizontalDivider(
+                color = MaterialTheme.colorScheme.outline.copy(alpha = 0.6f),
+                // 12dp above (breathing from the header) so the divider never
+                // touches the header row; below, "Your agents" owns its gap.
+                modifier = Modifier.padding(start = Spacing.ScreenPadding, end = Spacing.ScreenPadding, top = Spacing.S),
+            )
             if (showBatteryBanner) {
                 MinimalBatteryBanner(onOpen = { viewModel.dismissBatteryBanner(); onOpenBatteryHelp() }, onDismiss = { viewModel.dismissBatteryBanner() })
             }
@@ -155,7 +160,9 @@ private fun AgentList(
     onProfileLongPressed: (AiProfileEntity) -> Unit,
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
-        Text("Your agents", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = Spacing.ScreenPadding, vertical = Spacing.S))
+        // Asymmetric label spacing = hierarchy: 20dp above (separates the list
+        // from the header block), 8dp below (label belongs to its cards).
+        Text("Your agents", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = Spacing.ScreenPadding, end = Spacing.ScreenPadding, top = Spacing.Section, bottom = Spacing.M))
         LazyColumn(modifier = Modifier.fillMaxSize().padding(horizontal = Spacing.ScreenPadding), verticalArrangement = Arrangement.spacedBy(Spacing.ListGap), contentPadding = PaddingValues(bottom = Spacing.XXL)) {
             items(profiles, key = { it.id }) { profile ->
                 AgentRow(profile = profile, aiKey = aiStatus[profile.name], lastSeenText = formatLastSeen(agentStatus[profile.name]?.lastSeenAt), onClick = { onProfileClicked(profile.id) }, onLongPress = { onProfileLongPressed(profile) })
@@ -187,7 +194,7 @@ private fun AgentRow(profile: AiProfileEntity, aiKey: AiKeyItem?, onClick: () ->
                     Text("$statusText \u00B7 $recencyLine", style = MaterialTheme.typography.labelSmall, color = if (presence == AiPresence.ONLINE || presence == AiPresence.BUSY) dotColor else MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }
-            Spacer(modifier = Modifier.width(10.dp))
+            Spacer(modifier = Modifier.width(12.dp))
             Icon(Icons.Default.ChevronRight, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f), modifier = Modifier.size(20.dp))
         }
     }
@@ -251,7 +258,7 @@ private fun DisconnectedContentMinimal(onRetry: () -> Unit, onOpenSettings: () -
         Spacer(modifier = Modifier.height(Spacing.L))
         Row(horizontalArrangement = Arrangement.Center) {
             Button(onClick = onRetry, shape = RoundedCornerShape(Radii.Field), colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)) { Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(18.dp)); Spacer(modifier = Modifier.width(6.dp)); Text("Retry connection") }
-            Spacer(modifier = Modifier.width(8.dp))
+            Spacer(modifier = Modifier.width(12.dp))
             OutlinedButton(onClick = onOpenSettings, shape = RoundedCornerShape(Radii.Field)) { Text("Open Settings") }
         }
     }
