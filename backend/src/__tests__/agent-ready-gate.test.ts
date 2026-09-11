@@ -140,7 +140,7 @@ describe('Phase-2 agent-ready gate', () => {
     expect(phoneWs.send).not.toHaveBeenCalled();
 
     // Agent picks up the deferred call and starts working it.
-    service.registerAiWait(callId, 60_000);
+    await service.registerAiWait(callId, 60_000);
     await service.attemptRing(callId, MAX_RING_RETRIES);
     await flush();
 
@@ -365,7 +365,7 @@ describe('Phase-2 gate: call.delayed observability event', () => {
     serviceModule.registerPhone('user-busy', ws);
 
     // Agent is actively working a different call.
-    svc.registerAiWait('call-other', 60_000);
+    await svc.registerAiWait('call-other', 60_000);
 
     await svc.createCall({
       userId: 'user-busy',

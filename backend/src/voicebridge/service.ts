@@ -363,7 +363,17 @@ export class VoiceBridgeService {
     this.sessionChangeWaiters.get(callId)?.forEach((wake) => wake());
   }
 
-  registerAiWait(callId: string, timeoutMs: number | null): () => void {
+  /**
+   * Registers an ai-wait lease and persists the wait fact (activeUntil/count)
+   * onto the existing session row via the normal sessionRepo.save path — the
+   * sessions.data JSONB blob carries the whole session object, so no separate
+   * write path or migration is needed. Awaited by callers (notably the
+   * send_message_and_wait tool) so the fact is durable before the AI message
+   * is sent: a crash after the send still leaves "mid-wait + deadline" on the
+   * row for restoreAiWaits() to pick back up. Best-effort: a repo failure is
+   * logged, never thrown — the in-memory lease (the wake mechanism) still works.
+   */
+  async registerAiWait(callId: string, timeoutMs: number | null): Promise<() => Promise<void>> {
     const startedAt = now();
     const existing = this.aiWaitLeases.get(callId);
     // timeoutMs === null = turn-lease semantics (v2, ENGINE_V2): no client
@@ -394,9 +404,10 @@ export class VoiceBridgeService {
       lastActiveAt: startedAt,
     });
     this.notifyAiWaitStatus(callId);
+    await this.persistAiWaitState(callId);
 
     let disposed = false;
-    return () => {
+    return async () => {
       if (disposed) return;
       disposed = true;
       const current = this.aiWaitLeases.get(callId);
@@ -411,7 +422,69 @@ export class VoiceBridgeService {
         this.aiWaitLeases.set(callId, { ...current, count: current.count - 1 });
       }
       this.notifyAiWaitStatus(callId);
+      await this.persistAiWaitState(callId);
     };
+  }
+
+  /**
+   * Writes the current in-memory lease entry onto the session row (load,
+   * mutate the aiWait* fields, save — the same save path every other mutation
+   * uses), serialized per call so it can't interleave with addMessage-style
+   * read-modify-write saves. A zero/absent count clears the durable fact.
+   */
+  private async persistAiWaitState(callId: string): Promise<void> {
+    try {
+      const entry = this.aiWaitLeases.get(callId);
+      await withSessionLock(callId, async () => {
+        const session = await this.sessionRepo.findById(callId);
+        if (!session) return;
+        if (entry && entry.count > 0) {
+          session.aiWaitActiveUntil = entry.activeUntil;
+          session.aiWaitCount = entry.count;
+          session.aiWaitLastActiveAt = entry.lastActiveAt;
+        } else {
+          session.aiWaitActiveUntil = null;
+          session.aiWaitCount = 0;
+          session.aiWaitLastActiveAt = entry?.lastActiveAt ?? session.aiWaitLastActiveAt;
+        }
+        await this.sessionRepo.save(session);
+      });
+    } catch (err) {
+      // Durability is best-effort: the live wait (map + watcher) is unaffected.
+      logger.error({ err, callId }, '[aiWait] wait-state persist failed');
+    }
+  }
+
+  /**
+   * Rehydrates the in-memory lease map from durable wait facts after a
+   * restart. RecoveryManager.loadFromDatabase already reloaded the rows
+   * (including aiWait* fields) into the repo — this only revives the map
+   * entries the live status/readiness checks read. Revives solely open calls
+   * whose persisted deadline is still in the future; expired or terminal rows
+   * keep their fact on the row but get no live lease. Call at boot after the
+   * stale-session sweep so leases for already-swept calls are never revived.
+   * Returns how many leases were revived.
+   */
+  async restoreAiWaits(nowMs: number = Date.now()): Promise<number> {
+    const sessions = await this.sessionRepo.list();
+    let restored = 0;
+    for (const session of sessions) {
+      if (session.status !== 'pending' && session.status !== 'active' && session.status !== 'paused') continue;
+      const count = session.aiWaitCount ?? 0;
+      const until = session.aiWaitActiveUntil;
+      if (count <= 0 || !until) continue;
+      if (Date.parse(until) <= nowMs) continue;
+      this.aiWaitLeases.set(session.id, {
+        count,
+        activeUntil: until,
+        lastActiveAt: session.aiWaitLastActiveAt ?? new Date(nowMs).toISOString(),
+      });
+      restored++;
+    }
+    if (restored > 0) {
+      logger.info({ restored }, '[aiWait] restored wait leases from persisted session rows');
+    }
+    return restored;
   }
 
   getAiWaitStatus(callId: string): AiWaitStatus {
@@ -423,6 +496,16 @@ export class VoiceBridgeService {
       activeUntil: active ? lease.activeUntil : null,
       lastActiveAt: lease.lastActiveAt,
     };
+  }
+
+  /**
+   * Clears the durable wait fact on a session that is about to be saved as
+   * terminal. Callers already drop the map entry; without this the row would
+   * keep claiming "mid-wait" for a finished call.
+   */
+  private clearPersistedAiWait(session: VoiceCallSession): void {
+    session.aiWaitActiveUntil = null;
+    session.aiWaitCount = 0;
   }
 
   /**
@@ -688,6 +771,7 @@ export class VoiceBridgeService {
       session.status = 'completed';
       session.completedAt = now();
       session.retentionExpiresAt = new Date(Date.now() + COMPLETED_RETENTION_MS).toISOString();
+      this.clearPersistedAiWait(session);
 
       if (result) {
         session.result = result;
@@ -746,6 +830,7 @@ export class VoiceBridgeService {
       session.status = 'cancelled';
       session.completedAt = now();
       session.retentionExpiresAt = new Date(Date.now() + CANCELLED_RETENTION_MS).toISOString();
+      this.clearPersistedAiWait(session);
 
       await this.sessionRepo.save(session);
       await this.callbackRepo.delete(session.userId);
@@ -767,8 +852,9 @@ export class VoiceBridgeService {
   }
 
   /**
-   * Terminal state distinct from a user cancel: the owning agent vanished
-   * (its last MCP session closed or was idle-swept) while the call was open.
+   * Terminal state distinct from a user cancel: the owning agent deliberately
+   * disconnected (its last MCP session was explicitly closed) while the call
+   * was open. Sweep-driven presence loss never aborts — see registerMcpEndpoint.
    * Persisted as status 'aborted' and notified as call_aborted so the phone
    * can show "AI disconnected" instead of a generic cancelled/failed call.
    * Idempotent for terminal states, like cancelCall/completeCall.
@@ -790,6 +876,7 @@ export class VoiceBridgeService {
       session.status = 'aborted';
       session.completedAt = now();
       session.retentionExpiresAt = new Date(Date.now() + CANCELLED_RETENTION_MS).toISOString();
+      this.clearPersistedAiWait(session);
 
       await this.sessionRepo.save(session);
       await this.callbackRepo.delete(session.userId);
@@ -849,11 +936,14 @@ export class VoiceBridgeService {
   }
 
   /**
-   * Drops every ai_wait lease held by the agent's calls. Called when the
-   * agent's last MCP session closed — including the liveness sweep, where the
-   * waiter process is dead and its dispose() will never run — so a stale lease
-   * can't shield the calls from cancelCallsByAgent. Returns how many leases
-   * were force-disposed.
+   * Drops every ai_wait lease held by the agent's calls. Called only on the
+   * explicit-disconnect path (DELETE /mcp closed the agent's last session),
+   * where the waiter process is gone and its dispose() will never run — so a
+   * stale lease can't shield the calls from cancelCallsByAgent. Sweep-driven
+   * presence loss never calls this (transport liveness is not call
+   * lifecycle). Also clears the durable wait fact per disposed call so the
+   * row stops claiming "mid-wait". Returns how many leases were
+   * force-disposed.
    */
   async forceDisposeAiWaits(agentId: string): Promise<number> {
     const sessions = await this.sessionRepo.findByAgentId(agentId);
@@ -861,6 +951,7 @@ export class VoiceBridgeService {
     for (const session of sessions) {
       if (this.aiWaitLeases.delete(session.id)) {
         disposed++;
+        await this.persistAiWaitState(session.id);
       }
     }
     if (disposed > 0) {

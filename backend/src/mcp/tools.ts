@@ -274,7 +274,7 @@ export function createTools(voicebridge: VoiceBridgeService): McpTool[] {
             : Math.max(rawTimeout, 1)
           : Math.min(Math.max(rawTimeout ?? 15, 1), 45);
 
-        const disposeAiWait = voicebridge.registerAiWait(
+        const disposeAiWait = await voicebridge.registerAiWait(
           callId,
           clientWindowSeconds === undefined ? null : clientWindowSeconds * 1000,
         );
@@ -356,7 +356,7 @@ export function createTools(voicebridge: VoiceBridgeService): McpTool[] {
           }, null, 2));
         } finally {
           watcher.dispose();
-          disposeAiWait();
+          await disposeAiWait();
         }
       },
     },

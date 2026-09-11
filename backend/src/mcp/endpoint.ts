@@ -127,18 +127,28 @@ function isPingNotification(body: unknown): boolean {
 }
 
 export function registerMcpEndpoint(app: FastifyInstance, voicebridge: VoiceBridgeService): McpSessionRegistry {
-  // When the LAST MCP session of an agent closes — by explicit DELETE, the
-  // 30-min idle sweep, or the 45s liveness sweep (kill -9 / dropped TCP) —
-  // abort that agent's open calls so a crashed/abandoned agent process never
-  // leaves calls ringing or paused. cancelCallsByAgent skips calls with an
-  // active ai_wait lease (the agent's waiter is still alive mid-turn), so a
-  // long send_message_and_wait that outlived the idle window can't get its
-  // call cancelled — EXCEPT here the dead agent's leases are force-disposed
-  // first: a session whose heartbeat stopped has no live waiter, and a stale
-  // lease must never shield the call from the disconnect abort.
+  // Transport liveness is not call lifecycle. When the LAST MCP session of an
+  // agent closes, the trigger path decides what happens:
+  // - explicit DELETE (deliberate agent disconnect): keep the historical
+  //   behavior — abort that agent's open calls so a deliberately-shut-down
+  //   agent never leaves calls ringing or paused. cancelCallsByAgent skips
+  //   calls with an active ai_wait lease (the agent's waiter is still alive
+  //   mid-turn) — EXCEPT here the disconnecting agent's leases are
+  //   force-disposed first: a deliberate disconnect has no live waiter, and a
+  //   stale lease must never shield the call from the disconnect abort.
+  // - liveness/idle sweep (missed heartbeat, kill -9 / dropped TCP, or 30-min
+  //   idle): presence-only. The session is already gone from the registry, so
+  //   isAgentReadyForCall flips to false on its own and the phone keeps
+  //   showing "AI is not currently responding". Calls are terminated only by
+  //   the call-level sweeps (PENDING_CALL_TTL_MS / STALE_ACTIVE_THRESHOLD_MS).
+  //   An agent going quiet mid-exploration must never abort its calls.
   const sessions = new McpSessionRegistry(
-    (agentName) => {
-      logger.info({ agentName }, '[MCP] last session for agent closed; aborting open calls');
+    (agentName, cause) => {
+      if (cause !== 'explicit-delete') {
+        logger.info({ agentName, cause }, '[MCP] agent presence lost (sweep); calls untouched, call-level sweeps own termination');
+        return;
+      }
+      logger.info({ agentName }, '[MCP] last session for agent closed explicitly; aborting open calls');
       void voicebridge
         .forceDisposeAiWaits(agentName)
         .then(() => voicebridge.cancelCallsByAgent(agentName, 'agent_disconnected'))
@@ -256,8 +266,10 @@ export function registerMcpEndpoint(app: FastifyInstance, voicebridge: VoiceBrid
   );
 
   // Liveness sweep: closes sessions whose heartbeat stopped (kill -9 / dropped
-  // TCP) when the agent still has open calls, so a hard-crashed agent's calls
-  // are aborted in ~45s instead of waiting for the 30-min idle sweep.
+  // TCP) when the agent still has open calls, so a hard-crashed agent stops
+  // looking present within ~45s instead of waiting for the 30-min idle sweep.
+  // Closing only drops the live-presence signal — calls are never aborted
+  // here (see the onAgentGone wiring above).
   const livenessSweeper = setInterval(() => {
     void sessions
       .sweepDead(config.mcp.livenessTimeoutMs)

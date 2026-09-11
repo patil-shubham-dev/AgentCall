@@ -46,6 +46,17 @@ export interface VoiceCallSession {
   createdAt: string;
   /** Set when ring dispatch succeeded (WS or FCM). After this point MCP disconnect must not abort. */
   ringDispatchedAt?: string;
+  /**
+   * Durable ai-wait fact: mirrors the in-memory aiWaitLeases entry
+   * (VoiceBridgeService.registerAiWait) so a restart doesn't silently drop
+   * "this call was mid-wait". The wake plumbing (sessionChangeWaiters,
+   * counters) stays in-process only — it is fine to lose on crash; only the
+   * fact of an active wait + deadline is persisted, on the existing session
+   * row (sessions.data JSONB carries the whole object, no DDL needed).
+   */
+  aiWaitActiveUntil?: string | null;
+  aiWaitCount?: number;
+  aiWaitLastActiveAt?: string;
   lastActivityAt?: string;
   connectedAt?: string;
   pausedAt?: string;

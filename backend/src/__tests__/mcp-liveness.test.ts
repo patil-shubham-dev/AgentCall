@@ -80,7 +80,7 @@ describe('McpSessionRegistry sweepDead', () => {
     const closed = await registry.sweepDead(45_000);
 
     expect(closed).toBe(1);
-    expect(onAgentGone).toHaveBeenCalledWith('agent-1');
+    expect(onAgentGone).toHaveBeenCalledWith('agent-1', 'liveness-timeout');
   });
 
   it('does not close a session with a fresh heartbeat', async () => {
@@ -138,7 +138,7 @@ describe('McpSessionRegistry sweepDead', () => {
     alive.lastHeartbeatAt = Date.now() - 46_000;
     const closed2 = await registry.sweepDead(45_000);
     expect(closed2).toBe(1);
-    expect(onAgentGone).toHaveBeenCalledWith('agent-1');
+    expect(onAgentGone).toHaveBeenCalledWith('agent-1', 'liveness-timeout');
   });
 });
 
@@ -151,7 +151,7 @@ describe('forceDisposeAiWaits (dead-agent sweep bypasses the ai_wait guard)', ()
     await sessionRepo.create(makeSession({ id: 'call-free', agentId: 'agent-1', status: 'active' }));
 
     // The dead agent left a lease behind (its dispose() never ran).
-    service.registerAiWait('call-leased', null);
+    await service.registerAiWait('call-leased', null);
 
     // Without force-dispose, the guard skips the leased call.
     await service.cancelCallsByAgent('agent-1', 'agent_disconnected');
@@ -180,8 +180,8 @@ describe('forceDisposeAiWaits (dead-agent sweep bypasses the ai_wait guard)', ()
     await sessionRepo.create(makeSession({ id: 'mine', agentId: 'agent-1', status: 'active' }));
     await sessionRepo.create(makeSession({ id: 'theirs', agentId: 'agent-2', status: 'active' }));
 
-    service.registerAiWait('mine', null);
-    service.registerAiWait('theirs', null);
+    await service.registerAiWait('mine', null);
+    await service.registerAiWait('theirs', null);
 
     await service.forceDisposeAiWaits('agent-1');
     await service.cancelCallsByAgent('agent-1', 'agent_disconnected');

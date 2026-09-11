@@ -47,7 +47,7 @@ describe('ENGINE_V2 lease-mode send_message_and_wait', () => {
     const service = makeService();
     const callId = await makeActiveCall(service);
 
-    const dispose = service.registerAiWait(callId, null);
+    const dispose = await service.registerAiWait(callId, null);
     // The uncapped lease now carries a hard server-side ceiling (default 15
     // min) so a crashed waiter can never shield a call indefinitely. activeUntil
     // must be a real timestamp, not null.
@@ -58,7 +58,7 @@ describe('ENGINE_V2 lease-mode send_message_and_wait', () => {
     const nowMs = Date.now();
     expect(untilMs - nowMs).toBeGreaterThan(14 * 60 * 1000);
     expect(untilMs - nowMs).toBeLessThanOrEqual(16 * 60 * 1000);
-    dispose();
+    await dispose();
     expect(service.getAiWaitStatus(callId).active).toBe(false);
   });
 
@@ -69,7 +69,7 @@ describe('ENGINE_V2 lease-mode send_message_and_wait', () => {
     // Register without disposing (simulates a crashed waiter whose dispose()
     // never runs): the lease must still self-expire once maxTurnLeaseMs
     // elapses, so cancelCallsByAgent can abort the call afterwards.
-    service.registerAiWait(callId, null);
+    await service.registerAiWait(callId, null);
     const status = service.getAiWaitStatus(callId);
     const untilMs = Date.parse(must(status.activeUntil, 'activeUntil'));
     expect(status.active).toBe(true);
@@ -80,7 +80,7 @@ describe('ENGINE_V2 lease-mode send_message_and_wait', () => {
       // Fresh call so no overlapping-lease "farthest deadline wins" logic
       // interferes; a 100ms ceiling is way below the real 15-min default.
       const call2 = await makeActiveCall(service);
-      service.registerAiWait(call2, null);
+      await service.registerAiWait(call2, null);
       expect(service.getAiWaitStatus(call2).active).toBe(true);
 
       // Simulate the clock passing the ceiling: sleep past 100ms.
@@ -154,14 +154,14 @@ describe('ENGINE_V2 lease-mode send_message_and_wait', () => {
     expect(waitTool).toBeDefined();
     if (!waitTool) throw new Error('send_message_and_wait tool missing');
 
-    const dispose = service.registerAiWait(callId, 45_000);
+    const dispose = await service.registerAiWait(callId, 45_000);
     const status = service.getAiWaitStatus(callId);
     expect(status.active).toBe(true);
     expect(status.activeUntil).not.toBeNull();
     const untilMs = Date.parse(must(status.activeUntil, 'activeUntil'));
     expect(untilMs - Date.now()).toBeGreaterThan(40_000);
     expect(untilMs - Date.now()).toBeLessThanOrEqual(46_000);
-    dispose();
+    await dispose();
 
     const schema = waitTool.inputSchema as { properties: { timeout_seconds: { maximum: number } } };
     expect(schema.properties.timeout_seconds.maximum).toBe(45);

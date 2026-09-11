@@ -319,6 +319,15 @@ async function main() {
     logger.error({ err }, '[startup] stale-session sweep failed');
   });
 
+  // Revive the in-memory ai-wait leases whose fact survived on the reloaded
+  // session rows (RecoveryManager.loadFromDatabase brought the aiWait* fields
+  // back with the rows — traced: db list() -> rowToSession spread -> memory
+  // create()). Runs after the stale sweep so leases for already-swept calls
+  // are never revived; expired deadlines and terminal rows are skipped inside.
+  await voiceBridgeService.restoreAiWaits().catch((err) => {
+    logger.error({ err }, '[startup] ai-wait restore failed');
+  });
+
   // Periodic backstop for orphaned sessions (e.g. phone offline during decline,
   // app force-stopped mid-retry): without this, a pending call survives until
   // the next restart, and AI message traffic keeps resetting its activity clock.

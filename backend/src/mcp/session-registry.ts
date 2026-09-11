@@ -17,16 +17,26 @@ export interface McpManagedSession {
 }
 
 /**
+ * Why an agent's last session closed. Transport liveness is not call
+ * lifecycle: only 'explicit-delete' (the client deliberately closed its
+ * session via DELETE /mcp) may terminate calls. Both sweep causes only drop
+ * the live-presence signal — the session is already gone from the registry,
+ * so presence-derived checks flip on their own. Calls then end only via the
+ * call-level sweeps (PENDING_CALL_TTL_MS / STALE_ACTIVE_THRESHOLD_MS).
+ */
+export type AgentGoneCause = 'explicit-delete' | 'liveness-timeout' | 'idle-timeout';
+
+/**
  * In-memory registry of MCP sessions with per-session last-activity tracking.
  * MCP sessions only die via an explicit client DELETE or a sweep; without
  * those, dropped connections (the common case) leak sessions forever.
  *
- * [onAgentGone] fires when the LAST live session of an agent closes (by any
- * path — explicit DELETE, idle sweep, or liveness sweep). The endpoint wires
- * it to abort that agent's open calls, so a crashed/abandoned agent process
- * can't leave calls ringing or paused. It deliberately does NOT fire while
- * another session of the same agent remains — a single session churn must
- * never cancel calls of a still-connected agent.
+ * [onAgentGone] fires when the LAST live session of an agent closes, with the
+ * cause distinguishing the trigger path: 'explicit-delete' (client DELETE —
+ * deliberate disconnect, may terminate calls), 'liveness-timeout' /
+ * 'idle-timeout' (sweeps — presence-only, must never terminate calls). It
+ * deliberately does NOT fire while another session of the same agent remains
+ * — a single session churn must never cancel calls of a still-connected agent.
  *
  * [hasOpenCalls] (optional) gates the liveness sweep: a session whose
  * heartbeat stopped is only closed when its agent still has pending/active/
@@ -37,7 +47,7 @@ export class McpSessionRegistry {
   private readonly sessions = new Map<string, McpManagedSession>();
 
   constructor(
-    private readonly onAgentGone?: (agentName: string) => void,
+    private readonly onAgentGone?: (agentName: string, cause: AgentGoneCause) => void,
     private readonly hasOpenCalls?: (agentName: string) => boolean | Promise<boolean>,
   ) {}
 
@@ -49,21 +59,25 @@ export class McpSessionRegistry {
     this.sessions.set(id, session);
   }
 
+  /**
+   * Explicit client close (transport onclose after DELETE /mcp). This is the
+   * deliberate-disconnect path — the only one that may terminate calls.
+   */
   delete(id: string): boolean {
     const removed = this.sessions.get(id);
     const ok = this.sessions.delete(id);
     if (ok && removed?.agentName) {
-      this.notifyIfLastGone(removed.agentName);
+      this.notifyIfLastGone(removed.agentName, 'explicit-delete');
     }
     return ok;
   }
 
   /** Fires [onAgentGone] when no live session still carries [agentName]. */
-  private notifyIfLastGone(agentName: string): void {
+  private notifyIfLastGone(agentName: string, cause: AgentGoneCause): void {
     for (const session of this.sessions.values()) {
       if (session.agentName === agentName) return;
     }
-    this.onAgentGone?.(agentName);
+    this.onAgentGone?.(agentName, cause);
   }
 
   /** Any real request (tool call, initialize, ping, ...) marks the client alive. */
@@ -140,7 +154,7 @@ export class McpSessionRegistry {
         logger.warn({ err, sessionId: id }, '[MCP] error closing dead session');
       }
       if (session.agentName) {
-        this.notifyIfLastGone(session.agentName);
+        this.notifyIfLastGone(session.agentName, 'liveness-timeout');
       }
     }
     if (closed > 0) {
@@ -171,7 +185,7 @@ export class McpSessionRegistry {
       // firing before server.close() would let a not-yet-closed session count
       // as live).
       if (session.agentName) {
-        this.notifyIfLastGone(session.agentName);
+        this.notifyIfLastGone(session.agentName, 'idle-timeout');
       }
     }
     if (closed > 0) {

@@ -42,9 +42,9 @@ describe('AI wait lease primitive', () => {
     });
   });
 
-  it('reports active with an ISO activeUntil right after registration', () => {
+  it('reports active with an ISO activeUntil right after registration', async () => {
     const service = makeService([makeSession()]);
-    service.registerAiWait('call-lease', 30_000);
+    await service.registerAiWait('call-lease', 30_000);
     const status = service.getAiWaitStatus('call-lease');
     expect(status.active).toBe(true);
     expect(status.activeUntil).toBeTruthy();
@@ -52,36 +52,36 @@ describe('AI wait lease primitive', () => {
     expect(status.lastActiveAt).toBeTruthy();
   });
 
-  it('returns inactive after dispose clears the last lease', () => {
+  it('returns inactive after dispose clears the last lease', async () => {
     const service = makeService([makeSession()]);
-    const dispose = service.registerAiWait('call-lease', 30_000);
+    const dispose = await service.registerAiWait('call-lease', 30_000);
     expect(service.getAiWaitStatus('call-lease').active).toBe(true);
-    dispose();
+    await dispose();
     expect(service.getAiWaitStatus('call-lease').active).toBe(false);
   });
 
-  it('reference counts overlapping registrations', () => {
+  it('reference counts overlapping registrations', async () => {
     const service = makeService([makeSession()]);
-    const disposeA = service.registerAiWait('call-lease', 30_000);
-    const disposeB = service.registerAiWait('call-lease', 30_000);
-    disposeA();
+    const disposeA = await service.registerAiWait('call-lease', 30_000);
+    const disposeB = await service.registerAiWait('call-lease', 30_000);
+    await disposeA();
     expect(service.getAiWaitStatus('call-lease').active).toBe(true);
-    disposeB();
+    await disposeB();
     expect(service.getAiWaitStatus('call-lease').active).toBe(false);
   });
 
-  it('re-activation after full dispose starts a fresh lease', () => {
+  it('re-activation after full dispose starts a fresh lease', async () => {
     const service = makeService([makeSession()]);
-    service.registerAiWait('call-lease', 30_000)();
+    await (await service.registerAiWait('call-lease', 30_000))();
     expect(service.getAiWaitStatus('call-lease').active).toBe(false);
-    service.registerAiWait('call-lease', 30_000);
+    await service.registerAiWait('call-lease', 30_000);
     expect(service.getAiWaitStatus('call-lease').active).toBe(true);
   });
 
-  it('expires passively when activeUntil passes and no one disposes', () => {
+  it('expires passively when activeUntil passes and no one disposes', async () => {
     vi.useFakeTimers();
     const service = makeService([makeSession()]);
-    service.registerAiWait('call-lease', 1_000);
+    await service.registerAiWait('call-lease', 1_000);
     expect(service.getAiWaitStatus('call-lease').active).toBe(true);
     vi.advanceTimersByTime(1_500);
     const status = service.getAiWaitStatus('call-lease');
@@ -90,37 +90,37 @@ describe('AI wait lease primitive', () => {
     expect(status.lastActiveAt).toBeTruthy();
   });
 
-  it('keeps the furthest deadline when waits overlap, never regressing an in-flight wait', () => {
+  it('keeps the furthest deadline when waits overlap, never regressing an in-flight wait', async () => {
     vi.useFakeTimers();
     const service = makeService([makeSession()]);
-    const disposeLong = service.registerAiWait('call-lease', 30_000);
-    service.registerAiWait('call-lease', 5_000);
+    const disposeLong = await service.registerAiWait('call-lease', 30_000);
+    await service.registerAiWait('call-lease', 5_000);
     vi.advanceTimersByTime(6_000);
     // The 5s wait has expired, but the 30s wait is still in flight: still active.
     expect(service.getAiWaitStatus('call-lease').active).toBe(true);
     vi.advanceTimersByTime(25_000);
     expect(service.getAiWaitStatus('call-lease').active).toBe(false);
-    disposeLong();
+    await disposeLong();
     expect(service.getAiWaitStatus('call-lease').active).toBe(false);
   });
 
-  it('a new registration after the old lease expired starts a fresh deadline', () => {
+  it('a new registration after the old lease expired starts a fresh deadline', async () => {
     vi.useFakeTimers();
     const service = makeService([makeSession()]);
-    const disposeOld = service.registerAiWait('call-lease', 1_000);
+    const disposeOld = await service.registerAiWait('call-lease', 1_000);
     vi.advanceTimersByTime(2_000);
-    const disposeNew = service.registerAiWait('call-lease', 10_000);
+    const disposeNew = await service.registerAiWait('call-lease', 10_000);
     expect(service.getAiWaitStatus('call-lease').active).toBe(true);
     vi.advanceTimersByTime(5_000);
     expect(service.getAiWaitStatus('call-lease').active).toBe(true);
-    disposeOld();
-    disposeNew();
+    await disposeOld();
+    await disposeNew();
     expect(service.getAiWaitStatus('call-lease').active).toBe(false);
   });
 
   it('clears the lease when the call is completed', async () => {
     const service = makeService([makeSession()]);
-    service.registerAiWait('call-lease', 30_000);
+    await service.registerAiWait('call-lease', 30_000);
     expect(service.getAiWaitStatus('call-lease').active).toBe(true);
     await service.completeCall('call-lease');
     expect(service.getAiWaitStatus('call-lease')).toEqual({
@@ -132,7 +132,7 @@ describe('AI wait lease primitive', () => {
 
   it('clears the lease when the call is cancelled', async () => {
     const service = makeService([makeSession({ id: 'call-cancel' })]);
-    service.registerAiWait('call-cancel', 30_000);
+    await service.registerAiWait('call-cancel', 30_000);
     expect(service.getAiWaitStatus('call-cancel').active).toBe(true);
     await service.cancelCall('call-cancel');
     expect(service.getAiWaitStatus('call-cancel').active).toBe(false);

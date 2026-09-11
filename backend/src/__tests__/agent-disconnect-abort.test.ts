@@ -68,7 +68,7 @@ describe('cancelCallsByAgent (agent disconnect)', () => {
       makeSession({ id: 'call-leased', status: 'active' }),
       makeSession({ id: 'call-free', status: 'active' }),
     ]);
-    const dispose = service.registerAiWait('call-leased', null);
+    const dispose = await service.registerAiWait('call-leased', null);
 
     const count = await service.cancelCallsByAgent('agent-1', 'agent_disconnected');
 
@@ -77,7 +77,7 @@ describe('cancelCallsByAgent (agent disconnect)', () => {
     expect((await service.getCall('call-free'))?.status).toBe('aborted');
 
     // Once the waiter is gone, the same sweep can abort the call.
-    dispose();
+    await dispose();
     await service.cancelCallsByAgent('agent-1', 'agent_disconnected');
     expect((await service.getCall('call-leased'))?.status).toBe('aborted');
   });
