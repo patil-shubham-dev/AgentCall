@@ -28,6 +28,16 @@ WORKDIR /app
 RUN addgroup --system --gid 1001 appgroup && \
     adduser --system --uid 1001 --ingroup appgroup appuser
 
+# Render mounts Secret Files at /etc/secrets (group 1000) at runtime. Grant
+# the app user read access WITHOUT baking any secret into the image (a COPY
+# would leave key material extractable in layer history forever). Uses the
+# existing gid-1000 group when the base image provides one, else creates it.
+RUN if getent group 1000 >/dev/null; then \
+      addgroup appuser "$(getent group 1000 | cut -d: -f1)"; \
+    else \
+      addgroup -g 1000 secrets && addgroup appuser secrets; \
+    fi
+
 # Copy production dependencies
 COPY --from=deps /prod_modules ./node_modules
 

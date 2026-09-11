@@ -56,6 +56,10 @@ function getAuth(): GoogleAuth | undefined {
     );
     return undefined;
   }
+  // Path-only log (never key material): on Render this should be the
+  // /etc/secrets mount resolved at config load; a relative path here means
+  // pushes will fail per-ring, so make the effective value visible at init.
+  logger.info({ serviceAccountPath, projectId }, '[fcm] initializing GoogleAuth for push');
   auth = new GoogleAuth({
     keyFile: serviceAccountPath,
     scopes: ['https://www.googleapis.com/auth/firebase.messaging'],

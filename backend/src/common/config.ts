@@ -1,7 +1,32 @@
 import 'dotenv/config';
+import { existsSync } from 'node:fs';
+import path from 'node:path';
 
 function env(name: string, fallback?: string): string {
   return process.env[name] ?? fallback ?? '';
+}
+
+/**
+ * Render mounts Secret Files at /etc/secrets/<filename> at runtime — including
+ * for Docker services (see Render docs "Using Secrets with Docker"). The
+ * file is never in the image, so a relative/baked-in path like
+ * `firebase-service-account.json` does not resolve in production even though
+ * the secret exists. This resolves the configured path to the mount when the
+ * configured location is absent: local dev (file present where configured) is
+ * untouched, production falls through to the mount. Returns the configured
+ * path unchanged when nothing resolves — callers fail fast naming both.
+ */
+export const RENDER_SECRETS_DIR = '/etc/secrets';
+
+export function resolveSecretFilePath(
+  configuredPath: string,
+  exists: (p: string) => boolean = existsSync,
+): string {
+  if (!configuredPath) return '';
+  if (exists(configuredPath)) return configuredPath;
+  const fallback = path.join(RENDER_SECRETS_DIR, path.basename(configuredPath));
+  if (fallback !== configuredPath && exists(fallback)) return fallback;
+  return configuredPath;
 }
 
 function parseIntSafe(raw: string, defaultVal: string): number {
@@ -55,8 +80,12 @@ export const config = {
     // tokens minted, no HTTP, no log lines per ring. The real service-account
     // JSON (FIREBASE_SERVICE_ACCOUNT_PATH) and FCM_PROJECT_ID are only read
     // lazily when enabled AND a ring is being pushed.
+    //
+    // On Render the key lives in Secret Files (mounted at /etc/secrets/ at
+    // runtime, never baked into the image) — resolveSecretFilePath falls
+    // through to the mount when the configured path is absent there.
     enabled: env('FCM_ENABLED', 'false') === 'true',
-    serviceAccountPath: env('FIREBASE_SERVICE_ACCOUNT_PATH', ''),
+    serviceAccountPath: resolveSecretFilePath(env('FIREBASE_SERVICE_ACCOUNT_PATH', '')),
     projectId: env('FCM_PROJECT_ID', ''),
   },
 
@@ -169,7 +198,7 @@ export function validateConfig(): void {
     throw new Error(`PERSISTENCE_MODE=${mode} requires DATABASE_URL to be set`);
   }
 
-  // FCM: when enabled, fail fast with a clear diagnostic � never silently degrade
+  // FCM: when enabled, fail fast with a clear diagnostic � never silently degrade
   // to "no pushes" with a misconfigured project. When disabled, missing FCM
   // vars are harmless.
   if (config.fcm.enabled) {
@@ -179,5 +208,28 @@ export function validateConfig(): void {
     if (!config.fcm.serviceAccountPath) {
       throw new Error('FCM_ENABLED=true requires FIREBASE_SERVICE_ACCOUNT_PATH to be set (path to service-account JSON)');
     }
+    assertFcmKeyFile(config.fcm.serviceAccountPath);
+  }
+}
+
+/**
+ * Fail-fast for the FCM key file (pure seam for tests; validateConfig wires
+ * the live values). An enabled-but-unreadable key previously degraded to a
+ * per-ring "transport error" with pushes silently never arriving — this makes
+ * it a boot error naming the exact path, including the /etc/secrets mount
+ * fallback when the configured path did not resolve.
+ */
+export function assertFcmKeyFile(
+  resolvedPath: string,
+  exists: (p: string) => boolean = existsSync,
+): void {
+  if (!resolvedPath) {
+    throw new Error('FCM_ENABLED=true requires FIREBASE_SERVICE_ACCOUNT_PATH to be set (path to service-account JSON)');
+  }
+  if (!exists(resolvedPath)) {
+    throw new Error(
+      `FCM_ENABLED=true but the service-account key is unreadable at "${resolvedPath}". ` +
+        `On Render the key must be attached as a Secret File (mounted at ${RENDER_SECRETS_DIR}/<filename> at runtime, never baked into the image).`,
+    );
   }
 }
