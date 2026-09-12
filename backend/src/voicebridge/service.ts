@@ -813,6 +813,22 @@ export class VoiceBridgeService {
         return session;
       }
 
+      // Stale-decline race (2026-09-11 live validation): a decline is only
+      // meaningful while the call is still ringing. The phone fires its 60s
+      // ring-timeout cancel from local state, but an AI message flips
+      // pending->active server-side (addMessage) with no channel that can
+      // reach a parked phone inside that window — so the timeout routinely
+      // lands AFTER the answer and must not kill the live call. The same
+      // holds for paused (previously answered) calls. Ending a live call is
+      // completeCall/abortCall's job, never cancel's. Evaluated here, inside
+      // the session lock, so a racing answer and cancel serialize and the
+      // loser sees final truth — no TOCTOU. Returns the live session (200
+      // semantics) so phone retry queues treat it resolved, not failed.
+      if (session.status !== 'pending') {
+        logger.info({ callId, status: session.status }, 'Call already live, ignoring stale cancel');
+        return session;
+      }
+
       // The decline note is recorded as a user message BEFORE the transition,
       // so it is part of the transcript the AI reads when it discovers the
       // call ended — and the pending-reply poll can deliver it inline.

@@ -496,7 +496,10 @@ export function registerRoutes(app: FastifyInstance, opts: RouteOptions): void {
       return { error: 'NOT_FOUND', message: 'Call not found' };
     }
 
-    if (before && before.status !== 'cancelled' && before.status !== 'completed') {
+    // Count only real transitions into cancelled: a cancel arriving after the
+    // call went live is a stale no-op (server keeps the live session), not a
+    // cancellation.
+    if (session.status === 'cancelled' && before.status !== 'cancelled') {
       metrics?.incrementCounter('sessions.cancelled');
     }
     return { status: session.status, call_id: callId };

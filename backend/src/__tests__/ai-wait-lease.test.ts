@@ -131,7 +131,9 @@ describe('AI wait lease primitive', () => {
   });
 
   it('clears the lease when the call is cancelled', async () => {
-    const service = makeService([makeSession({ id: 'call-cancel' })]);
+    // Cancel executes only on still-ringing calls, so the lease-clearing
+    // path is exercised on pending (an active call ignores cancel outright).
+    const service = makeService([makeSession({ id: 'call-cancel', status: 'pending' })]);
     await service.registerAiWait('call-cancel', 30_000);
     expect(service.getAiWaitStatus('call-cancel').active).toBe(true);
     await service.cancelCall('call-cancel');

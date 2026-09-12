@@ -38,12 +38,21 @@ describe('cancelCall idempotency', () => {
     expect(cancelled?.completedAt).toBeDefined();
   });
 
-  it('cancels an active call', async () => {
+  it('does not cancel a live (active) call — stale declines are no-ops', async () => {
     const service = makeService([makeSession({ id: 'call-active', status: 'active' })]);
 
-    const cancelled = await service.cancelCall('call-active');
+    const session = await service.cancelCall('call-active');
 
-    expect(cancelled?.status).toBe('cancelled');
+    expect(session?.status).toBe('active');
+    expect(session?.completedAt).toBeUndefined();
+  });
+
+  it('does not cancel a paused (previously answered) call', async () => {
+    const service = makeService([makeSession({ id: 'call-paused', status: 'paused' })]);
+
+    const session = await service.cancelCall('call-paused');
+
+    expect(session?.status).toBe('paused');
   });
 
   it('returns the session unchanged when already cancelled (retry path)', async () => {
@@ -108,6 +117,47 @@ describe('cancelCall idempotency', () => {
     const cancelled = await service.cancelCall('call-blank', '   ');
 
     expect(cancelled?.messages).toHaveLength(0);
+  });
+});
+
+describe('stale-decline race (2026-09-11 live validation, call e2439048)', () => {
+  it('an AI message answering a ringing call survives a trailing timeout cancel', async () => {
+    const service = makeService([makeSession({ id: 'call-race' })]);
+
+    // The AI speaks first: addMessage flips pending->active server-side
+    // (CallAnswered), exactly as the 17:39:04Z live event did.
+    const msg = await service.addAiMessage('call-race', 'Hello, I am here with your answer.');
+    expect(msg).toBeDefined();
+    expect((await service.getCall('call-race'))?.status).toBe('active');
+
+    // The phone never learned of the answer (parked WS, FCM ring-only) and
+    // its 60s ring-timeout fires POST /cancel with a decline note.
+    const after = await service.cancelCall('call-race', 'Sorry I missed your call.');
+
+    expect(after?.status).toBe('active');
+    expect(after?.completedAt).toBeUndefined();
+    // The stale decline note must not pollute the live transcript.
+    expect(after?.messages.filter((m) => m.content === 'Sorry I missed your call.')).toHaveLength(0);
+    // The AI turn that won the race is intact.
+    expect(after?.messages.map((m) => m.content)).toContain('Hello, I am here with your answer.');
+  });
+
+  it('a decline racing the answer keeps working while the call is still pending', async () => {
+    const service = makeService([makeSession({ id: 'call-prompt-decline' })]);
+
+    const cancelled = await service.cancelCall('call-prompt-decline', 'Busy right now.');
+
+    expect(cancelled?.status).toBe('cancelled');
+  });
+
+  it('answer-then-cancel in either order keeps the live call (lock serializes)', async () => {
+    const service = makeService([makeSession({ id: 'call-order' })]);
+
+    await service.answerCall('call-order');
+    const afterCancel = await service.cancelCall('call-order', 'late decline');
+
+    expect(afterCancel?.status).toBe('active');
+    expect((await service.getCall('call-order'))?.messages).toHaveLength(0);
   });
 });
 

@@ -24,7 +24,7 @@ Core model:
 - **`get_transcript`** — read what the human has said back.
 - **`send_message_and_wait`** — send a message and block for the reply.
 - **`complete_call`** — end the call and store the outcome.
-- **`cancel_call`** — end the call without completing it.
+- **`cancel_call`** — end a still-ringing call without completing it.
 
 Every call is **owned by the AI identity that created it** (see §4). A call
 created by one identity cannot be read or acted on by another.
@@ -111,7 +111,7 @@ with `Error:`.
 | `get_transcript` | Read the conversation | owner only |
 | `send_message_and_wait` | Send + wait for the reply | owner only |
 | `complete_call` | End the call, store outcome | owner only |
-| `cancel_call` | End the call without outcome | owner only |
+| `cancel_call` | End a still-ringing call without outcome | owner only |
 
 ### 3.1 `create_call`
 
@@ -211,12 +211,15 @@ Response: `{ "status": "completed", "call_id": "…", "instruction": "Use get_tr
 
 ### 3.6 `cancel_call`
 
-Cancel a pending or active call without completing it.
+Cancel a still-ringing (pending) call without completing it. Refuses once the
+call is live — a decline must never kill an answered call (stale-decline
+race); use `complete_call` to end a live call.
 
 - `call_id` (string, required).
 - `reason` (string, default `resolved`) — `resolved | timeout | error | user_requested`.
 
-Response: `{ "status": "cancelled", "call_id": "…" }`
+Response: `{ "status": "cancelled", "call_id": "…" }`. On a live call the tool
+returns an error directing at `complete_call`, and the call is untouched.
 
 ---
 

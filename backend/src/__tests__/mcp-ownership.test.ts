@@ -165,6 +165,18 @@ describe('per-call ownership', () => {
     expect(completed.parsed?.status).toBe('completed');
   });
 
+  it('refuses cancel_call on a live call and points at complete_call', async () => {
+    const sid = await initSession(ownerAKey);
+    const callId = await createCall(sid, ownerAKey, 'cancel-live refusal test');
+    await service.answerCall(callId);
+
+    const outcome = await callTool(sid, ownerAKey, 'cancel_call', { call_id: callId });
+
+    expect(outcome.isError).toBe(true);
+    expect(outcome.text).toContain('complete_call');
+    expect((await service.getCall(callId))?.status).toBe('active');
+  });
+
   it('denies every per-call tool to a different identity, leaving the call untouched', async () => {
     const ownerSid = await initSession(ownerAKey);
     const intruderSid = await initSession(ownerBKey);

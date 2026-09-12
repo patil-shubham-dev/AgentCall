@@ -207,7 +207,8 @@ export function createTools(voicebridge: VoiceBridgeService): McpTool[] {
     },
     {
       name: 'cancel_call',
-      description: 'Cancel a pending or active call without completing it.',
+      description:
+        'Cancel a still-ringing (pending) call without completing it. Refuses once the call is live — use complete_call to end an answered call.',
       inputSchema: {
         type: 'object',
         required: ['call_id'],
@@ -223,6 +224,15 @@ export function createTools(voicebridge: VoiceBridgeService): McpTool[] {
         try {
           const session = await voicebridge.cancelCall(callId);
           if (!session) return error(`Error: Call not found: ${callId}`);
+          // cancelCall is a no-op once the call is live (stale-decline race:
+          // a decline must never kill an answered call). Say so plainly so
+          // the agent ends live calls via complete_call instead.
+          if (session.status !== 'cancelled') {
+            return error(
+              `Error: Call ${callId} is already ${session.status} and cannot be cancelled. ` +
+                `Use complete_call to end a live call.`,
+            );
+          }
           return text(JSON.stringify({ status: 'cancelled', call_id: callId }, null, 2));
         } catch (err) {
           return error(`Error: ${err instanceof Error ? err.message : String(err)}`);
