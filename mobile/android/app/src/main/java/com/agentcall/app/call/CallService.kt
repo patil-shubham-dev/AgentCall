@@ -2,10 +2,13 @@ package com.agentcall.app.call
 
 import android.app.*
 import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.Manifest
+import androidx.core.content.ContextCompat
 import android.media.AudioAttributes
 import android.os.Build
 import android.os.Debug
-import android.content.Intent
 import android.os.Bundle
 import android.os.IBinder
 import android.os.PowerManager
@@ -227,6 +230,36 @@ class CallService : Service() {
                     Log.i(TAG, "[ANSWER] duplicate START_CALL for $id (${state.status}) — skipping")
                     return START_STICKY
                 }
+                // Graceful mic-denied answer (2026-09-12 P0): starting the
+                // microphone-type foreground service below without
+                // RECORD_AUDIO throws SecurityException — the same crash
+                // class as the background-start bug. Route through the
+                // incoming-call UI, which owns the grant flow, instead of
+                // tearing down silently. The ring-timeout alarm stays armed:
+                // the call is unresolved until the user grants and answers
+                // (or the timeout declines it).
+                if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+                    Log.w(TAG, "[ANSWER] mic missing for $id — opening ring UI for grant flow")
+                    try {
+                        startActivity(Intent(this, IncomingCallActivity::class.java).apply {
+                            putExtra("call_id", id)
+                            putExtra("caller_name", callerName)
+                            putExtra("context_summary", intent.getStringExtra(EXTRA_CONTEXT_SUMMARY) ?: "")
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                        })
+                    } catch (e: Exception) {
+                        Log.e(TAG, "[ANSWER] mic-denied UI redirect failed for $id", e)
+                        CallStateHolder.ended(id)
+                        CallEventBus.emit(CallEvent.CallEnded)
+                        endCall()
+                        stopSelf()
+                    }
+                    return START_STICKY
+                }
+                // Ring resolved by a real answer: disarm the exact-alarm
+                // timeout (the FGS job path, if armed by a WS/poll ring, is
+                // cleared by notifyRingResolved below via CallService state).
+                RingTimeoutScheduler.cancel(this, id)
                 if (BuildConfig.DEBUG) {
                     debugMaxCallMs = intent.getLongExtra(EXTRA_DEBUG_MAX_CALL_MS, 0L)
                 }
@@ -329,6 +362,11 @@ class CallService : Service() {
             ACTION_END_CALL -> terminateCall(intent.getStringExtra(EXTRA_CALL_ID) ?: callId)
             ACTION_CANCEL_CALL -> {
                 val id = intent.getStringExtra(EXTRA_CALL_ID) ?: return START_NOT_STICKY
+                // A user-driven decline resolves the ring: disarm the
+                // exact-alarm timeout so it can't fire a redundant decline
+                // later (its server pre-check would skip anyway; this avoids
+                // the wasted write).
+                RingTimeoutScheduler.cancel(this, id)
                 // Backlog item 14 — an answered call must never be cancelled:
                 // the ring UI's countdown auto-decline can race the answer tap,
                 // and a late duplicate cancel can trail a resolved ring.
@@ -1328,7 +1366,7 @@ class CallService : Service() {
         private const val KEY_PENDING_CALLBACKS = "pending_callback_ids"
         private const val KEY_PENDING_USER_TEXTS = "pending_user_texts"
         private const val NOTIFICATION_ID_ONGOING = 1001
-        private const val NOTIFICATION_ID_INCOMING = 1002
+        internal const val NOTIFICATION_ID_INCOMING = 1002
         private const val NOTIFICATION_ID_MISSED = 1005
         private const val TTS_IDLE_SHUTDOWN_MS = 10 * 60_000L // 10 min — keep Piper warm for back-to-back calls
         // Battery audit H2: hard ceiling on a single call session. The longest

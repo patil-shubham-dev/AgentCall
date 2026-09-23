@@ -8,9 +8,13 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_PHONE_CALL" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- 60s ring timeout via setExactAndAllowWhileIdle (Doze-safe). The app
+         checks canScheduleExactAlarms() and degrades to inexact if revoked. -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
     <!-- targetSdk 35 applies package visibility filtering: resolveActivity()
@@ -80,21 +84,36 @@
             android:foregroundServiceType="microphone"
             android:exported="false" />
 
+        <!-- Ring/signaling foreground service. Type MUST be phoneCall, not
+             dataSync: dataSync carries a 24h background runtime quota (API 34+),
+             and repeated rings exhaust it until every backgrounded start throws
+             ForegroundServiceStartNotAllowedException ("time limit already
+             exhausted") and the ring dies. phoneCall is the documented type for
+             call-related foreground work and carries no such quota. The DATA_SYNC
+             permission declaration above is retained for WorkManager's internal
+             expedited-work use. -->
         <service
             android:name=".call.SignalingForegroundService"
-            android:foregroundServiceType="dataSync"
+            android:foregroundServiceType="phoneCall"
             android:exported="false" />
 
         <!-- Phase A (FCM push-to-wake): receives high-priority data pushes and
              hands rings to SignalingForegroundService. Never exported; FCM
              delivers through the Firebase SDK binding. -->
-<service
+        <service
             android:name=".call.AgentCallMessagingService"
             android:exported="false">
             <intent-filter>
                 <action android:name="com.google.firebase.MESSAGING_EVENT" />
             </intent-filter>
         </service>
+
+        <!-- 60s ring timeout fired by RingTimeoutScheduler's exact alarm.
+             Explicit intents only; never exported. Runs the server pre-check
+             then declines, with no foreground service involved. -->
+        <receiver
+            android:name=".call.RingTimeoutReceiver"
+            android:exported="false" />
 
     </application>
 

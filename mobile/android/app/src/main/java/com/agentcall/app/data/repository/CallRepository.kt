@@ -2,6 +2,7 @@ package com.agentcall.app.data.repository
 
 import com.agentcall.app.data.api.ApiClient
 import com.agentcall.app.data.api.ApiService
+import com.agentcall.app.data.api.CancelRequest
 import com.agentcall.app.data.api.AiKeyRenameRequest
 import com.agentcall.app.data.database.dao.AiProfileDao
 import com.agentcall.app.data.database.dao.CallRecordDao
@@ -296,6 +297,24 @@ class CallRepository @Inject constructor(
             withContext(Dispatchers.IO) { api.getCall(callId) }
         } catch (_: Exception) {
             null
+        }
+    }
+
+    /**
+     * Timeout-decline path (RingTimeoutReceiver): POST /cancel with the
+     * decline note. Returns true on any 2xx — including the server's stale
+     * no-op for an already-live call, which is the resolved outcome, not a
+     * failure. False only on transport/auth failure (caller retries).
+     */
+    suspend fun cancelCall(callId: String, note: String): Boolean {
+        return try {
+            ApiClient.ensurePhoneToken()
+            withContext(Dispatchers.IO) {
+                api.cancelCall(callId, CancelRequest(note = note))
+            }
+            true
+        } catch (_: Exception) {
+            false
         }
     }
 

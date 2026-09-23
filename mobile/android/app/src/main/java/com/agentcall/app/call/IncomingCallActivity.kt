@@ -232,6 +232,9 @@ private var currentClientInfoName by mutableStateOf<String?>(null)
                         quiet = quietRing,
                         onAnswer = {
                             stopRinger()
+                            // Ring resolved by answer: disarm the exact-alarm
+                            // timeout (no-op if the FGS job path owns it).
+                            RingTimeoutScheduler.cancel(this@IncomingCallActivity, currentCallId)
                             // Backlog item 14 — the FGS ring is cleared by
                             // CallService's ACTION_START_CALL (notifyRingResolved)
                             // after the shared state flips to ANSWERED, so a
@@ -265,6 +268,7 @@ private var currentClientInfoName by mutableStateOf<String?>(null)
                         onDecline = {
                             stopRinger()
                             ringResolved = true
+                            RingTimeoutScheduler.cancel(this@IncomingCallActivity, currentCallId)
                             // Backlog item 14 — only cancel while this call is
                             // still ringing: the in-UI countdown auto-decline
                             // can race the answer tap, and a stale FSI decline
@@ -287,6 +291,7 @@ private var currentClientInfoName by mutableStateOf<String?>(null)
                         onLater = { minutes ->
                             stopRinger()
                             ringResolved = true
+                            RingTimeoutScheduler.cancel(this@IncomingCallActivity, currentCallId)
                             SignalingForegroundService.notifyRingResolved(this@IncomingCallActivity)
                             CallService.cancelIncomingNotification(this@IncomingCallActivity)
                             startService(Intent(this@IncomingCallActivity, CallService::class.java).apply {

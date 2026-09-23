@@ -1,32 +1,38 @@
 package com.agentcall.app.call
 
-import android.content.Intent
+import android.app.NotificationManager
+import android.content.Context
 import android.util.Log
 import com.agentcall.app.data.repository.CallRepository
+import com.agentcall.app.settings.QuietHoursManager
 import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
 import dagger.hilt.android.AndroidEntryPoint
-import androidx.core.content.ContextCompat
 import javax.inject.Inject
 
 /**
  * Phase A (FCM push-to-wake): a SECOND ring-delivery path alongside the
- * WS/poll system � additive only, nothing about existing delivery is removed
+ * WS/poll system — additive only, nothing about existing delivery is removed
  * or reordered.
  *
  * The backend pushes call_incoming as a high-priority DATA message. This
  * service:
  *  - onNewToken: enqueues canonical WorkManager reconciliation (FcmRegistrationWorker)
  *    so token rotation survives cold-start and process death.
- *  - onMessageReceived: for ring messages, hands the payload to the existing
- *    ring machinery � SignalingForegroundService � which already dedupes
- *    against WS/poll rings (recentlyRung guard) and validates the call is
- *    still pending before ringing.
+ *  - onMessageReceived: validates and posts the ring DIRECTLY — expiry check,
+ *    server liveness check, history row, notification, exact timeout alarm.
+ *    Deliberately starts NO foreground service here: starting the signaling
+ *    FGS from a backgrounded push crashed the app twice over (dataSync quota
+ *    first, phoneCall Telecom requirements after — 2026-09-12 P0), and none
+ *    of the ring-leg work (HTTP validation, Room writes, notification post,
+ *    alarm schedule) needs foreground. The FGS keeps its WS/poll/connected
+ *    duties for when it is legitimately alive.
  */
 @AndroidEntryPoint
 class AgentCallMessagingService : FirebaseMessagingService() {
 
     @Inject lateinit var callRepository: CallRepository
+    @Inject lateinit var quietHoursManager: QuietHoursManager
 
     override fun onNewToken(token: String) {
         super.onNewToken(token)
@@ -49,29 +55,97 @@ class AgentCallMessagingService : FirebaseMessagingService() {
             return
         }
         Log.i(TAG, "[FCM] ring push received callId=$callId")
-        // Diagnostic: correlate backend send → Android receipt with wall-clock and same call_id
-        Log.i(TAG, "[DIAG] fcm_received callId=$callId expiresAt=${data["expiresAt"]} createdAt=${data["createdAt"]} receivedAtMs=${System.currentTimeMillis()}")
-        try {
-            startService(Intent(this, CallService::class.java).apply {
-                action = CallService.ACTION_PREWARM_TTS
-            })
-        } catch (e: Exception) {
-            Log.w(TAG, "[FCM] prewarm start failed", e)
+        // Direct ring, no foreground service: every step below is
+        // background-safe (HTTP validation, Room writes, notification post,
+        // alarm schedule). Starting the signaling FGS from a backgrounded
+        // push crashed the app (dataSync quota, then phoneCall Telecom
+        // requirements — 2026-09-12 P0), and none of the ring-leg work needs
+        // foreground. No startService/startForegroundService calls here.
+        val callerName = data["callerName"]?.takeIf { it.isNotBlank() } ?: "AI Agent"
+        val summary = data["summary"] ?: ""
+        val expiresAtMs = data["expiresAt"]?.toLongOrNull()
+        if (expiresAtMs != null && expiresAtMs <= System.currentTimeMillis()) {
+            Log.w(TAG, "[RING] skipping expired push callId=$callId")
+            return
         }
-        val fgsStartMs = System.currentTimeMillis()
-        Log.i(TAG, "[DIAG] fgs_start_attempt callId=$callId atMs=$fgsStartMs")
-        ContextCompat.startForegroundService(
-            this,
-            Intent(this, SignalingForegroundService::class.java).apply {
-                action = SignalingForegroundService.ACTION_RING_FROM_PUSH
-                putExtra(SignalingForegroundService.EXTRA_RING_CALL_ID, callId)
-                putExtra(SignalingForegroundService.EXTRA_RING_CALLER, data["callerName"])
-                putExtra(SignalingForegroundService.EXTRA_RING_SUMMARY, data["summary"])
-                putExtra(SignalingForegroundService.EXTRA_RING_CREATED_AT, data["createdAt"])
-                putExtra(SignalingForegroundService.EXTRA_RING_EXPIRES_AT, data["expiresAt"])
+        // Server liveness: a queued push can arrive for an already-resolved
+        // call. Same check the FGS ring path performs — a push that fails it
+        // never rings. One bounded blocking section (validation + history
+        // writes) inside FCM's background execution window; the suspend DAO
+        // and network calls need a coroutine, and onMessageReceived offers
+        // no scope. Typically ~1s; Firebase tolerates this window.
+        val validated = kotlinx.coroutines.runBlocking(
+            kotlinx.coroutines.Dispatchers.IO,
+        ) {
+            val details = try {
+                callRepository.getCallDetails(callId)
+            } catch (e: Exception) {
+                Log.w(TAG, "[RING] validation fetch failed callId=$callId", e)
+                null
             }
-        )
-        Log.i(TAG, "[DIAG] fgs_start_dispatched callId=$callId elapsedMs=${System.currentTimeMillis() - fgsStartMs}")
+            val status = details?.status
+            if (status != "pending" && status != "active") {
+                Log.i(TAG, "[RING] skipping push callId=$callId server status=$status")
+                return@runBlocking null
+            }
+            val agentId = callerName.lowercase().replace("\\s+".toRegex(), "-")
+            try {
+                callRepository.ensureProfileExists(agentId, callerName)
+                callRepository.markCallRinging(callId, agentId, callerName, System.currentTimeMillis())
+            } catch (e: Exception) {
+                Log.w(TAG, "[RING] history row write failed callId=$callId", e)
+            }
+            callerName
+        }
+        if (validated == null) return
+        // Repeat-push dedupe without process memory: the server retries FCM
+        // while pending, and each push may run in a fresh process. A posted
+        // incoming notification means a previous push already rang (and armed
+        // the timeout) — skip the re-post. Same-id posts collapse anyway.
+        if (isRingNotificationPosted()) {
+            Log.i(TAG, "[RING] ring already posted callId=$callId — skipping duplicate push")
+            return
+        }
+        CallStateHolder.ringing(callId)
+        val quiet = try {
+            quietHoursManager.isQuietNow(callerName)
+        } catch (e: Exception) {
+            Log.w(TAG, "[RING] quiet-hours check failed, ringing loud", e)
+            false
+        }
+        // Alarm first: a process death between these lines leaves a fired
+        // timeout with no notification (self-correcting — the receiver
+        // clears the absent notification and only cancels still-pending
+        // calls) rather than a notification with no timeout (rings until the
+        // server TTL). Timeout correctness is load-bearing.
+        RingTimeoutScheduler.schedule(this, callId, System.currentTimeMillis())
+        try {
+            CallService.showIncomingCallNotification(
+                this, callId, callerName, summary,
+                quiet = quiet,
+                clientInfoName = data["clientInfoName"],
+            )
+        } catch (e: Exception) {
+            Log.w(TAG, "[RING] notification post failed callId=$callId", e)
+            RingTimeoutScheduler.cancel(this, callId)
+            return
+        }
+        Log.i(TAG, "[DIAG] ring_posted_direct callId=$callId quiet=$quiet atMs=${System.currentTimeMillis()}")
+    }
+
+    /**
+     * True when our incoming-call notification is currently posted.
+     * Single-ring design with a fixed notification id: a posted one belongs
+     * to the live ring, and every resolve path clears it first.
+     */
+    private fun isRingNotificationPosted(): Boolean {
+        return try {
+            val mgr = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            mgr.activeNotifications.any { it.id == CallService.NOTIFICATION_ID_INCOMING }
+        } catch (e: Exception) {
+            Log.w(TAG, "[RING] active-notification check failed, assuming unposted", e)
+            false
+        }
     }
 
     companion object {
