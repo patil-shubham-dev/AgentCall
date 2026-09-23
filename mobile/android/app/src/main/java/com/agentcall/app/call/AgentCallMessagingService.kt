@@ -74,14 +74,29 @@ class AgentCallMessagingService : FirebaseMessagingService() {
         // writes) inside FCM's background execution window; the suspend DAO
         // and network calls need a coroutine, and onMessageReceived offers
         // no scope. Typically ~1s; Firebase tolerates this window.
+        // The validation fetch is capped at VALIDATION_TIMEOUT_MS: the worst
+        // case is a Render cold start (20–30s), which would otherwise block
+        // the FCM dispatch thread for the full duration and risk the process
+        // being killed for an unacknowledged push. A timeout (or any other
+        // null) skips the ring — the server's 3-min pending TTL backstops a
+        // missed ring via the fallback poll / next ring retry.
         val validated = kotlinx.coroutines.runBlocking(
             kotlinx.coroutines.Dispatchers.IO,
         ) {
             val details = try {
-                callRepository.getCallDetails(callId)
+                kotlinx.coroutines.withTimeoutOrNull(VALIDATION_TIMEOUT_MS) {
+                    callRepository.getCallDetails(callId)
+                }
             } catch (e: Exception) {
                 Log.w(TAG, "[RING] validation fetch failed callId=$callId", e)
                 null
+            }
+            if (details == null) {
+                // Distinguishing log for the timeout case: null from
+                // withTimeoutOrNull is indistinguishable from a null body,
+                // and the skip decision is identical either way (policy:
+                // conservative skip, server TTL backstops).
+                Log.w(TAG, "[RING] validation fetch timed out or empty after ${VALIDATION_TIMEOUT_MS}ms callId=$callId — skipping (server TTL backstops)")
             }
             val status = details?.status
             if (status != "pending" && status != "active") {
@@ -150,5 +165,15 @@ class AgentCallMessagingService : FirebaseMessagingService() {
 
     companion object {
         private const val TAG = "AgentCall"
+
+        /**
+         * Cap for the server-validation fetch on the ring-critical path.
+         * Generous enough for a healthy ~1s round trip plus headroom, tight
+         * enough to keep FCM's 10s-ish dispatch window comfortable even when
+         * the backend is cold-spinning (20–30s worst case, unringable anyway
+         * while the server is down — the fallback poll and the next ring
+         * retry cover recovery).
+         */
+        private const val VALIDATION_TIMEOUT_MS = 3_000L
     }
 }
