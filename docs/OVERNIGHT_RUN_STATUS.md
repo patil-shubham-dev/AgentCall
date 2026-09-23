@@ -132,3 +132,86 @@ codec-level Piper benchmark from Task 5 remains the strongest TTS evidence).
 path as the full-screen button (verified in code — both send the same action).
 
 ---
+
+## Task 8 — Dependabot ✅ DONE (safe set + two verified majors; rest left open)
+
+- **Safe/minor set (commit `dfda79e`):** dotenv ^17.4.2 (minor), @types/pg ^8.20.4,
+  picomatch ^4.0.6 (dev patch). npm install + tsc + ESLint + full suite green (247/33).
+- **fastify 4→5 cluster (commit `dd132c5`):** fastify 5.12.5 + helmet 13.1.1 + cors 11.3.0 +
+  compress 9.1.1 + rate-limit 11.2.0 — the plugins hard-pin fastify majors and must move
+  together (helmet/cors version fights caught live via boot smoke). One code change: the
+  error handler's `error` param is `unknown` under fastify v5 → narrowed once to a
+  FastifyError-shaped alias; response bodies unchanged. Boot smoke on :3999: /health 200,
+  /mcp 401, phone-token mint OK, zero FATALs. tsc + lint + 247 tests green.
+- **zod 3→4 (commit `6299b4d`):** zero direct zod imports in `backend/src` (the MCP SDK owns
+  the surface), so this is a pure bump. tsc + lint + 247 tests + boot smoke green.
+- **Left open deliberately (majors, no isolation time left):** pino-pretty 13 (runtime dep,
+  dev-only transport — should probably move to devDependencies in a follow-up),
+  typescript-eslint v8 (lint config migration expected), types/node 26 (Node 20 target).
+  Also open: the docker bumps (node-25/26-alpine) — runtime-image decisions, not
+  verified here.
+
+---
+
+## Task 9 — Red Deploy to Staging CI job ✅ FIXED (commit `13616a8`)
+
+- **Root cause:** the job deploys to Kubernetes using the `KUBECONFIG_STAGING` secret, which
+  was never configured — no staging cluster was ever provisioned. The project's actual
+  target is **Render** (`render.yaml`, auto-deploy, `keep-render-warm.yml` cron pinging
+  `agentcall-66ke.onrender.com`). The K8s path is vestigial from the 07-26 infra design
+  (`infra/k8s/` manifests exist but the docs mark the deployment story as Compose/Render).
+- **Fix:** both `deploy-staging` and `deploy-production` are now gated on repo variable
+  `K8S_DEPLOY_ENABLED == 'true'` (in addition to push-to-main). Default: skipped → green
+  pipeline. Nothing deleted; `infra/k8s/` and the jobs remain for a future real staging
+  cluster. Activation steps are in the commit message.
+- **Verification:** YAML parses; locally the failure mode was confirmed by reading the job's
+  own validate step (fails hard on empty secret — the only failure it can hit today).
+  Could not observe the actual GitHub Actions run: `gh` is installed but not authenticated
+  (HTTP 401), which is the one thing needing human access here.
+- **What a human may still want to decide:** whether to instead set the secret + provision a
+  cluster (activate), or delete the K8s deploy jobs entirely.
+
+---
+
+# MORNING SUMMARY — 2026-09-23 overnight run
+
+## Done and verified
+
+| # | Task | Evidence |
+|---|------|----------|
+| 1 | P0 ring rework committed as-is | `525d5cc`, 10 files, no modifications |
+| 2 | Live device validation (background ring, deep-Doze ring, answer, decline, timeout expiry, mic-denied flow) | push→ring ~1.8s under Doze, exact alarm `exact=true`, server logs `fcmOk:true`; `[CANCEL] confirmed` on timeout expiry |
+| 3 | v2 engine deleted | tag `v2-dormant-archive`; `dd62c59`; tsc + lint + 247 tests green |
+| 4 | FCM validation fetch 3s cap | `b2c9f66`; live ring 353ms fetch; timeout path policy-identical to live null path |
+| 5 | espeak-ng-data → English-only | `436994e`; fresh-extraction Piper benchmark identical to baseline; extraction 79→62MB |
+| 6 | Doc reconciliation (TECH_DEBT / NEXT_IMPROVEMENTS / BACKLOG / VERSION / CURRENT_STATE §2) | `3a05275`; every DONE marked only after grep/read proof |
+| 7 | Micro-cleanup | `17941e6`; release build green with `isShrinkResources`; branches deleted (verified merged); logs moved to `artifacts/logcat/` |
+| 7b | **Live-caught crash fix: `MANAGE_OWN_CALLS`** | `42e7217`; FATAL SecurityException on answer before → 3× clean answer scenarios after, zero FATALs |
+| 8 | Dependabot: safe set + fastify 5 cluster + zod 4 | `dfda79e`, `dd132c5`, `6299b4d`; each verified: tsc/lint/247 tests/boot smoke |
+| 9 | Deploy to Staging CI fixed | `13616a8`; root cause = never-configured `KUBECONFIG_STAGING`, no cluster exists; jobs gated opt-in |
+
+## Done but with caveats
+
+- **Task 2 FCM timeout branch:** implemented and shipped, but the timeout itself was never
+  forceable against prod Render (can't make the backend slow on demand). Policy-identical to
+  the already-live null path.
+- **Task 7 TTS log capture:** server confirmed `spoken_to_human: true` via MCP smoke, but the
+  on-device `[TTS]` log lines weren't captured before the crash-fix reinstall; the Task 5
+  Piper benchmark is the strongest device-side TTS evidence.
+- **Task 9:** could not view the actual Actions run (gh CLI 401 — not authenticated). Fix is
+  based on the workflow's own deterministic validate-step failure.
+
+## Blocked (needs a human)
+
+- Nothing hard-blocked. Soft items: setting the `K8S_DEPLOY_ENABLED` variable / provisioning
+  a staging cluster (or deleting the jobs), and `gh auth login` if Actions history is needed.
+
+## Deliberately skipped
+
+- **Majors left open:** pino-pretty 13, typescript-eslint v8, types/node 26, docker
+  node-25/26-alpine bumps — no isolation budget left to verify each properly; per the
+  no-unverified-major rule they stay as open Dependabot PRs.
+- **docs/v2/ kept** per instructions; `backend/scripts/overnight-*.mjs` kept (useful drivers,
+  no secrets inside; they read keys from env).
+- **No push to origin** — all work is local commits on `main` (9 task commits + 2 status
+  commits). Push when you're ready.
