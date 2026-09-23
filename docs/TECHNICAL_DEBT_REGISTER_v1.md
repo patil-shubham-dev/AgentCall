@@ -2,6 +2,11 @@
 
 > All deferred items from RC-1, RC-2, and post-release review. Separated by target version.
 > Effort estimates are from code analysis. No implementation scheduled.
+>
+> **Reconciled 2026-09-23** against the tree: several entries had drifted in both
+> directions (items listed as dead code that are live; items describing files that no
+> longer exist). Corrections are noted inline on the affected rows. Verified:
+> TD-02, TD-08, TD-31, TD-32, TD-33, TD-34.
 
 ---
 
@@ -12,13 +17,13 @@ Items that should be done before any significant feature work begins. These are 
 | # | Item | Effort | Rationale |
 |---|------|--------|-----------|
 | TD-01 | Remove `POST /api/v1/ready` and `POST /api/v1/recovery/complete` from documentation (already removed in code) | 15 min | Code clean, docs still lie |
-| TD-02 | Remove `PrimaryDatabaseSessionRepository` and `PrimaryDatabaseCallbackRepository`. Use `Database*Repository` directly in `database` mode. | 30 min | Dead code — adds no value over instrumentation wrapper |
+| TD-02 | ~~Remove `PrimaryDatabaseSessionRepository` and `PrimaryDatabaseCallbackRepository`.~~ **WITHDRAWN 2026-09-23 — the register was wrong.** These wrappers are NOT dead code: they are the live `database`-mode repository stack (constructed in `index.ts` for `PERSISTENCE_MODE=database`, i.e. the production Render deployment) and are covered by `agent-disconnect-abort` and other tests. Removing them would break production mode. | — | Register error: described live code as dead |
 | TD-03 | Fix API_SPEC.md to match actual routes.ts | 2 hours | Critical documentation debt — currently describes a different system |
 | TD-04 | Fix DEPLOYMENT_GUIDE.md to remove nonexistent env vars | 1 hour | Misleads operators |
 | TD-05 | Fix ARCHITECTURE.md to describe actual system (remove Suga, add DB modes) | 1 hour | Primary architecture reference is wrong |
 | TD-06 | Fix DATABASE_GUIDE.md to use pg.Pool instead of Knex | 30 min | Describes nonexistent dependency |
 | TD-07 | Fix PRODUCTION_READINESS.md to remove POST /ready documentation | 15 min | Already removed from code |
-| TD-08 | Add `statement_timeout` to pg.Pool config | 15 min | `SET statement_timeout = '5s'` on pool connect |
+| TD-08 | ~~Add `statement_timeout` to pg.Pool config~~ **DONE (2026-09-23, verified)** — both pool constructions in `index.ts` run `SET statement_timeout = '5s'` on connect | Done | — |
 
 **Total: ~5.75 hours**
 
@@ -81,10 +86,10 @@ Items that need investigation before they can be estimated or scheduled.
 
 | # | Item | Status | Effort |
 |---|------|--------|--------|
-| TD-31 | Remove commented-out code from routes.ts | Not checked — assume none | N/A |
-| TD-32 | Remove `FINAL_` prefixed audit files from repo root (keep for reference, move to archive) | Many files | 30 min |
-| TD-33 | Align `package.json` version with release version (2.0.0 → 1.0.0) | Needs discussion | 1 min |
-| TD-34 | Add `"typecheck"` script to CI pipeline | Not in current CI config | 15 min |
+| TD-31 | Remove commented-out code from routes.ts | **VERIFIED NONE (2026-09-23)** — all `//` lines in routes.ts are explanatory comments; no commented-out code blocks found | Done (nothing to do) |
+| TD-32 | ~~Remove `FINAL_` prefixed audit files from repo root~~ **Already done** — no `FINAL_*` files remain at root; historical audits live in `docs/archive/` | Done | — |
+| TD-33 | ~~Align `package.json` version with release version~~ **Already resolved** — `backend/package.json` and VERSION.md both say 1.0.0 (the Android app versions independently: `versionName 2.1`; see VERSION.md's version-story note) | Done | — |
+| TD-34 | Add `"typecheck"` script to CI pipeline | **Already done** — `.github/workflows/ci-cd.yml` runs `npm run typecheck` in `lint-and-typecheck` | Done |
 
 ---
 

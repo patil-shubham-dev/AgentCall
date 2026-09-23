@@ -1,5 +1,15 @@
 # AgentCall — Improvement Backlog & Implementation Guide
 
+> **⚠️ HISTORICAL (reconciled 2026-09-23):** this document is preserved as session memory,
+> but its "State of the world (2026-08-12)" section no longer reflects the tree. Key
+> corrections: the outgoing-call change set described as "Uncommitted" was merged to `main`
+> long ago (its `feat/outgoing-call-voice-first` branch was fully merged and deleted
+> 2026-09-23); Room is now at schema version 3, not 1; the v2 engine (Items 15/16) was
+> deleted on 2026-09-23 (tag `v2-dormant-archive`, docs kept in `docs/v2/`). Every item
+> 1–13 and 17 is marked `[DONE]` in the session log below; **Item 18 is the only remaining
+> `[NEW]` item**. For current ground truth, read `docs/CURRENT_STATE.md` and
+> `docs/AUDIT_HEALTH_2026-09-23.md` instead of §1 here.
+
 > **Purpose:** Session-memory + work order for future agent sessions. This document captures
 > (a) the exact state of the codebase as of 2026-08-12, (b) 15 approved improvement items with
 > design decisions, verified file references, implementation steps, verification plans, and
@@ -33,7 +43,8 @@
 | Backend signaling + voicebridge | Ring/answer/complete/cancel/callback; pending-session TTL sweep; single delivery path with dedupe deque; agent-ready gate (`attemptRing` 15s × 12 retries); missed-call semantics (`call_expired {reason}`); `GET /api/v1/agents/:agentId/status` endpoint. **21 test files / 159 tests green, lint clean** |
 | Android incoming call | `IncomingCallActivity` (accept/decline/call-back-later, 60 s ring timeout, caller tune), FGS notification, ring-open/resolved bookkeeping |
 | Android active call | `CallActivity` + `CallViewModel` (`CallPhase` enum: CONNECTING/OUTGOING/RINGING/ACTIVE/RECONNECTING/ENDED), waveform, transcript, quick replies, mute (`ACTION_SET_MUTED`), speaker, reconnect banner |
-| Android outgoing call (new today) | Profile "Call" button → `CallActivity(call_id=UUID, caller_name, outgoing=true)` → OUTGOING phase + looping ringback → first `call_answered`/`ai_message` → ACTIVE → `ACTION_START_CALL` (service: `markCallAnswered` upserts the record, voice session, POST ANSWER) → cancel-while-ringing sends `ACTION_CANCEL_CALL`. **Compiled: `assembleDebug` green. Lint unverifiable on this machine (offline). Uncommitted.** |
+| Room schema | [2026-09-23 correction: now **version 3** — `MIGRATION_1_2` added ringtone/quickReplies columns, `MIGRATION_2_3` re-asserted them; see `docs/CURRENT_STATE.md` §5] |
+| Android outgoing call (new today) | Profile "Call" button → `CallActivity(call_id=UUID, caller_name, outgoing=true)` → OUTGOING phase + looping ringback → first `call_answered`/`ai_message` → ACTIVE → `ACTION_START_CALL` (service: `markCallAnswered` upserts the record, voice session, POST ANSWER) → cancel-while-ringing sends `ACTION_CANCEL_CALL`. **Compiled: `assembleDebug` green. Lint unverifiable on this machine (offline). [2026-09-23: this change set was subsequently merged to `main` — see header note.]** |
 | DI | `AppModule` now provides raw `Context` (`provideApplicationContext`) — required by `CallAudioManager`'s `@Inject constructor(context: Context)` |
 
 **Key file map (mobile):** `call/CallService.kt` (FGS, actions, TTS/record, event collect),

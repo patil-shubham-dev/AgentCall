@@ -5,10 +5,11 @@
 | Field | Value |
 |-------|-------|
 | **Version** | 1.0.0 |
-| **Package version** | 1.0.0 (package.json) |
+| **Package version** | 1.0.0 (backend/package.json) |
 | **Release name** | "Solo Bridge" |
 | **Release date** | July 26, 2026 |
 | **Status** | Feature-complete, production-ready |
+| **Versioning note** | Backend and Android version **independently**: the backend/package.json stays at 1.0.0 (matching this file), while the Android app ships its own `versionCode`/`versionName` (currently 2 / "2.1") — the two numbers are unrelated and there is no synced release process |
 
 ## Supported Platforms
 
@@ -20,7 +21,7 @@
 | **Reverse proxy** | Caddy 2 | Auto TLS, config provided |
 | **STUN/TURN** | coturn | Config provided in `infra/coturn/` |
 | **Mobile — Android** | Android 12+ (API 31+) | Kotlin, Jetpack Compose |
-| **Mobile — iOS** | iOS 16+ | Swift, SwiftUI (archived — not actively maintained) |
+| **Mobile — iOS** | ❌ Not available | No iOS app exists in this repo (`mobile/` is Android-only); iOS was never built — earlier "Swift/SwiftUI (archived)" rows described work that does not exist in the tree. Item 14 in the improvement backlog was excluded by user decision |
 | **MCP client** | Any MCP-compatible AI | OpenCode, Claude, Cursor, etc. |
 
 ## Breaking Changes

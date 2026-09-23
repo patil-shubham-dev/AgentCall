@@ -4,7 +4,10 @@ _Verified against the code on 2026-08-19, after the session that shipped: FCM pu
 MCP session heartbeat/liveness, the call-button removal, quick-replies removal, the global
 ringtone, caller badges (clientInfo), MCP config snippets, and the removal of the
 `origin='user'` backend branch. Every statement below was checked against the source, not
-reconstructed from memory._
+reconstructed from memory. **§2 (call initiation) was re-verified and updated on 2026-09-23**
+after the backgrounded-ring rework (commit "fix(ring): deliver backgrounded rings without
+starting a foreground service", validated live on device 2026-09-23 — see
+`docs/OVERNIGHT_RUN_STATUS.md`); other sections retain their 2026-08-19 verification._
 
 ---
 
@@ -165,14 +168,42 @@ completed|aborted|declined`, with `declined` carrying a human note and optional
 The `call_incoming` payload carries: `callerName` (= the agent id), `summary`, `options`,
 `priority`, `clientInfo` (when present), `createdAt`, `expiresAt`.
 
-**Phone receipt — three routes to the same funnel (`SignalingForegroundService.ring()`,
-`IncomingCallActivity`):**
+**Phone receipt — three routes to the same funnel (`AgentCallMessagingService`,
+`SignalingForegroundService.ring()`, `IncomingCallActivity`):**
+
+> **Updated 2026-09-23 (backgrounded-ring rework, the 09-12 P0):** the ring leg no longer
+> starts a foreground service. Starting the signaling FGS from a backgrounded push crashed
+> the app twice over (dataSync 24h quota on API 34+, then Telecom eligibility on
+> `phoneCall`). None of the ring-leg work needs foreground, so:
+>
+> - **FCM push** — `AgentCallMessagingService.onMessageReceived` validates and posts the
+>   ring **directly**: expiry check → server status fetch (capped at 3 s via
+>   `withTimeoutOrNull`; a timeout/null takes the existing skip path so a cold backend can
+>   never block the ring) → dedupe → history row (`markCallRinging`) → full-screen
+>   notification → exact timeout alarm. No FGS start anywhere on this path.
+> - **60 s ring timeout** — an exact allow-while-idle alarm (`RingTimeoutScheduler`,
+>   `setExactAndAllowWhileIdle`, per-call request code) firing `RingTimeoutReceiver`, which
+>   re-reads server status before declining (`RingTimeoutPolicy.shouldFireTimeoutCancel`
+>   fires only on `pending` — the stale-decline pre-check; unknown/unreachable → skip, the
+>   server's own 3-min pending-TTL sweep bounds the ring anyway). Without the
+>   `SCHEDULE_EXACT_ALARM` grant (API 31+) it degrades to inexact-while-idle rather than
+>   crashing. `RingTimeoutPolicy` is pure and unit-tested (`RingTimeoutPolicyTest`).
+> - **WS-delivered rings** — `SignalingForegroundService` keeps its WS/poll/connected-call
+>   duties and its legacy in-service timeout job remains as the fallback path for
+>   WS/poll-delivered rings (a ring received over an already-live socket arrives while the
+>   service is legitimately foregrounded, so the FGS path is fine there).
+> - **Mic-denied answers** — route through `IncomingCallActivity`'s grant flow instead of
+>   throwing `SecurityException` on the microphone-type FGS start.
+>
+> Live device validation (2026-09-23): backgrounded ring, deep-Doze ring (process dead,
+> exact alarm fired, direct ring posted ~1.8 s after push), answer, decline, timeout expiry,
+> and the mic-permission grant flow all pass — logs in `docs/OVERNIGHT_RUN_STATUS.md`.
 
 - **WS event** — `SignalingClient` parses `call_incoming`, emits `CallIncoming` with
   `clientInfoName` parsed from the nested `clientInfo.name`.
 - **FCM push** — `AgentCallMessagingService.onMessageReceived` re-routes the same
-  payload through the ring machinery (`ACTION_RING_FROM_PUSH`). `onNewToken` re-registers
-  the device token with the backend.
+  payload through the ring machinery (`ACTION_RING_FROM_PUSH`), per the direct-ring path
+  above. `onNewToken` re-registers the device token with the backend.
 - **Fallback poll** — while the socket is disconnected, an adaptive poll loop calls
   `GET /calls/:id` for pending rings (`checkActiveCall`). Cadence backs off with device
   idle/background time and resets to fast while the app is foregrounded or a ring is
@@ -183,7 +214,8 @@ The `call_incoming` payload carries: `callerName` (= the agent id), `summary`, `
 `active` only), ensures the profile exists (`ensureProfileExists(agentId, callerName)`),
 writes the history row immediately (`markCallRinging` — an unanswered ring still shows in
 history), and shows the full-screen incoming notification with `client_info_name` as the
-badge source. A 60-second ring timeout auto-declines with a note ("no answer").
+badge source. A 60-second ring timeout auto-declines with a note ("no answer") — now via
+the exact allow-while-idle alarm + server re-check described above.
 
 **Answer** → `POST /calls/:id/answer` → `answerCall` (idempotent; also cancels any
 pending callback timer) → status `active` → phone notified → the agent's waiting
