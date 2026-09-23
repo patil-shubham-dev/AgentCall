@@ -115,7 +115,7 @@ export function registerRoutes(app: FastifyInstance, opts: RouteOptions): void {
     // Skip auth for health check endpoints (required by K8s probes), phone token
     // registration, and the MCP endpoint (which does its own multi-method auth)
     // Keep-warm ping: GET /health and GET / use the lightweight no-DB handler below.
-    if (url === '/health' || url.startsWith('/health?') || url === '/' || url.startsWith('/?') || url.startsWith('/api/v1/health') || url.startsWith('/api/v1/ready') || url.startsWith('/api/v1/metrics') || url === '/api/v1/phone/token' || url.split('?')[0] === '/mcp' || url.startsWith('/api/v2/health')) {
+    if (url === '/health' || url.startsWith('/health?') || url === '/' || url.startsWith('/?') || url.startsWith('/api/v1/health') || url.startsWith('/api/v1/ready') || url.startsWith('/api/v1/metrics') || url === '/api/v1/phone/token' || url.split('?')[0] === '/mcp') {
       return;
     }
     const isDev = config.serviceToken === DEV_SERVICE_TOKEN;

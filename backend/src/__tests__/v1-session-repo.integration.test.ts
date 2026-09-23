@@ -1,7 +1,7 @@
 import { it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { DatabaseSessionRepository } from '../voicebridge/repositories/index.js';
 import type { VoiceCallSession } from '../voicebridge/types.js';
-import { describeDb, makeTestPool } from './helpers/v2-pg.js';
+import { makeTestPool, describeDb } from './helpers/pg.js';
 import { resetV1Db } from './helpers/v1-pg.js';
 import type { Pool } from 'pg';
 

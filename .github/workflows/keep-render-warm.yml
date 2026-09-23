@@ -10,7 +10,7 @@
 # footprint stays at zero. The endpoint does no DB work and requires no auth.
 #
 # If you migrate to a paid Render plan (which never spins down), this file can
-# be safely deleted. See backend/src/routes.ts GET /health and GET /api/v2/health.
+# be safely deleted. See backend/src/routes.ts GET /health.
 #
 # Schedule note: GitHub's `schedule` trigger has a minimum interval of 5 minutes
 # and may be delayed a few minutes under load — 5 minutes is intentionally
@@ -33,26 +33,17 @@ jobs:
         run: |
           set -e
           URL="https://agentcall-66ke.onrender.com/health"
-          FALLBACK="https://agentcall-66ke.onrender.com/api/v2/health"
           echo "Pinging $URL ..."
-          # Try primary lightweight endpoint first (GET /health)
+          # Lightweight endpoint, no auth, no DB work.
           HTTP_CODE=$(curl -s -o /tmp/body.txt -w "%{http_code}" --max-time 30 "$URL" || echo "000")
           echo "Primary $URL -> HTTP $HTTP_CODE"
           cat /tmp/body.txt || true
-          # If primary not yet deployed (404/401) or fails, try fallback that always exists
           if [ "$HTTP_CODE" != "200" ]; then
-            echo "Primary failed, trying fallback $FALLBACK ..."
-            HTTP_CODE2=$(curl -s -o /tmp/body2.txt -w "%{http_code}" --max-time 30 "$FALLBACK" || echo "000")
-            echo "Fallback $FALLBACK -> HTTP $HTTP_CODE2"
-            cat /tmp/body2.txt || true
-            if [ "$HTTP_CODE2" != "200" ]; then
-              echo "::warning::Both health endpoints returned non-200 (primary=$HTTP_CODE fallback=$HTTP_CODE2) — Render instance may be spinning up"
-              # Do not fail the workflow on cold-start slow response; a 200 after ~20s is success.
-              # Only hard-fail on 5xx or network error that persists.
-              if [ "$HTTP_CODE2" = "000" ]; then
-                echo "::error::Network error reaching Render"
-                exit 1
-              fi
+            echo "::warning::Health endpoint returned non-200 ($HTTP_CODE) — Render instance may be spinning up"
+            # Do not fail the workflow on cold-start slow response; a 200 after ~20s is success.
+            if [ "$HTTP_CODE" = "000" ]; then
+              echo "::error::Network error reaching Render"
+              exit 1
             fi
           fi
           echo "Keep-warm ping complete at $(date -u +%Y-%m-%dT%H:%M:%SZ)"

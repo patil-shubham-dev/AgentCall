@@ -44,16 +44,6 @@ import { RecoveryManager } from './voicebridge/recovery-manager.js';
 import { CleanupScheduler } from './common/cleanup-scheduler.js';
 import type { WebSocketServer } from 'ws';
 import { McpSessionRegistry } from './mcp/session-registry.js';
-import { EventPlane } from './v2/event-plane.js';
-import { InMemoryEventLogStore } from './v2/event-log.js';
-import { V2CallService } from './v2/call-service.js';
-import { IdempotencyStore } from './v2/idempotency.js';
-import type { IdempotencyBackend } from './v2/idempotency.js';
-import { registerV2Routes } from './v2/routes.js';
-import { applyV2Schema } from './v2/db/schema.js';
-import { PostgresEventLogStore } from './v2/db/pg-event-log.js';
-import { PostgresIdempotencyStore } from './v2/db/pg-idempotency.js';
-import { EventLogVerifier } from './v2/recovery.js';
 
 const FORCE_KILL_TIMEOUT_MS = 10_000;
 
@@ -373,93 +363,11 @@ async function main() {
   };
   registerRoutes(app, routeOpts);
 
-  // v2 engine (roadmap M1–M3) — additive namespace beside v1, no route changes.
-  // PERSISTENCE_MODE=v2 (roadmap M3): the event log and idempotency store are
-  // Postgres-backed; on boot the aggregate map is rebuilt from the log
-  // (RecoveryManager v2, RPO 0) and a verifier job checks log integrity
-  // (counts/hashes, R1). Any other mode runs the M1 in-process stores.
-  let v2EventLog: InMemoryEventLogStore | PostgresEventLogStore;
-  let v2Idempotency: IdempotencyBackend;
-  let v2Pool: Pool | undefined;
-  if (persistenceMode === 'v2') {
-    v2Pool = new Pool({
-      connectionString: config.database.url,
-      min: config.database.poolMin,
-      max: config.database.poolMax,
-      idleTimeoutMillis: config.database.poolIdleTimeoutMs,
-      connectionTimeoutMillis: config.database.poolAcquireTimeoutMs,
-      application_name: 'agentcall-backend-v2',
-    });
-    v2Pool.on('connect', (client) => {
-      client.query("SET statement_timeout = '5s'").catch(() => {});
-    });
-    await applyV2Schema(v2Pool);
-    v2EventLog = new PostgresEventLogStore(v2Pool);
-    v2Idempotency = new PostgresIdempotencyStore(v2Pool);
-    logger.info({ persistenceMode }, '[startup] v2 durability mode enabled');
-  } else {
-    v2EventLog = new InMemoryEventLogStore();
-    v2Idempotency = new IdempotencyStore();
-  }
-  const v2EventPlane = new EventPlane(v2EventLog);
-  const v2CallService = new V2CallService(v2EventPlane, v2Idempotency);
-
-  // Crash recovery BEFORE the server accepts traffic: every settled event is
-  // in the log (outbox), so replay restores the exact pre-crash aggregate
-  // state — including re-armed silence timers with their remaining budget.
-  if (persistenceMode === 'v2') {
-    // Fail fast: per-event corruption is tolerated inside rehydrate (bad rows
-    // are skipped, not fatal), so a recovery failure here means the event log
-    // itself is unreachable — booting with an empty aggregate map would 404
-    // every live call. Let the error propagate to the fatal startup handler.
-    await v2CallService.recoverAll();
-  }
-
-  registerV2Routes(app, { callService: v2CallService });
-
-  // Log-integrity verifier (roadmap R1): per-call counts, sequence
-  // contiguity, and last-event hashes; logs corruption instead of trusting it.
-  let v2VerifierTimer: NodeJS.Timeout | undefined;
-  if (persistenceMode === 'v2' && config.database.verificationIntervalMs > 0) {
-    const v2Verifier = new EventLogVerifier();
-    const run = (): void => {
-      v2Verifier
-        .verify(v2EventLog)
-        .then((report) => {
-          if (report.corruptCalls > 0) {
-            logger.warn({ ...report }, '[v2] event-log verification found corruption');
-          } else {
-            logger.info({ ...report }, '[v2] event-log verification clean');
-          }
-        })
-        .catch((err) => logger.error({ err }, '[v2] event-log verification failed'));
-    };
-    run();
-    v2VerifierTimer = setInterval(run, config.database.verificationIntervalMs);
-    v2VerifierTimer.unref?.();
-  }
-
-  // Durable idempotency rows expire after the TTL (v2_idempotency); nothing
-  // else removes them, so sweep on the retention interval to keep the table
-  // bounded. Cheap and safe: the store's get() already treats expired rows as
-  // absent, and first-write-wins makes a re-put after a sweep harmless.
-  let v2IdemSweeperTimer: NodeJS.Timeout | undefined;
-  if (persistenceMode === 'v2') {
-    v2IdemSweeperTimer = setInterval(() => {
-      v2Idempotency.sweep().catch((err) => {
-        logger.error({ err }, '[v2] idempotency sweep failed');
-      });
-    }, config.v2.idempotencySweepIntervalMs);
-    v2IdemSweeperTimer.unref?.();
-  }
-
-  // Retention sweep for v2 calls (mirrors the v1 stale-session sweeper).
-  // Retention, not a cap: active exchanges keep touching lastActivityAt.
-  setInterval(() => {
-    v2CallService.sweepIdleCalls(config.v2.callIdleArchiveMs).catch((err) => {
-      logger.error({ err }, '[v2] idle-call sweep failed');
-    });
-  }, config.v2.sweepIntervalMs).unref?.();
+  // The dormant v2 engine (backend/src/v2, roadmap M1–M3) was deleted on
+  // 2026-09-23; its pre-deletion state is preserved at tag `v2-dormant-archive`
+  // and the design record lives in docs/v2/. The load-bearing piece that
+  // survives is the ENGINE_V2 lease semantics on send_message_and_wait
+  // (config.v2.maxTurnLeaseMs ceiling) — live v1 behavior since 2026-09-09.
 
   // Streamable HTTP MCP endpoint — the AI-facing connector surface (/mcp)
   const mcpSessions = registerMcpEndpoint(app, voiceBridgeService);
@@ -482,7 +390,6 @@ async function main() {
     logger.info(`\n  VoiceBridge running — AI ↔ Human voice bridge`);
     logger.info(`  HTTP API:     http://localhost:${config.port}`);
     logger.info(`  Phone WS:     ws://localhost:${config.port}/phone`);
-    logger.info(`  v2 API:       http://localhost:${config.port}/api/v2 (engine ${config.v2.engineV2 ? 'v2 lease semantics' : 'v1 compatibility'})`);
     logger.info(`  TTS engine:   Phone-side (Android TextToSpeech)\n`);
 
     // Record startup metrics
@@ -518,7 +425,6 @@ async function main() {
       cleanupScheduler.shutdown();
 
       // Wait for active operations to drain
-      v2CallService.dispose();
       await app.close();
       signalingServer?.close();
       await eventBus.shutdown();
@@ -530,12 +436,6 @@ async function main() {
       if (pool) {
         await pool.end();
         logger.info('[shutdown] database pool closed');
-      }
-      if (v2Pool) {
-        if (v2VerifierTimer) clearInterval(v2VerifierTimer);
-        if (v2IdemSweeperTimer) clearInterval(v2IdemSweeperTimer);
-        await v2Pool.end();
-        logger.info('[shutdown] v2 database pool closed');
       }
 
       clearTimeout(forceKillTimer);
