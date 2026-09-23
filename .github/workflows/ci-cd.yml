@@ -109,7 +109,13 @@ jobs:
     name: Deploy to Staging
     runs-on: ubuntu-latest
     needs: [build, security-scan]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    # K8s staging deploys are opt-in (2026-09-23): the live deployment target
+    # is Render (render.yaml + auto-deploy + keep-render-warm), and no staging
+    # cluster was ever provisioned — this job failed every push to main on the
+    # empty KUBECONFIG_STAGING secret. Set the repo variable
+    # K8S_DEPLOY_ENABLED=true AND the KUBECONFIG_STAGING secret to activate it;
+    # until then the job skips (green pipeline, no false alarm).
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.K8S_DEPLOY_ENABLED == 'true'
     environment:
       name: staging
     steps:
@@ -148,7 +154,8 @@ jobs:
     name: Deploy to Production
     runs-on: ubuntu-latest
     needs: [deploy-staging]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    # Same opt-in gate as deploy-staging (see comment there).
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.K8S_DEPLOY_ENABLED == 'true'
     environment:
       name: production
     steps:
