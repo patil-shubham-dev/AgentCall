@@ -250,8 +250,11 @@ async function main() {
 
   app.setErrorHandler(async (error, request, reply) => {
     const requestId = request.id;
-    const statusCode = error.statusCode ?? 500;
-    const errAny = error as unknown as Record<string, unknown>;
+    // fastify v5 types the handler error as `unknown` (FastifyError is
+    // value-imported, not a type); narrow once at the boundary.
+    const err = error as Error & { statusCode?: number; code?: string; details?: unknown; validation?: unknown };
+    const statusCode = err.statusCode ?? 500;
+    const errAny = err as unknown as Record<string, unknown>;
 
     if (typeof errAny.code === 'string') {
       if (statusCode >= 500) logger.error({ err: error, requestId }, (errAny.message as string) ?? 'Error');
@@ -264,26 +267,26 @@ async function main() {
     }
 
     if (statusCode === 429) {
-      return reply.status(429).send({ error: 'RATE_LIMITED', message: error.message ?? 'Too many requests', request_id: requestId });
+      return reply.status(429).send({ error: 'RATE_LIMITED', message: err.message ?? 'Too many requests', request_id: requestId });
     }
 
-    if ('validation' in error) {
-      return reply.status(400).send({ error: 'VALIDATION_ERROR', message: error.message, request_id: requestId });
+    if ('validation' in err) {
+      return reply.status(400).send({ error: 'VALIDATION_ERROR', message: err.message, request_id: requestId });
     }
 
-    if (error instanceof SyntaxError || statusCode === 400) {
-      logger.warn({ err: error, requestId }, 'Bad request body');
+    if (err instanceof SyntaxError || statusCode === 400) {
+      logger.warn({ err, requestId }, 'Bad request body');
       return reply.status(400).send({
         error: 'INVALID_REQUEST_BODY',
-        message: config.nodeEnv === 'production' ? 'Invalid request body' : error.message,
+        message: config.nodeEnv === 'production' ? 'Invalid request body' : err.message,
         request_id: requestId,
       });
     }
 
-    logger.error({ err: error, requestId }, 'Unhandled error');
+    logger.error({ err, requestId }, 'Unhandled error');
     return reply.status(500).send({
       error: 'INTERNAL_ERROR',
-      message: config.nodeEnv === 'production' ? 'Internal server error' : error.message,
+      message: config.nodeEnv === 'production' ? 'Internal server error' : err.message,
       request_id: requestId,
     });
   });
