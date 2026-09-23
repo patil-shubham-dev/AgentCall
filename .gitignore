@@ -8,6 +8,7 @@ mobile/android/local.properties
 # Environment
 .env
 .env.local
+.env.overnight-local
 backend/keys/jwt_*.pem
 backend/secrets/
 
@@ -54,6 +55,7 @@ infra/caddy_config/
 qa-screenshots/
 verification_screenshots/
 tmp/
+artifacts/
 mobile/android/*.png
 mobile/android/ui*.xml
 mobile/android/app/libs/*.zip

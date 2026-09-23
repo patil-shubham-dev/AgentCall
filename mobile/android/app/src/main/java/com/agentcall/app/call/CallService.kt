@@ -169,6 +169,7 @@ class CallService : Service() {
 
                     override fun onError(utteranceId: String?) {
                         if (utteranceId == WARMUP_UTTERANCE_ID) return
+                        speakRequestedAt.remove(utteranceId)
                         isAiSpeaking = false
                     }
                 })
@@ -823,8 +824,8 @@ class CallService : Service() {
         val vad = BargeInController(this, onBargeIn = { handleBargeIn() })
         bargeInController = vad
         vad.start()
-        // Wrap listener so VAD is stopped when the utterance completes (utterance callbacks are on main).
-        val prev = tts.let { null } // placeholder to keep shape; listener already set in initTts.
+        // We do not replace the global UtteranceProgressListener here (it is set once in
+        // initTts); VAD lifetime is tied to a delayed fallback stop and the call's speaking flag.
         val utteranceId = UUID.randomUUID().toString()
         speakRequestedAt[utteranceId] = System.currentTimeMillis()
         // We do not replace the global UtteranceProgressListener here; instead tie VAD lifetime to a
