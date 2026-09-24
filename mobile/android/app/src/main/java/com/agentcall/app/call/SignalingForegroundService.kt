@@ -218,7 +218,12 @@ class SignalingForegroundService : Service() {
             null
         }
         Log.i(TAG, "[DIAG] get_calls_response callId=${event.callId} status=$session elapsedMs=${System.currentTimeMillis() - diagGetStartMs}")
-        if (session != null && (session == "pending" || session == "active")) {
+        // Pending-only ring policy (RingTimeoutPolicy): a replayed call_incoming
+        // for an already-answered (active) call must never re-ring — it would
+        // clobber CallStateHolder mid-session and arm a 60s timeout against a
+        // live call. The answer path confirms ACTIVE locally, so nothing legit
+        // depends on 'active' passing a ring validator.
+        if (RingTimeoutPolicy.shouldRingForServerStatus(session)) {
             val agentId = event.callerName.lowercase().replace("\\s+".toRegex(), "-")
             // Canonical profile id: survives server-side renames (the slug may
             // point at a renamed agent's pre-rename profile, which ensure

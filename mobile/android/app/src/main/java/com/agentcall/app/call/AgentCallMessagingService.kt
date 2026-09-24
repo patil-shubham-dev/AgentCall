@@ -99,7 +99,10 @@ class AgentCallMessagingService : FirebaseMessagingService() {
                 Log.w(TAG, "[RING] validation fetch timed out or empty after ${VALIDATION_TIMEOUT_MS}ms callId=$callId — skipping (server TTL backstops)")
             }
             val status = details?.status
-            if (status != "pending" && status != "active") {
+            // Pending-only ring policy (RingTimeoutPolicy): an FCM push for a
+            // call that is already active (answered elsewhere / replayed queue)
+            // must not ring and clobber a live session's CallStateHolder.
+            if (!RingTimeoutPolicy.shouldRingForServerStatus(status)) {
                 Log.i(TAG, "[RING] skipping push callId=$callId server status=$status")
                 return@runBlocking null
             }

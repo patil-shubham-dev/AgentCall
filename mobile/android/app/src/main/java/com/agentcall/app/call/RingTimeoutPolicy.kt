@@ -33,4 +33,21 @@ object RingTimeoutPolicy {
      * PendingIntent and simultaneous rings can't collide.
      */
     fun alarmRequestCode(callId: String): Int = callId.hashCode()
+
+    /**
+     * Server statuses that justify ringing the device.
+     *
+     * ONLY `pending` qualifies. The historical `active` allowance exists
+     * because the FGS fallback poll once validated before the answer POST
+     * had landed; today it lets a queued/replayed call_incoming (WS replay,
+     * server restart queue flush, reconnect backlog) re-ring a call that was
+     * already answered — clobbering CallStateHolder (answered → ringing) and
+     * the in-call UI, and arming a 60s timeout that declines a live call.
+     * The answer path confirms ACTIVE status locally (CallViewModel
+     * ACTIVE-CONFIRM loop), so a ring that matters never depends on `active`
+     * reaching a ring validator. `active` calls re-surface through the
+     * call_incoming AiMessage path, not a second ring.
+     */
+    fun shouldRingForServerStatus(serverStatus: String?): Boolean =
+        serverStatus == "pending"
 }

@@ -243,6 +243,25 @@ class CallViewModel @Inject constructor(
                             reSyncCall(current.callId)
                         }
                     }
+                    SignalingClient.ConnectionState.DISCONNECTED -> {
+                        // Mid-call socket loss that arrives as a flat DISCONNECTED
+                        // (network callback before the client's own RECONNECTING
+                        // emission, or the reconnect machinery giving up after
+                        // MAX_RECONNECT_ATTEMPTS). Never tear the call down: the
+                        // WS-down fallbacks own recovery from here — the
+                        // transcript poll delivers AI messages, the terminal check
+                        // ends the call if the backend resolved it, and the
+                        // watchdog bounds a genuinely dead session. The FSM only
+                        // leaves ACTIVE for an explicitly observed RECONNECTING;
+                        // map DISCONNECTED onto it so the timer pauses and the
+                        // next CONNECTED re-syncs instead of racing.
+                        if (current.phase == CallPhase.ACTIVE) {
+                            applyMachineEvent(CallMachineEvent.SOCKET_RECONNECTING)
+                            _uiState.value = _uiState.value.copy(
+                                statusText = "Reconnecting — call stays live",
+                            )
+                        }
+                    }
                     else -> {}
                 }
             }
