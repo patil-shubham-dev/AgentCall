@@ -236,3 +236,24 @@ path as the full-screen button (verified in code — both send the same action).
   (`K8S_DEPLOY_ENABLED` gate). Run: <https://github.com/patil-shubham-dev/AgentCall/actions/runs/35977967487>
 
 **Overnight run: complete.** 10/10 tasks, 14 commits pushed, CI green, no secrets leaked.
+
+## Post-run hardening session (2026-09-24, no device — code audit only)
+
+Scope: the three items that still need live-device validation. Each was audited
+through three lenses (failure/edge-cases, concurrency/lifecycle, known platform
+quirks — Render WS docs + Firebase Doze docs checked, not assumed). **No device
+was available; nothing was device-tested. All three items remain "hardened via
+code audit, still requires live validation" — never PASS/WORKING/FIXED.**
+
+| Item | Found | Fixed | Commit |
+|------|-------|-------|--------|
+| 1. Real-voice barge-in + STT handoff | TTS `stopRequested` latched after one barge-in → every later Piper message silently no-oped (call goes mute); AudioRecord (AEC/NS) not released before the STT handoff; `SpeechRecognizer` created off-main-thread; system-TTS VAD tap lingered 30 s past speech end (self-barge risk) | `startNewUtterance()` reset in paced path; synchronous release before `onBargeIn`; main-thread hop; completion-driven VAD stop (30 s cap kept) | `36165c8` |
+| 2. Mid-call WS kill by Render | UI ignored `DISCONNECTED` → stale "Connected" after reconnect surrender; ring validators accepted status `active` → a replayed `call_incoming` could re-ring an answered call, clobber `CallStateHolder`, arm a 60 s timeout on a live session | DISCONNECTED maps to RECONNECTING phase ("call stays live"), teardown still terminal-only; `RingTimeoutPolicy.shouldRingForServerStatus` pending-only gate shared by both ring paths, +3 unit tests | `795e073` |
+| 3. Overnight ring, unplugged + non-whitelisted | Backend treated FCM HTTP 200 as terminal (200 = transport-accepted, not delivered — Doze may defer/drop high-priority per Firebase docs); on an un-exempted device every client backstop degrades (poll gated, alarm inexact, TTL sweep then records an unseen miss) | Server-side: one deferred re-push (45 s, window-gated ≥60 s left) when the WS leg was down and FCM accepted; re-enters attemptRing (pending-gated), absorbed by phone dedupe, no client ack (phone has no WS on that path), bounded ~3 nudges; +5 vitest (`fcm-repush.test.ts`) | `1c5106b` |
+
+Verification: backend 252 tests / 34 files green (was 247; +5 new), `tsc --noEmit`
+clean; mobile `testDebugUnitTest` + `compileDebugKotlin` green. Manual-test
+procedures for all three items, what each live test must confirm, and honest
+confidence statements: `docs/LIVE_TESTS_REMAINING.md`. Item 3's exact-alarm
+grant state on ColorOS (`canScheduleExactAlarms`) is a live-only open question
+logged there.
