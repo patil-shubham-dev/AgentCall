@@ -271,6 +271,8 @@ logged there.
 - **Run #131 on `4b1dae2`: success** — Unit & Integration Tests, Lint &
   TypeScript, Security Audit, Build & Docker Image all green; deploy jobs
   correctly skipped (`K8S_DEPLOY_ENABLED` gate).
-  <https://github.com/patil-shubham-dev/AgentCall/actions/runs/35998793974>
+  <https://github.com/patil-shubham-dev/AgentCall/actions/runs/35998891920>
 - Process note for future sessions: backend tests that depend on feature
   gates must mock `config` explicitly — the local `.env` lies about CI.
+  (The follow-up docs-only commit `b4c03ee` correctly skips CI entirely —
+  the workflow's `paths:` filter covers backend/** and infra/** only.)
