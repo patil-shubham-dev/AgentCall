@@ -73,6 +73,31 @@ export const PENDING_CALL_TTL_MS = 3 * 60 * 1000;
 export const MAX_RING_RETRIES = 12;
 export const RING_RETRY_INTERVAL_MS = 15_000;
 
+/**
+ * Live-unplugged-Doze hardening (2026-09-24 audit):
+ * an FCM send that returns HTTP 200 is NOT proof the device rang — Doze
+ * can defer a high-priority push (or drop it if the OS grants no network),
+ * and Google reports only transport-level acceptance. On an UNPLUGGED,
+ * non-whitelisted device all phone-side backstops degrade or vanish: the
+ * fallback poll is foreground/ring-gated (no FGS while idle), the exact
+ * alarm may be inexact (SCHEDULE_EXACT_ALARM revoked at targetSdk 35), and
+ * the 3-min pending-TTL sweep turns the call into a missed call.
+ *
+ * Policy: when the ring window still has at least FCM_RING_REPUSH_MIN_MS
+ * left and only the FCM leg carried the ring, schedule one confirmation
+ * re-push FCM_RING_REPUSH_DELAY_MS after the send. NO client ack exists —
+ * on the FCM-only idle path the phone has no WebSocket when the push
+ * lands, and an HTTP ack would add API surface plus network work inside
+ * the FCM dispatch window (which Firebase docs warn against). Cancellation
+ * is instead driven by call state: attemptRing re-checks `pending` before
+ * pushing, so an answered/cancelled/expired call is a silent no-op, and a
+ * re-push that fires while the ring UI is up is absorbed by the phone's
+ * single-ring dedupe (posted-notification check, recentlyRung, fixed
+ * notification id).
+ */
+export const FCM_RING_REPUSH_DELAY_MS = 45_000;
+export const FCM_RING_REPUSH_MIN_WINDOW_MS = 60_000;
+
 const phoneConnections = new Map<string, WebSocket>();
 const pendingNotifications = new Map<string, Array<{ payload: Record<string, unknown>; timestamp: string }>>();
 
@@ -113,6 +138,7 @@ export class VoiceBridgeService {
   private readonly sessionChangeCounters = new Map<string, number>();
   private readonly sessionChangeWaiters = new Map<string, Set<() => void>>();
   private readonly aiWaitLeases = new Map<string, { count: number; activeUntil: string | null; lastActiveAt: string }>();
+  private readonly pendingFcmRingRep = new Map<string, () => void>();
 
   constructor(
     private sessionRepo: SessionRepository,
@@ -141,6 +167,45 @@ export class VoiceBridgeService {
    */
   setRingRetryScheduler(scheduler: CleanupScheduler): void {
     this.ringRetryScheduler = scheduler;
+  }
+
+  /**
+   * Drop any scheduled FCM ring re-push for [callId]. Called by attemptRing
+   * once the call is no longer pending (answered/cancelled/expired).
+   */
+  cancelFcmRingRepush(callId: string): void {
+    const cancel = this.pendingFcmRingRep.get(callId);
+    if (cancel) {
+      this.pendingFcmRingRep.delete(callId);
+      cancel();
+      logger.info({ callId }, '[ring] cancelled pending FCM re-push');
+    }
+  }
+
+  /**
+   * Schedule the single deferred re-push for an FCM-only ring, unless the
+   * ring window is too close to expiry to be worth it. Idempotent per call
+   * while an entry is armed; the fire callback re-enters attemptRing, which
+   * rebuilds the payload and re-checks pending/expiry, so the chain is
+   * naturally bounded by the 3-min ring window (at most ~3 nudges).
+   */
+  private scheduleFcmRingRepush(session: VoiceCallSession): void {
+    const callId = session.id;
+    if (!this.ringRetryScheduler) return;
+    if (this.pendingFcmRingRep.has(callId)) return;
+    const windowLeftMs = Date.parse(session.resumedAt ?? session.createdAt) + CALL_RING_TTL_MS - Date.now();
+    if (windowLeftMs < FCM_RING_REPUSH_MIN_WINDOW_MS) {
+      logger.info({ callId, windowLeftMs }, '[ring] FCM re-push skipped — ring window too close to expiry');
+      return;
+    }
+    const fire = (): void => {
+      if (!this.pendingFcmRingRep.delete(callId)) return; // cancelled while armed
+      logger.info({ callId }, '[ring] firing deferred FCM re-push (Doze-deferred first send?)');
+      void this.attemptRing(callId);
+    };
+    this.pendingFcmRingRep.set(callId, () => this.ringRetryScheduler?.cancel(`fcm-repush:${callId}`));
+    this.ringRetryScheduler.schedule(`fcm-repush:${callId}`, Date.now() + FCM_RING_REPUSH_DELAY_MS, fire);
+    logger.info({ callId, delayMs: FCM_RING_REPUSH_DELAY_MS, windowLeftMs }, '[ring] scheduled FCM re-push');
   }
 
   /**
@@ -200,6 +265,17 @@ export class VoiceBridgeService {
       logger.info({ callId: session.id, wsDelivered, elapsedMs: Date.now() - diagPushStartMs }, '[ring] dispatch via WS only (FCM disabled)');
     }
     logger.info({ callId: session.id, wsDelivered, fcmOk, elapsedMs: Date.now() - diagPushStartMs }, '[diag:pushCallIncoming] done');
+    // Doze insurance (live-unplugged hardening, 2026-09-24): HTTP 200 from
+    // FCM only means transport-accepted — Doze may still defer or drop the
+    // push on an unplugged, non-whitelisted device, and every phone-side
+    // backstop degrades there. When the WS leg was down (the norm for an
+    // idle FCM-only phone), schedule ONE deferred re-push: a delivered first
+    // push re-rings nothing (phone single-ring dedupe), an answered/
+    // cancelled call is gated out by attemptRing's pending check, and the
+    // chain is bounded by the 3-min ring window.
+    if (!wsDelivered && fcmOk) {
+      this.scheduleFcmRingRepush(session);
+    }
     return wsDelivered || fcmOk;
   }
 
@@ -242,6 +318,8 @@ export class VoiceBridgeService {
     const session = await this.sessionRepo.findById(callId);
     if (!session || session.status !== 'pending') {
       logger.info({ callId, attemptsLeft, found: !!session, status: session?.status }, '[diag:attemptRing] no pending session, abort');
+      // Call left pending: any armed Doze re-push is now pointless.
+      this.cancelFcmRingRepush(callId);
       return;
     }
     logger.info({ callId, attemptsLeft, agentId: session.agentId, status: session.status }, '[diag:attemptRing] entered');
@@ -1002,6 +1080,7 @@ export class VoiceBridgeService {
         // original call is old.
         const becamePendingMs = new Date(session.resumedAt ?? session.createdAt).getTime();
         if (becamePendingMs >= pendingCutoff) continue;
+        this.cancelFcmRingRepush(session.id);
         await this.cancelCall(session.id, undefined, true);
         const ageMinutes = Math.max(1, Math.round((nowMs - becamePendingMs) / 60000));
         logger.info(
