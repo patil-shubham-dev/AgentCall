@@ -257,3 +257,20 @@ procedures for all three items, what each live test must confirm, and honest
 confidence statements: `docs/LIVE_TESTS_REMAINING.md`. Item 3's exact-alarm
 grant state on ColorOS (`canScheduleExactAlarms`) is a live-only open question
 logged there.
+
+### Push + CI confirmation (2026-09-24)
+
+- Pushed `1e42ba3..27ff5aa` (4 hardening commits; secret re-scan: 0 hits).
+- **Run #130 on `27ff5aa` FAILED** — `fcm-repush.test.ts` passed locally but
+  not in CI: the test relied on the local `.env`'s `FCM_ENABLED=true`; CI has
+  no `.env`, so `config.fcm.enabled` was false and `sendFcmPush` was never
+  reached. Environment-dependent test setup, not a product-code bug.
+- Fixed in `4b1dae2` (config mock pins the gate on, same pattern as
+  `fcm.test.ts`); verified locally with `FCM_ENABLED=false` (the CI condition):
+  5/5 and full 252-suite green.
+- **Run #131 on `4b1dae2`: success** — Unit & Integration Tests, Lint &
+  TypeScript, Security Audit, Build & Docker Image all green; deploy jobs
+  correctly skipped (`K8S_DEPLOY_ENABLED` gate).
+  <https://github.com/patil-shubham-dev/AgentCall/actions/runs/35998793974>
+- Process note for future sessions: backend tests that depend on feature
+  gates must mock `config` explicitly — the local `.env` lies about CI.
