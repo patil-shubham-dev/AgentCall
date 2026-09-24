@@ -218,10 +218,16 @@ class BargeInController(
                         val now = System.currentTimeMillis()
                         val graceElapsed = now - ttsStartMs
                         Log.i(TAG, "[VAD] speech detected rms=${rms.toInt()} frames=$framesSeen consecutive=$consecutive graceElapsed=${graceElapsed}ms — triggering barge-in")
-                        // Stop ourselves first so the mic is free for SpeechRecognizer.
+                        // Mic handoff discipline: the STT recognizer this barge-in
+                        // auto-starts must be able to acquire the microphone the
+                        // moment it runs. Release everything synchronously HERE —
+                        // stopping the loop alone would leave AudioRecord (and its
+                        // AEC/NS effects) claimed until the coroutine unwinds.
                         running = false
-                        // Release AudioRecord synchronously before callback — caller may start SpeechRecognizer.
-                        runCatching { record.stop() }
+                        runCatching { if (record.recordingState == AudioRecord.RECORDSTATE_RECORDING) record.stop() }
+                        runCatching { record.release() }
+                        runCatching { aec?.release(); aec = null }
+                        runCatching { ns?.release(); ns = null }
                         // Callback must not block this loop's cleanup — dispatch.
                         try { onBargeIn() } catch (e: Exception) { Log.e(TAG, "[VAD] onBargeIn threw", e) }
                         break
@@ -235,6 +241,9 @@ class BargeInController(
         } catch (e: Exception) {
             if (running) Log.e(TAG, "[VAD] loop failed", e)
         } finally {
+            // Idempotent by design: the barge-in branch releases early for the
+            // STT handoff, so this is a no-op on that path and the only cleanup
+            // on stop()/cancel()/error paths.
             runCatching { if (record.recordingState == AudioRecord.RECORDSTATE_RECORDING) record.stop() }
             runCatching { record.release() }
             runCatching { aec?.release(); aec = null }

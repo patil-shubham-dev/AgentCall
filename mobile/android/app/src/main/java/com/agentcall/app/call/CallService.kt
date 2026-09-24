@@ -631,8 +631,12 @@ class CallService : Service() {
         // Guard: don't double-start if the user already holds Record.
         if (!isRecording && speechRecognizer == null) {
             try {
-                startRecording()
-                Log.i(TAG, "[BARGE] auto-started SpeechRecognizer isRecording=$isRecording")
+                // SpeechRecognizer must be created on the main thread (platform
+                // contract); the VAD callback fires on its IO loop, so hop
+                // before creating. BargeInController has already released the
+                // mic synchronously before this callback ran, so no contention.
+                scope.launch(Dispatchers.Main) { startRecording() }
+                Log.i(TAG, "[BARGE] auto-starting SpeechRecognizer (main-thread handoff)")
             } catch (e: Exception) {
                 Log.e(TAG, "[BARGE] auto startRecording failed — user must tap Record manually", e)
             }
@@ -697,6 +701,11 @@ class CallService : Service() {
         // sentence get a micro-pause (SUB_CHUNK 70ms) not the full sentence pause, preserving prosody seams.
         val chunks = SpeechPacing.chunkForSynthesis(text)
         if (chunks.isEmpty()) return
+        // Clear a stop latched by the previous message's barge-in/end. The
+        // single serialized speech worker guarantees the interrupted message
+        // has fully unwound by now — without this, one barge-in latches
+        // stopRequested forever and every later Piper message silently no-ops.
+        piperEngine.startNewUtterance()
         if (!firstWordLogged) {
             firstWordLogged = true
             Log.i(TAG, "[TTS] piper first word: answer->word=${System.currentTimeMillis() - callStartMs}ms")
@@ -833,10 +842,24 @@ class CallService : Service() {
         // from handleBargeIn() which triggers onError/onDone quickly.
         tts.speak(text, TextToSpeech.QUEUE_ADD, null, utteranceId)
         Log.i(TAG, "[BENCH] ttfa systemTts enqueued textLen=${text.length} queueDelay=${System.currentTimeMillis() - ttfaStart}ms")
-        // VAD teardown piggybacks on AiSpeaking flag: leverage a short coroutine rather than listener churn.
+        // VAD teardown: stop the mic tap as soon as the utterance is over, not
+        // on a blind 30s timer. With the tap armed past playback, the user's
+        // own next words self-trigger a barge-in ("AI still speaking" race).
+        // Completion is observed via the global UtteranceProgressListener's
+        // isAiSpeaking flag (onStart→true, onDone/onError→false); the 30s cap
+        // stays as the fallback for engines that never deliver callbacks.
         scope.launch {
-            // Wait up to the expected utterance duration wall-clock; real stop comes from barge/release.
-            delay(30_000)
+            val armed = System.currentTimeMillis()
+            var sawSpeech = false
+            while (System.currentTimeMillis() - armed < 30_000L) {
+                delay(250)
+                if (bargeInController !== vad) return@launch // stopped/released elsewhere
+                if (isAiSpeaking) {
+                    sawSpeech = true
+                } else if (sawSpeech) {
+                    break // utterance finished (or was cut) — release the mic
+                }
+            }
             if (bargeInController === vad) { vad.stop(); bargeInController = null }
         }
     }
@@ -950,9 +973,11 @@ class CallService : Service() {
                                 )
                             )
                         }
-                        // Disconnected is defined but NOT emitted by SignalingClient.
-                        // The client handles reconnection internally (onFailure/onClosed).
-                        // If ever wired up, should show "Reconnecting..." UI, NOT tear down call.
+                        // Disconnected (and RECONNECTING via connectionState)
+                        // surface in CallViewModel's collectors — the call must
+                        // NOT tear down on a mid-call socket drop; the VM shows
+                        // "Reconnecting..." and the transcript poll + watchdog
+                        // cover a connection that never comes back.
                         else -> {}
                     }
                 }

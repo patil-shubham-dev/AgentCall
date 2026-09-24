@@ -167,6 +167,22 @@ class PiperTtsEngine(private val context: Context) {
         synchronized(drainLock) { drainLock.notifyAll() }
     }
 
+    /**
+     * Clears a latched stop request so the NEXT message can play.
+     *
+     * [stopRequested] is deliberately sticky across [synthesize]/[playAudio]
+     * (a barge-in must cancel every remaining chunk of the interrupted
+     * message), but the single serialized speech worker means a new message
+     * only ever starts after the interrupted one fully unwound — resetting
+     * here cannot race an in-flight stop. Without this, one barge-in latches
+     * the flag forever and every subsequent Piper message silently no-ops
+     * (synthesize returns null on a set flag), leaving the call mute until
+     * the engine is recycled.
+     */
+    fun startNewUtterance() {
+        stopRequested = false
+    }
+
     fun release() {
         stopRequested = true
         runCatching { tts?.release() }
