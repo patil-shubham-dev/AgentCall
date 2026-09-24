@@ -209,9 +209,30 @@ path as the full-screen button (verified in code — both send the same action).
 ## Deliberately skipped
 
 - **Majors left open:** pino-pretty 13, typescript-eslint v8, types/node 26, docker
-  node-25/26-alpine bumps — no isolation budget left to verify each properly; per the
-  no-unverified-major rule they stay as open Dependabot PRs.
+  node-25/26-alpine bumps — no isolation budget left to verify each  properly; per the no-unverified-major rule they stay as open Dependabot PRs.
 - **docs/v2/ kept** per instructions; `backend/scripts/overnight-*.mjs` kept (useful drivers,
   no secrets inside; they read keys from env).
-- **No push to origin** — all work is local commits on `main` (9 task commits + 2 status
-  commits). Push when you're ready.
+- **Push to origin** — superseded 2026-09-24: pushed directly to `main`, see
+  **Final push** below.
+
+## Final push (2026-09-24)
+
+- **Pushed:** `ff52cad..185e73e main -> main` — 14 commits (not 15; `ff52cad` was
+  already on origin), tip = `185e73e`, local and origin in sync.
+- **Secret scan: CLEAN.** Full diffs + commit messages of all 14 unpushed commits
+  (`git log origin/main..main -p`) pattern-scanned for Render (`rnd_…`), Firebase (`AIza…`),
+  JWT, GitHub (`ghp_`/`github_pat_`), AWS (`AKIA`), OpenAI (`sk-`), and Slack (`xox…`) token
+  formats: **0 hits**. Generic high-entropy secret-assignment scan: 0 hits. No commit in the
+  range touched any `.env*` file; `.env.overnight-local` was never committed; only
+  `.env.example` (placeholders) is tracked.
+- **Commit hygiene review:** all 14 commits single-purpose. Only candidate was the tip
+  (`185e73e` = driver script + same-session health audit doc, one validation unit) — left
+  unsplit per the don't-split-for-count rule. No rebase needed.
+- **GitHub confirmation:** `gh` still unauthenticated (keyring token invalid, HTTP 401),
+  but the repo is public — verified via the unauthenticated GitHub API: `main` is at
+  `185e73e`; **Actions run #129** (VoiceBridge CI/CD, push to main, first CI run of
+  fastify 5 + zod 4) **completed: success** — Unit & Integration Tests, Lint & TypeScript,
+  Security Audit & Dependency Scan all green; deploy jobs correctly skipped
+  (`K8S_DEPLOY_ENABLED` gate). Run: <https://github.com/patil-shubham-dev/AgentCall/actions/runs/35977967487>
+
+**Overnight run: complete.** 10/10 tasks, 14 commits pushed, CI green, no secrets leaked.
