@@ -24,6 +24,25 @@ vi.mock('../voicebridge/fcm.js', () => ({
   sendFcmPush: vi.fn().mockResolvedValue({ ok: true, tokenRemoved: false, error: null }),
 }));
 
+// Force the FCM gate ON regardless of the environment's .env (CI has none,
+// and without this the service skips sendFcmPush entirely — the exact
+// local/CI divergence run #130 caught). Same pattern as fcm.test.ts:
+// spread the real module so config.ts itself still loads with real env.
+vi.mock('../common/config.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../common/config.js')>();
+  return {
+    ...actual,
+    config: {
+      ...actual.config,
+      fcm: {
+        enabled: true,
+        serviceAccountPath: '/tmp/fake-service-account.json',
+        projectId: 'agentcall-test',
+      },
+    },
+  };
+});
+
 import * as serviceModule from '../voicebridge/service.js';
 import { VoiceBridgeService } from '../voicebridge/service.js';
 import { InMemorySessionRepository, InMemoryCallbackRepository } from '../voicebridge/repositories/index.js';
