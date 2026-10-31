@@ -37,7 +37,6 @@ import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.*
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.channels.Channel
 import kotlin.coroutines.coroutineContext
 import org.json.JSONObject
@@ -107,6 +106,14 @@ class CallService : Service() {
 
     private var speechRecognizer: SpeechRecognizer? = null
     private var pendingSpeakText: String? = null
+
+    // STT failure handling (task invariant 6: a barge-in must never lose the
+    // user's speech silently). One automatic retry absorbs the transient
+    // errors that dominate the mic handoff right after a barge-in (recorder
+    // busy / audio init racing the released AudioRecord). After the retry
+    // fails, the call must not hang the owning agent: tell it transparently
+    // that transcription failed instead of staying silent.
+    private var sttErrorRetries = 0
 
     // TTS latency telemetry: answer -> first spoken word, per service instance.
     private var callStartMs = 0L
@@ -333,7 +340,11 @@ class CallService : Service() {
                     stopSelf()
                 }
             }
-            ACTION_START_RECORDING -> startRecording()
+            ACTION_START_RECORDING -> {
+                // Manual re-engage consumes the retry budget cleanly each time.
+                sttErrorRetries = 0
+                startRecording()
+            }
             ACTION_STOP_RECORDING -> stopRecording()
             ACTION_SPEAK -> {
                 val text = intent.getStringExtra(EXTRA_TEXT) ?: return START_NOT_STICKY
@@ -725,35 +736,32 @@ class CallService : Service() {
         val vad = BargeInController(this, onBargeIn = { handleBargeIn() })
         bargeInController = vad
         vad.start()
-        // Fix 3: cap concurrent synthesize() — unbounded per-message async previously caused arena bloat (see report §3)
-        val synthSemaphore = kotlinx.coroutines.sync.Semaphore(2)
-        try {
-            // Overlap synthesis and playback: generate chunk N+1 while N plays, but at most 2 concurrent.
-            val deferred: List<Deferred<Synthesized?>> = chunks.map { chunk ->
-                scope.async(Dispatchers.Default) {
-                    synthSemaphore.acquire()
-                    try {
-                        val t0 = System.currentTimeMillis()
-                        val audio = piperEngine.synthesize(chunk.text, SpeechPacing.sentenceSpeed())
-                        val t1 = System.currentTimeMillis()
-                        if (audio != null) {
-                            val audioMs = (audio.samples.size * 1000.0 / piperEngine.sampleRate.coerceAtLeast(1)).toLong()
-                            val rtf = if (audioMs > 0) (t1 - t0).toDouble() / audioMs else Double.NaN
-                            val words = chunk.text.trim().split(Regex("\\s+")).size
-                            val tag = if (chunk.isLastInSentence) "sentenceEnd" else "subChunk"
-                            Log.i(TAG, "[BENCH] rtf words=$words chars=${chunk.text.length} synthMs=${t1 - t0} audioMs=$audioMs rtf=${"%.3f".format(rtf)} $tag chunk=\"${chunk.text.take(60)}\"")
-                        }
-                        if (audio != null) Synthesized(audio) else null
-                    } finally {
-                        synthSemaphore.release()
-                    }
+        // Keep precisely one synthesis job ahead of the audio being played.
+        // Launching a Deferred for every chunk (even behind a semaphore) left
+        // a long queue of native work to cancel after barge-in. One look-ahead
+        // retains overlap for low TTFA while bounding queued JNI synthesis and
+        // making the cancellation path deterministic.
+        fun synthesize(chunk: SpeechPacing.Chunk): Deferred<Synthesized?> =
+            scope.async(Dispatchers.Default) {
+                val t0 = System.currentTimeMillis()
+                val audio = piperEngine.synthesize(chunk.text, SpeechPacing.sentenceSpeed())
+                val t1 = System.currentTimeMillis()
+                if (audio != null) {
+                    val audioMs = (audio.samples.size * 1000.0 / piperEngine.sampleRate.coerceAtLeast(1)).toLong()
+                    val rtf = if (audioMs > 0) (t1 - t0).toDouble() / audioMs else Double.NaN
+                    val words = chunk.text.trim().split(Regex("\\s+")).size
+                    val tag = if (chunk.isLastInSentence) "sentenceEnd" else "subChunk"
+                    Log.i(TAG, "[BENCH] rtf words=$words chars=${chunk.text.length} synthMs=${t1 - t0} audioMs=$audioMs rtf=${"%.3f".format(rtf)} $tag chunk=\"${chunk.text.take(60)}\"")
                 }
+                if (audio != null) Synthesized(audio) else null
             }
+
+        var nextSynthesis: Deferred<Synthesized?>? = synthesize(chunks.first())
+        try {
             for (index in chunks.indices) {
                 if (!coroutineContext.isActive || piperEngine.stopRequested) {
-                    // Cancel any not-yet-started synthesizes — barge-in reuse of existing pattern.
-                    deferred.forEach { it.cancel() }
-                    if (piperEngine.stopRequested) Log.i(TAG, "[BARGE] cancelled ${deferred.size - index} remaining chunks at index $index")
+                    nextSynthesis?.cancel()
+                    if (piperEngine.stopRequested) Log.i(TAG, "[BARGE] cancelled one prefetched chunk at index $index")
                     break
                 }
                 if (index > 0) {
@@ -765,16 +773,22 @@ class CallService : Service() {
                     }
                     delay(pauseMs)
                     if (!coroutineContext.isActive || piperEngine.stopRequested) {
-                        deferred.forEach { it.cancel() }
+                        nextSynthesis?.cancel()
                         if (piperEngine.stopRequested) Log.i(TAG, "[BARGE] cancelled during pause at index $index (prevLast=${prev.isLastInSentence})")
                         break
                     }
                 }
                 val synthesized = try {
-                    deferred[index].await()
+                    nextSynthesis?.await()
                 } catch (_: Exception) {
                     null
-                } ?: continue
+                }
+                nextSynthesis = if (piperEngine.stopRequested) {
+                    null
+                } else {
+                    chunks.getOrNull(index + 1)?.let(::synthesize)
+                }
+                if (synthesized == null) continue
                 // Play on Default to keep main free, but AudioTrack write is blocking.
                 withContext(Dispatchers.Default) {
                     if (benchFirstWriteMsHolder[0] == 0L) benchFirstWriteMsHolder[0] = System.currentTimeMillis()
@@ -790,6 +804,7 @@ class CallService : Service() {
                 Log.i(TAG, "[BENCH] ttfa multi chunks=${chunks.size} sentences=$sentencesCount firstWriteAfterDequeue=${ttfa}ms textLen=${text.length}")
             }
         } finally {
+            nextSynthesis?.cancel()
             vad.stop()
             if (bargeInController === vad) bargeInController = null
             bargeInArmedMs = 0L
@@ -1031,6 +1046,7 @@ class CallService : Service() {
                     if (speechRecognizer == recognizer) speechRecognizer = null
                     val currentCallId = callId
                     if (text != null && text.isNotBlank() && currentCallId != null) {
+                        sttErrorRetries = 0
                         val messageId = UUID.randomUUID().toString()
                         scope.launch {
                             processUserText(text, currentCallId, messageId)
@@ -1045,8 +1061,7 @@ class CallService : Service() {
                     isRecording = false
                     recognizer.destroy()
                     if (speechRecognizer == recognizer) speechRecognizer = null
-                    speakText("Sorry, I didn't catch that.")
-                    updateNotification("Paused")
+                    handleSttError(error)
                 }
 
                 override fun onReadyForSpeech(params: Bundle) {}
@@ -1054,7 +1069,19 @@ class CallService : Service() {
                 override fun onRmsChanged(rmsdB: Float) {}
                 override fun onBufferReceived(buffer: ByteArray?) {}
                 override fun onEndOfSpeech() {}
-                override fun onPartialResults(partialResults: Bundle) {}
+                override fun onPartialResults(partialResults: Bundle) {
+                    // Partial hypotheses make the handoff after barge-in
+                    // visible immediately, but they are intentionally not
+                    // durable transcript events and never reach the agent.
+                    // Only onResults() creates the final user turn.
+                    val partial = partialResults
+                        .getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                        ?.firstOrNull()
+                        ?.trim()
+                    if (!partial.isNullOrBlank()) {
+                        CallEventBus.emit(CallEvent.UserSpeechPartial(partial))
+                    }
+                }
                 override fun onEvent(eventType: Int, params: Bundle) {}
             })
 
@@ -1073,6 +1100,41 @@ class CallService : Service() {
             speechRecognizer?.stopListening()
         } catch (e: Exception) {
             Log.e(TAG, "[STT] error stopping recording", e)
+        }
+    }
+
+    /**
+     * Recognizer failed outright (not a "no result callback" case). One
+     * automatic retry covers the transient handoff errors; a retry-limited
+     * detection keeps the loop bounded. After the retry also fails:
+     * 1. speak the excuse so the human knows to use text/tap mic — and
+     * 2. POST a transparent non-speech note so the owning agent's
+     *    send_message_and_wait returns instead of hanging until timeout.
+     */
+    private fun handleSttError(error: Int) {
+        val currentCallId = callId
+        if (sttErrorRetries < STT_MAX_RETRIES && currentCallId != null) {
+            sttErrorRetries++
+            Log.i(TAG, "[STT] error=$error — auto-retry $sttErrorRetries/$STT_MAX_RETRIES in ${STT_RETRY_DELAY_MS}ms")
+            scope.launch(Dispatchers.Main) {
+                delay(STT_RETRY_DELAY_MS)
+                if (callId == currentCallId && !isRecording && speechRecognizer == null) {
+                    Log.i(TAG, "[STT] retrying recognizer")
+                    startRecording()
+                }
+            }
+            return
+        }
+        Log.i(TAG, "[STT] recognizer failed after retries (error=$error) — fallback excuse + agent note")
+        speakText("Sorry, I didn't catch that.")
+        updateNotification("Paused")
+        if (currentCallId != null) {
+            val messageId = UUID.randomUUID().toString()
+            processUserText(
+                "(The user tried to speak, but speech transcription failed on the phone.)",
+                currentCallId,
+                messageId,
+            )
         }
     }
 
@@ -1356,6 +1418,9 @@ class CallService : Service() {
         const val ACTION_CANCEL_CALL = "com.agentcall.action.CANCEL_CALL"
         const val ACTION_SCHEDULE_CALLBACK = "com.agentcall.action.SCHEDULE_CALLBACK"
         const val ACTION_PREWARM_TTS = "com.agentcall.action.PREWARM_TTS"
+        /** Transient STT handoff errors dominate; a second attempt resolves most. */
+        const val STT_MAX_RETRIES = 1
+        const val STT_RETRY_DELAY_MS = 500L
         const val EXTRA_CALL_ID = "call_id"
         const val EXTRA_TEXT = "text"
         const val EXTRA_MESSAGE_ID = "message_id"

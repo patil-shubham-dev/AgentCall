@@ -169,11 +169,11 @@ object SpeechPacing {
                     // keep end as maxWords; prosody seam flagged in report
                 }
             }
-            // If this is the last chunk and remainder is tiny (1-2 words), merge with previous to avoid click
-            if (words.size - end in 1..2 && chunks.isNotEmpty() && (end - start) > 4) {
-                // merge tiny tail into this chunk
-                end = words.size
-            }
+            // Never merge a 1–2 word tail into this chunk. Doing so made a
+            // 25-word sentence produce a 13-word chunk, violating the only
+            // hard cancellation bound in this class. A brief final chunk is
+            // preferable to letting one uninterruptible native synthesis call
+            // exceed the documented maximum.
             val chunkText = words.subList(start, end).joinToString(" ")
             chunks += chunkText
             start = end
