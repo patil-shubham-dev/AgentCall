@@ -183,6 +183,17 @@ class CallViewModel @Inject constructor(
                         addAiMessage(event.text, event.messageId)
                     }
                     is CallEvent.UserMessage -> addUserTranscript(event.messageId, event.text)
+                    is CallEvent.UserSpeechPartial -> {
+                        // Display recognition progress locally only. A partial
+                        // may be revised by the recognizer, so it must never
+                        // become a transcript bubble or agent-visible event.
+                        _uiState.value = _uiState.value.copy(
+                            isAiSpeaking = false,
+                            isRecording = true,
+                            isProcessing = false,
+                            statusText = "Hearing: ${event.text.take(60)}",
+                        )
+                    }
                     is CallEvent.UserTextSent -> markUserTextSent(event.messageId)
                     is CallEvent.UserTextFailed -> markUserTextFailed(event.messageId)
                     is CallEvent.CallAnswered -> {
@@ -214,8 +225,15 @@ class CallViewModel @Inject constructor(
                     is CallEvent.AiWaitStatusChanged ->
                         setAiResponding(event.active, event.activeUntilMs, event.agentOnline)
                     is CallEvent.BargeInDetected -> {
-                        // Surface barge-in in transcript for debugging; statusText is transient.
-                        _uiState.value = _uiState.value.copy(statusText = "Interrupted — listening...")
+                        // TTS has been stopped before the recognizer starts.
+                        // Update local UI immediately rather than waiting for
+                        // Piper's non-cancellable JNI synthesis to unwind.
+                        _uiState.value = _uiState.value.copy(
+                            isAiSpeaking = false,
+                            isRecording = true,
+                            isProcessing = false,
+                            statusText = "Interrupted — listening...",
+                        )
                     }
                 }
             }

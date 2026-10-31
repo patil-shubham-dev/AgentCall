@@ -7,6 +7,8 @@ import kotlinx.coroutines.flow.asSharedFlow
 sealed class CallEvent {
     data class AiMessage(val text: String, val messageId: String? = null) : CallEvent()
     data class UserMessage(val messageId: String, val text: String) : CallEvent()
+    /** Ephemeral recognizer hypothesis; never persisted or sent to the agent. */
+    data class UserSpeechPartial(val text: String) : CallEvent()
     data class UserTextSent(val messageId: String) : CallEvent()
     data class UserTextFailed(val messageId: String, val text: String) : CallEvent()
     data object CallAnswered : CallEvent()
