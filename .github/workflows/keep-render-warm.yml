@@ -1,49 +1,73 @@
 # Prevent Render free-tier idle spin-down for AgentCall backend.
-# Render spins down free web services after ~15 minutes without inbound HTTP/WebSocket
-# traffic (https://docs.render.com/free#spinning-down-on-idle). A spun-down service
-# takes ~20-30s to cold-start on next request, which surfaces as call-setup latency
-# and WS connection failures on the Android app.
+# Render spins down free web services after ~15 minutes without inbound
+# HTTP/WebSocket traffic (https://docs.render.com/free#spinning-down-on-idle).
+# A spun-down service takes ~20-30s to cold-start on next request, which
+# surfaces as call-setup latency and partial WS connection failures on the
+# Android app.
 #
-# This workflow does an anonymous GET to the lightweight health endpoint every
-# 5 minutes (well within Render's 15-min idle window). It is intentionally
-# external (GitHub Actions, not the mobile app) so the phone's background
-# footprint stays at zero. The endpoint does no DB work and requires no auth.
+# SCHEDULE REALITY CHECK (2026-10-31):
+# GitHub's `schedule` trigger is delivery-lagged, not hard-realtime. With a
+# `*/5` cron the observed actual cadence was one run every ~4-6 HOURS — the
+# scheduler intentionally delays runs under load and has no minimum-freshness
+# guarantee. Burst-mode fixes the gap: each run holds the instance warm for
+# ~9 minutes by pinging every 60s, so a scheduled run (whenever it actually
+# fires) re-warms a spun-down instance and the phone's own 15-min WorkManager
+# heartbeat (mobile/android app/warmup/WarmupPingWorker) covers the gaps.
 #
-# If you migrate to a paid Render plan (which never spins down), this file can
-# be safely deleted. See backend/src/routes.ts GET /health.
+# Cost: free tier. Render allows 750 instance-hours/month (~31 days) — this
+# backend alone at always-on consumes ~731h, so budget is exhausted only if a
+# second free service is added on the same account.
 #
-# Schedule note: GitHub's `schedule` trigger has a minimum interval of 5 minutes
-# and may be delayed a few minutes under load — 5 minutes is intentionally
-# frequent enough to stay inside the 15-minute spin-down window even with jitter
-# (tightened from 10 to 5 per persistence audit — no budget concern, only this backend on the account).
+# Endpoint: GET /health is the lightweight no-auth, no-DB handler
+# (backend/src/routes.ts). Migrating to a paid Render plan (which never spins
+# down) disables the need for both this file and the app heartbeat. See the
+# DEPLOYMENT_GUIDE section "Keeping the free tier warm".
+#
+# Stagger: two schedule entries ~30 min apart reduce the worst-case gap when
+# the scheduler delays one run; they collapse into the same work when both
+# fire close together (jobs do not queue against each other for schedule
+# events, each fires as its own run).
 
 name: Keep Render Warm
 
 on:
   schedule:
-    - cron: '*/5 * * * *'  # every 5 minutes
-  workflow_dispatch:  # allow manual run from Actions tab
+    - cron: '*/10 * * * *'      # burst every 10 min (max 9 min hold)
+    - cron: '33 * * * *'        # second anchor close to the hour to trim gap when the first is late
+  workflow_dispatch:            # allow manual run from Actions tab
 
 jobs:
   ping:
     runs-on: ubuntu-latest
-    timeout-minutes: 2
+    timeout-minutes: 12
     steps:
-      - name: Ping AgentCall health endpoint
+      - name: Keep-warm burst (60s x 9)
+        env:
+          URL: https://agentcall-66ke.onrender.com/health
         run: |
-          set -e
-          URL="https://agentcall-66ke.onrender.com/health"
-          echo "Pinging $URL ..."
-          # Lightweight endpoint, no auth, no DB work.
-          HTTP_CODE=$(curl -s -o /tmp/body.txt -w "%{http_code}" --max-time 30 "$URL" || echo "000")
-          echo "Primary $URL -> HTTP $HTTP_CODE"
-          cat /tmp/body.txt || true
-          if [ "$HTTP_CODE" != "200" ]; then
-            echo "::warning::Health endpoint returned non-200 ($HTTP_CODE) — Render instance may be spinning up"
-            # Do not fail the workflow on cold-start slow response; a 200 after ~20s is success.
-            if [ "$HTTP_CODE" = "000" ]; then
-              echo "::error::Network error reaching Render"
-              exit 1
-            fi
+          set -u
+          normalize() { curl -sS -o /tmp/body.txt -w "%{http_code}" --max-time 45 "$1" 2>/dev/null || echo "000"; }
+          # First hit spins up a cold instance — give it up to 45s and retry
+          # twice before reporting the instance as unreachable (a cold start
+          # that ends 200 confirms the wake worked).
+          code=$(normalize "$URL")
+          attempt=1
+          while [ "$code" != "200" ] && [ "$attempt" -le 2 ]; do
+            echo "Attempt $attempt -> HTTP $code; retrying after spin-up window"
+            sleep 20
+            code=$(normalize "$URL")
+            attempt=$((attempt+1))
+          done
+          echo "Initial ping $URL -> HTTP $code"
+          echo "Body: $(cat /tmp/body.txt 2>/dev/null || true)"
+          if [ "$code" != "200" ]; then
+            echo "::warning::Health endpoint returned non-200 ($code) after spin-up retries — investigate Render auto-deploys or backend health"
           fi
-          echo "Keep-warm ping complete at $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          # Hold window: while the scheduler has been late keeping runs
+          # together, this loop keeps traffic fresh for ~9 minutes so the
+          # next scheduled run (or the phone heartbeat) lands on a warm host.
+          for i in $(seq 1 9); do
+            sleep 58
+            code=$(normalize "$URL")
+            echo "[$i/9] $URL -> HTTP $code at $(date -u +%H:%M:%SZ)"
+          done

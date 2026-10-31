@@ -3,6 +3,7 @@ package com.agentcall.app.home
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -94,32 +95,41 @@ fun HomeScreen(
                 }
                 Spacer(modifier = Modifier.weight(1f))
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Column(horizontalAlignment = Alignment.End) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Box(
-                                modifier = Modifier.size(7.dp).clip(CircleShape)
-                                    .background(
-                                        when { state.isReconnecting -> DotReconnecting; state.isConnected -> DotOnline; else -> DotOffline }
-                                    )
+                    // Tappable connection status: "Offline"/"Reconnecting" taps
+                    // straight into reconnect() — the lightest "push to connect".
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .clip(CircleShape)
+                            .clickable(
+                                enabled = !state.isReconnecting,
+                                onClick = { viewModel.reconnect() },
                             )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text(
-                                text = when { state.isReconnecting -> "Reconnecting"; state.isConnected -> "Ready"; else -> "Offline" },
-                                style = MaterialTheme.typography.labelMedium,
-                                color = when { state.isReconnecting -> Warning; state.isConnected -> Success; else -> MaterialTheme.colorScheme.onSurfaceVariant },
-                            )
-                        }
-                        Spacer(modifier = Modifier.height(2.dp))
+                            .padding(horizontal = 8.dp, vertical = 4.dp),
+                    ) {
+                        Box(
+                            modifier = Modifier.size(7.dp).clip(CircleShape)
+                                .background(
+                                    when { state.isReconnecting -> DotReconnecting; state.isConnected -> DotOnline; else -> DotOffline }
+                                )
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
                         Text(
-                            "v${com.agentcall.app.BuildConfig.VERSION_NAME}",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                            text = when { state.isReconnecting -> "Reconnecting"; state.isConnected -> "Ready"; else -> "Offline" },
+                            style = MaterialTheme.typography.labelMedium,
+                            color = when { state.isReconnecting -> Warning; state.isConnected -> Success; else -> MaterialTheme.colorScheme.onSurfaceVariant },
                         )
                     }
-                    Spacer(modifier = Modifier.width(12.dp))
-                    IconButton(onClick = onOpenSettings, modifier = Modifier.size(40.dp).clip(CircleShape).background(MaterialTheme.colorScheme.surface)) {
-                        Icon(Icons.Default.Settings, contentDescription = "Settings", tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
-                    }
+                    Spacer(modifier = Modifier.height(0.dp))
+                    Text(
+                        "v${com.agentcall.app.BuildConfig.VERSION_NAME}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                    )
+                }
+                Spacer(modifier = Modifier.width(12.dp))
+                IconButton(onClick = onOpenSettings, modifier = Modifier.size(40.dp).clip(CircleShape).background(MaterialTheme.colorScheme.surface)) {
+                    Icon(Icons.Default.Settings, contentDescription = "Settings", tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
                 }
             }
             HorizontalDivider(
@@ -130,6 +140,13 @@ fun HomeScreen(
             )
             if (showBatteryBanner) {
                 MinimalBatteryBanner(onOpen = { viewModel.dismissBatteryBanner(); onOpenBatteryHelp() }, onDismiss = { viewModel.dismissBatteryBanner() })
+            }
+            // "Push to connect" banner: when the app has agents but the backend
+            // is unreachable (Render free tier spins down between pings), the
+            // agent list must still offer an explicit one-tap reconnect — the
+            // header Offline pill is too easy to miss.
+            if (!state.isLoading && profiles.isNotEmpty() && !state.isConnected) {
+                OfflineReconnectBanner(reconnecting = state.isReconnecting, onRetry = { viewModel.reconnect() })
             }
             when {
                 state.isLoading -> LoadingSkeletonMinimal()
@@ -260,6 +277,54 @@ private fun DisconnectedContentMinimal(onRetry: () -> Unit, onOpenSettings: () -
             Button(onClick = onRetry, shape = RoundedCornerShape(Radii.Field), colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)) { Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(18.dp)); Spacer(modifier = Modifier.width(6.dp)); Text("Retry connection") }
             Spacer(modifier = Modifier.width(12.dp))
             OutlinedButton(onClick = onOpenSettings, shape = RoundedCornerShape(Radii.Field)) { Text("Open Settings") }
+        }
+    }
+}
+
+@Composable
+private fun OfflineReconnectBanner(reconnecting: Boolean, onRetry: () -> Unit) {
+    Surface(
+        shape = RoundedCornerShape(Radii.Card),
+        color = MaterialTheme.colorScheme.surface,
+        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = Spacing.ScreenPadding, vertical = Spacing.S),
+    ) {
+        Row(modifier = Modifier.padding(horizontal = Spacing.L, vertical = Spacing.M), verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Default.CloudOff, contentDescription = null, tint = if (reconnecting) Warning else Error, modifier = Modifier.size(20.dp))
+            Spacer(modifier = Modifier.width(Spacing.M))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    "Backend unreachable",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                Text(
+                    if (reconnecting) "Reconnecting..." else "Render free tier sleeps between pings — rings still wake it",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Button(
+                onClick = onRetry,
+                enabled = !reconnecting,
+                shape = RoundedCornerShape(Radii.Field),
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
+                contentPadding = PaddingValues(horizontal = Spacing.M, vertical = 6.dp),
+            ) {
+                if (reconnecting) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(14.dp),
+                        strokeWidth = 2.dp,
+                        color = MaterialTheme.colorScheme.onPrimary,
+                    )
+                } else {
+                    Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(14.dp))
+                }
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(if (reconnecting) "..." else "Connect")
+            }
         }
     }
 }

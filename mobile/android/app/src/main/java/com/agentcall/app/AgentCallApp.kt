@@ -26,9 +26,13 @@ class AgentCallApp : Application() {
         checkFullScreenIntentPermission()
         ForegroundTracker.register(this)
         // FCM-only idle: register push token even when no FGS/WS is running.
-        // Canonical WorkManager enqueue — NetworkType.CONNECTED + exponential
+        // Canonical WorkManager enqueue ï¿½ NetworkType.CONNECTED + exponential
         // backoff handles cold-start timeouts without duplicating logic.
         registerFcmTokenIfNeeded()
+        // Keep-warm is GitHub Actions-only now; cancel the legacy 15-min
+        // heartbeat enqueued by an earlier build so no periodic /health work
+        // lingers on updated devices.
+        androidx.work.WorkManager.getInstance(this).cancelUniqueWork("render-warmup-ping")
     }
 
     private fun registerFcmTokenIfNeeded() {
@@ -39,7 +43,7 @@ class AgentCallApp : Application() {
         if (Build.VERSION.SDK_INT >= 34) {
             val mgr = getSystemService(NotificationManager::class.java)
             if (!mgr.canUseFullScreenIntent()) {
-                Log.w("AgentCall", "[startup] USE_FULL_SCREEN_INTENT not granted — incoming calls will not show full-screen UI")
+                Log.w("AgentCall", "[startup] USE_FULL_SCREEN_INTENT not granted ï¿½ incoming calls will not show full-screen UI")
                 CallService.showFullScreenIntentWarning(this)
             } else {
                 CallService.cancelFullScreenIntentWarning(this)
@@ -96,7 +100,7 @@ class AgentCallApp : Application() {
         manager.createNotificationChannel(quietIncoming)
 
         // Missed-call notification (backlog item 1): silent, informational
-        // only — fired when a ring expires while the app is backgrounded.
+        // only ï¿½ fired when a ring expires while the app is backgrounded.
         val missedCalls = NotificationChannel(
             CallService.CHANNEL_MISSED_CALLS,
             "Missed Calls",

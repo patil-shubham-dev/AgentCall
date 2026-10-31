@@ -223,3 +223,30 @@ CADDY_DOMAIN=yourdomain.com docker compose up -d
 # Switch persistence mode (if DB migration caused issues)
 # Set PERSISTENCE_MODE=dual-write and restart
 ```
+
+---
+
+## Keeping the Render Free Tier Warm
+
+The production backend runs on a Render **free** web service, which spins
+down after ~15 minutes without inbound traffic; the next request pays a
+20-30s cold start. Warm-up is GitHub Actions-only (kept off the phone for
+battery reasons):
+
+| Layer | Mechanism | Interval | Notes |
+|-------|-----------|----------|-------|
+| GitHub Actions | `.github/workflows/keep-render-warm.yml` burst | schedule `*/10` + hourly anchor | Each run pings `/health` every 60s for ~9 min. GitHub heavily **delays** scheduled runs (observed 4-6h gaps on a `*/5` cron), so a run whenever it fires re-warms and holds. The repo is public, so Actions minutes are free. |
+| Agent harness | Any MCP call to `/mcp` | on demand | The first agent request spins the instance up; subsequent tool calls are warm. Rings also wake a sleeping instance directly via FCM→app→backend traffic. |
+
+A former on-device layer, `WarmupPingWorker` (15-min `/health` heartbeat), was
+removed — newer app builds cancel its enqueued periodic job on startup
+(`AgentCallApp.onCreate`), so no manual cleanup is needed on updated devices.
+
+Render's free plan grants ~750 instance-hours/month. The all-GitHub burst
+pattern (4 runs/hour x ~9 min held warm) consumes roughly 430 of those,
+leaving headroom for rings and agent traffic. Do not add a second free web
+service on the same account without disabling a warmer.
+
+If GitHub scheduler lag ever degrades below acceptable spin-up behavior, an
+external pinger (cron-job.org, UptimeRobot) is the documented drop-in; the
+app stays a passive receiver either way.

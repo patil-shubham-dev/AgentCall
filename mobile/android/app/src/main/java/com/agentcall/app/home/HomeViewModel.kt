@@ -227,7 +227,20 @@ class HomeViewModel @Inject constructor(
     }
 
     fun reconnect() {
-        viewModelScope.launch { refreshHealth() }
+        // Reconnect is user-driven ("push to connect" banner): surface the
+        // in-flight state so tapping is never a silent no-op, and mint/refresh
+        // the phone token with the health probe so the next ring push path is
+        // ready the moment the server answers.
+        _uiState.value = _uiState.value.copy(isReconnecting = true, statusText = "Reconnecting...")
+        viewModelScope.launch {
+            try {
+                withContext(Dispatchers.IO) { ApiClient.ensurePhoneToken() }
+            } catch (_: Exception) {
+                // Health below reports the true state; token refresh failing
+                // in a bad network window must not spin the banner forever.
+            }
+            refreshHealth()
+        }
     }
 
     /**
