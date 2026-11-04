@@ -112,7 +112,7 @@ class DebugBenchmarkActivity : ComponentActivity() {
                 // Fix 1: AEC/NS availability probe
                 Log.i(TAG, "[VAD-PROBE] AEC available=${AcousticEchoCanceler.isAvailable()} NS available=${NoiseSuppressor.isAvailable()}")
                 // Instantiate a short-lived BargeInController to trigger its session log without speaking
-                val probeController = BargeInController(this@DebugBenchmarkActivity) { Log.i(TAG, "[VAD-PROBE] barge callback fired") }
+                val probeController = BargeInController(this@DebugBenchmarkActivity, onBargeIn = { Log.i(TAG, "[VAD-PROBE] barge callback fired") })
                 probeController.start()
                 delay(800)
                 probeController.stop()

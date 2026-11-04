@@ -8,6 +8,7 @@ import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.media.audiofx.AcousticEchoCanceler
 import android.media.audiofx.NoiseSuppressor
+import android.os.Build
 import android.util.Log
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CoroutineScope
@@ -19,6 +20,22 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlin.math.sqrt
+
+/** Fallback for the no-provider constructor: mirror the route logic CallAudioManager uses. */
+private fun inferSpeakerRoute(context: Context): Boolean {
+    return try {
+        val am = context.getSystemService(Context.AUDIO_SERVICE) as android.media.AudioManager
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            val current = am.communicationDevice
+            current?.type == android.media.AudioDeviceInfo.TYPE_BUILTIN_SPEAKER
+        } else {
+            @Suppress("DEPRECATION")
+            am.isSpeakerphoneOn
+        }
+    } catch (_: Exception) {
+        false
+    }
+}
 
 /**
  * Lightweight VAD for barge-in during Piper playback.
@@ -42,6 +59,13 @@ import kotlin.math.sqrt
 class BargeInController(
     private val context: Context,
     private val onBargeIn: () -> Unit,
+    /**
+     * Real speaker-route state (CallAudioManager.isSpeakerOn). On Android S+
+     * the route is set via setCommunicationDevice(), which the deprecated
+     * isSpeakerphoneOn flag does not always reflect — the provider keeps the
+     * echo threshold attached to the device audio actually uses.
+     */
+    private val isSpeakerActive: () -> Boolean = { inferSpeakerRoute(context) },
 ) {
     companion object {
         private const val TAG = "AgentCall"
@@ -83,17 +107,10 @@ class BargeInController(
         job = scope.launch {
             runLoop()
         }
-        val isSpeaker = isSpeakerphoneOn()
+        val isSpeaker = isSpeakerActive()
         val thresh = if (isSpeaker) RMS_THRESHOLD_SPEAKER else RMS_THRESHOLD_EARPIECE
         val need = if (isSpeaker) REQUIRED_CONSECUTIVE_SPEAKER else REQUIRED_CONSECUTIVE_EARPIECE
         Log.i(TAG, "[VAD] started (sampleRate=$SAMPLE_RATE frame=$FRAME_SAMPLES grace=${GRACE_MS}ms threshold=$thresh need=$need speaker=$isSpeaker)")
-    }
-
-    private fun isSpeakerphoneOn(): Boolean {
-        return try {
-            val am = context.getSystemService(Context.AUDIO_SERVICE) as android.media.AudioManager
-            am.isSpeakerphoneOn
-        } catch (_: Exception) { false }
     }
 
     fun stop() {
@@ -118,6 +135,7 @@ class BargeInController(
         )
         if (minBuf <= 0) {
             Log.e(TAG, "[VAD] getMinBufferSize failed: $minBuf")
+            running = false
             return
         }
         // Use VOICE_COMMUNICATION: may apply AEC on some OEMs, reducing speaker echo pickup.
@@ -130,6 +148,7 @@ class BargeInController(
         }
         if (record == null) {
             Log.e(TAG, "[VAD] AudioRecord creation failed for both VOICE_COMMUNICATION and MIC")
+            running = false
             return
         }
 
@@ -172,7 +191,7 @@ class BargeInController(
         val buffer = ShortArray(FRAME_SAMPLES)
         var consecutive = 0
         var framesSeen = 0L
-        var lastSpeaker = isSpeakerphoneOn()
+        var lastSpeaker = isSpeakerActive()
         var routeSwitches = 0
 
         try {
@@ -180,6 +199,7 @@ class BargeInController(
             // Quick state check: startRecording() is non-throwing on some ROMs but enters ERROR state.
             if (record.recordingState != AudioRecord.RECORDSTATE_RECORDING) {
                 Log.e(TAG, "[VAD] startRecording failed state=${record.recordingState}")
+                running = false
                 return
             }
 
@@ -200,7 +220,7 @@ class BargeInController(
                     continue
                 }
 
-                val isSpeaker = isSpeakerphoneOn()
+                val isSpeaker = isSpeakerActive()
                 if (isSpeaker != lastSpeaker) {
                     routeSwitches++
                     Log.i(TAG, "[VAD] route switched → speaker=$isSpeaker (was $lastSpeaker) frames=$framesSeen — threshold now ${if (isSpeaker) RMS_THRESHOLD_SPEAKER else RMS_THRESHOLD_EARPIECE} need ${if (isSpeaker) REQUIRED_CONSECUTIVE_SPEAKER else REQUIRED_CONSECUTIVE_EARPIECE}")
@@ -241,6 +261,7 @@ class BargeInController(
         } catch (e: Exception) {
             if (running) Log.e(TAG, "[VAD] loop failed", e)
         } finally {
+            running = false
             // Idempotent by design: the barge-in branch releases early for the
             // STT handoff, so this is a no-op on that path and the only cleanup
             // on stop()/cancel()/error paths.

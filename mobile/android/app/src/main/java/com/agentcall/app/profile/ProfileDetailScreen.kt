@@ -62,13 +62,9 @@ import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.agentcall.app.data.database.entity.CallRecordEntity
-import com.agentcall.app.ui.composables.AmbientBackground
-import com.agentcall.app.ui.composables.GradientAvatar
 import com.agentcall.app.ui.theme.Amber400
-import com.agentcall.app.ui.theme.GradientBrandEnd
 import com.agentcall.app.ui.theme.Green400
 import com.agentcall.app.ui.theme.Green500
-import com.agentcall.app.ui.theme.Indigo400
 import com.agentcall.app.ui.theme.Red400
 import com.agentcall.app.ui.theme.Red500
 import com.agentcall.app.ui.theme.Slate200
@@ -122,12 +118,6 @@ fun ProfileDetailScreen(
         Box(
             modifier = Modifier.fillMaxSize().padding(innerPadding),
         ) {
-            AmbientBackground(
-                accentColor = Indigo400,
-                secondaryColor = GradientBrandEnd,
-                speedMultiplier = 0.8f,
-            )
-
             val p = profile
             if (p != null) {
                 LazyColumn(

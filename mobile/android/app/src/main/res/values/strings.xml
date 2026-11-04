@@ -15,13 +15,18 @@
     <string name="version_full">1.0.0</string>
 
     <!-- Incoming Call -->
-    <string name="incoming_call">Incoming AI Call</string>
+    <string name="incoming_call">Incoming AI Voice Call</string>
     <string name="answer">Answer</string>
     <string name="decline">Decline</string>
     <string name="later">Later</string>
     <string name="call_back_in">Call back in…</string>
     <string name="call_back_in_min">Call me back in %d min</string>
     <string name="answer_decline_later_hint">Answer, decline, or schedule for later</string>
+    <string name="call_notification_avatar_description">AgentCall AI avatar</string>
+    <string name="call_notification_default_title">AI Agent</string>
+    <string name="call_notification_default_context">Calling you now</string>
+    <string name="call_notification_mode">Incoming AI voice call</string>
+    <string name="call_notification_mode_quiet">Incoming AI voice call · Silent</string>
 
     <!-- Active Call -->
     <string name="end_call">End Call</string>

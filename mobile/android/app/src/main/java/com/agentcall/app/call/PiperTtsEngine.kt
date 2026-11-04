@@ -10,6 +10,7 @@ import com.k2fsa.sherpa.onnx.OfflineTtsConfig
 import com.k2fsa.sherpa.onnx.OfflineTtsModelConfig
 import com.k2fsa.sherpa.onnx.OfflineTtsVitsModelConfig
 import java.io.File
+import kotlin.math.sqrt
 
 /**
  * Bundled offline TTS (backlog item 14): a Piper medium voice running on the
@@ -64,6 +65,14 @@ class PiperTtsEngine(private val context: Context) {
 
     val sampleRate: Int
         get() = tts?.sampleRate() ?: 22050
+
+    /**
+     * Real playback amplitude, called ~every [SLICE_FRAMES] frames from the
+     * playback thread with the slice's RMS (0..1 float PCM). Feeds the
+     * call-screen waveform; null writes are `written`-bounded so the level
+     * always matches audio that actually reached the track.
+     */
+    var onLevel: ((Float) -> Unit)? = null
 
     /** Loads the engine + model. Returns false on any failure (caller falls back to system TTS). */
     fun init(): Boolean {
@@ -128,8 +137,9 @@ class PiperTtsEngine(private val context: Context) {
             var firstWriteMs = 0L
             while (offset < audio.samples.size) {
                 if (stopRequested) break
+                val slice = minOf(SLICE_FRAMES, audio.samples.size - offset)
                 val written = track.write(
-                    audio.samples, offset, audio.samples.size - offset,
+                    audio.samples, offset, slice,
                     AudioTrack.WRITE_BLOCKING,
                 )
                 if (firstWriteMs == 0L) firstWriteMs = System.currentTimeMillis() - tPlay
@@ -137,6 +147,7 @@ class PiperTtsEngine(private val context: Context) {
                     Log.e(TAG, "[PIPER] write failed code=$written")
                     break
                 }
+                if (written > 0) onLevel?.invoke(rmsOf(audio.samples, offset, written))
                 offset += written
                 totalFramesWritten += written
             }
@@ -293,6 +304,16 @@ class PiperTtsEngine(private val context: Context) {
         return track
     }
 
+    /** RMS (0..1) of samples[offset, offset+count); NaN samples contribute zero. */
+    private fun rmsOf(samples: FloatArray, offset: Int, count: Int): Float {
+        var sum = 0.0
+        for (i in offset until offset + count) {
+            val v = samples[i]
+            if (v.isFinite()) sum += v.toDouble() * v.toDouble()
+        }
+        return sqrt((sum / count).toFloat()).coerceIn(0f, 1f)
+    }
+
     private fun extractModelIfNeeded(): File {
         modelDir?.let { return it }
         val dest = File(context.filesDir, MODEL_ASSET_DIR)
@@ -339,5 +360,8 @@ class PiperTtsEngine(private val context: Context) {
         // wakes the waiter long before this. Guards against a device that
         // never delivers the marker event.
         private const val DRAIN_WAIT_SLICE_MS = 250L
+
+        /** Playback slices the write loop ~every 93ms at 22050 Hz to bound the level cadence. */
+        private const val SLICE_FRAMES = 2048
     }
 }

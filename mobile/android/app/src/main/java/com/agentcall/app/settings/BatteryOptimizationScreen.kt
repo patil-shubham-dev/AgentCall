@@ -32,7 +32,6 @@ import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.ViewModel
-import com.agentcall.app.ui.composables.AmbientBackground
 import com.agentcall.app.ui.composables.SectionLabel
 import com.agentcall.app.ui.theme.*
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -151,15 +150,7 @@ fun BatteryOptimizationScreen(
         ) {
             Spacer(modifier = Modifier.height(Spacing.XS))
             // Header: SYSTEM INSET (via Scaffold innerPadding) + 12dp breathing.
-            // matchParentSize keeps the ambient backdrop inside the wrapped
-            // header — fillMaxSize made this Box swallow the whole screen.
             Box(modifier = Modifier.fillMaxWidth()) {
-                AmbientBackground(
-                    accentColor = MaterialTheme.colorScheme.primary,
-                    density = 0.6f,
-                    speedMultiplier = 0.5f,
-                    modifier = Modifier.matchParentSize(),
-                )
                 Row(
                     modifier = Modifier.fillMaxWidth().padding(horizontal = Spacing.ScreenPadding),
                     verticalAlignment = Alignment.CenterVertically,

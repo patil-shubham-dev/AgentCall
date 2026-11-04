@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  AgentCall identity avatar: the brand violet disc with the AgentCall mark.
+  RemoteViews-safe (layer-list + vectors), so the notification wears the same
+  identity as the in-app call screens instead of a robot glyph.
+-->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item>
+        <shape android:shape="oval">
+            <solid android:color="#7967DE" />
+        </shape>
+    </item>
+    <item
+        android:drawable="@drawable/ic_agentcall_mark_light"
+        android:gravity="center" />
+</layer-list>

@@ -7,6 +7,7 @@ import android.content.pm.PackageManager
 import android.Manifest
 import androidx.core.content.ContextCompat
 import android.media.AudioAttributes
+import android.media.MediaRecorder
 import android.os.Build
 import android.os.Debug
 import android.os.Bundle
@@ -18,8 +19,8 @@ import android.speech.SpeechRecognizer
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.util.Log
+import android.widget.RemoteViews
 import androidx.core.app.NotificationCompat
-import androidx.core.app.Person
 import com.agentcall.app.BuildConfig
 import com.agentcall.app.ForegroundTracker
 import com.agentcall.app.MainActivity
@@ -80,23 +81,28 @@ class CallService : Service() {
     // run on the main thread. Speech is paced sentence-by-sentence through a
     // single serialized worker; the system TextToSpeech engine remains as the
     // fallback when Piper is unavailable.
-    private val piperEngine = PiperTtsEngine(this)
+    private val piperEngine = PiperTtsEngine(this).also { engine ->
+        engine.onLevel = { level -> CallEventBus.emit(CallEvent.TtsAmplitude(level)) }
+    }
     @Volatile private var piperReady = false
     private var piperInitJob: Job? = null
     @Volatile private var piperAttempted = false
     private val speechChannel = Channel<String>(Channel.UNLIMITED)
     private var speechWorker: Job? = null
     @Volatile var isRecording = false
+    @Volatile private var lastMicLevelEmitMs = 0L
     @Volatile var isAiSpeaking = false
-    // Workstream A — VAD barge-in (energy RMS, 0 extra native deps, 0 APK weight beyond platform AudioRecord).
+    // Workstream A — VAD barge-in
     // Sherpa Vad was evaluated: sherpa-onnx 1.13.6 exposes Vad/VadModelConfig/SileroVadModelConfig/TenVadModelConfig
     // via com.k2fsa.sherpa.onnx (classes.jar) reusing the bundled libonnxruntime.so, but requires a
     // silero_vad.onnx asset (~1.6 MB). Chose energy path for this pass; upgrade path documented in BargeInController.kt.
     private var bargeInController: BargeInController? = null
     @Volatile private var bargeInArmedMs = 0L
-    @Volatile var isPaused = false
-    /** Muted: the AI's spoken replies are silenced (transcript still flows). */
-    @Volatile var isMuted = false
+    /**
+     * Muted: the AI's spoken replies are silenced (transcript still flows).
+     * NOT the user's microphone — named so no screen can mislabel it.
+     */
+    @Volatile var aiVoiceMuted = false
     // Fix 3: arena growth mitigation — periodic engine recycle every N messages (empirically 10)
     private var piperMessageCount = 0
 
@@ -114,6 +120,14 @@ class CallService : Service() {
     // fails, the call must not hang the owning agent: tell it transparently
     // that transcription failed instead of staying silent.
     private var sttErrorRetries = 0
+    // Hands-free loop (REAL_CALL_IMPROVEMENTS revamp): the microphone is
+    // always captured for the whole call — listening resumes automatically
+    // after every finished turn, silence timeout, or barge-in. The user
+    // never presses a mic button. Failure budget below keeps a broken
+    // recognizer engine from looping excuses forever.
+    private var sttAutoRestartJob: Job? = null
+    private var sttConsecutiveFailures = 0
+    @Volatile private var sttFailureAnnounced = false
 
     // TTS latency telemetry: answer -> first spoken word, per service instance.
     private var callStartMs = 0L
@@ -178,6 +192,7 @@ class CallService : Service() {
                         if (utteranceId == WARMUP_UTTERANCE_ID) return
                         speakRequestedAt.remove(utteranceId)
                         isAiSpeaking = false
+                        CallEventBus.emit(CallEvent.AiSpeakingFinished)
                     }
                 })
                 val queued = pendingSpeakText
@@ -315,6 +330,12 @@ class CallService : Service() {
                     startVoiceSession(id)
                     startCallWatchdog()
                     retryWithBackoff(id, KEY_PENDING_ANSWERS, "ANSWER") { attemptAnswer(it) }
+                    // Hands-free arm: open the mic even before/as the AI starts
+                    // talking (greeting path re-listens itself; a muted AI has
+                    // no greeting to hide behind). The 5s delay lets the
+                    // greeting begin; if speech is live, the restart is a no-op
+                    // and listening resumes from speechLoop instead.
+                    scheduleSttRestart(STT_ARM_AFTER_ANSWER_MS)
                     // §4: Answer from notification/lock screen must bring the
                     // Active Call UI to the foreground, not just start the
                     // background service. IncomingCallActivity's in-app Answer
@@ -341,9 +362,12 @@ class CallService : Service() {
                 }
             }
             ACTION_START_RECORDING -> {
-                // Manual re-engage consumes the retry budget cleanly each time.
+                // Manual re-engage (debug tools / adb) also clears the failure
+                // budget so a wedged engine gets a fresh chance.
                 sttErrorRetries = 0
-                startRecording()
+                sttConsecutiveFailures = 0
+                sttFailureAnnounced = false
+                scheduleSttRestart(0L)
             }
             ACTION_STOP_RECORDING -> stopRecording()
             ACTION_SPEAK -> {
@@ -356,13 +380,32 @@ class CallService : Service() {
                 speakText(text)
             }
             ACTION_SET_MUTED -> {
-                isMuted = intent.getBooleanExtra(EXTRA_MUTED, false)
-                updateNotification(if (isMuted) "Muted" else "AI speaking enabled")
-                Log.i(TAG, "[MUTE] muted=$isMuted")
+                aiVoiceMuted = intent.getBooleanExtra(EXTRA_MUTED, false)
+                if (aiVoiceMuted) {
+                    // Mute must cut audio NOW, not just the next message:
+                    // the TTS that is already playing stops immediately.
+                    // Piper: requestStop() breaks the AudioTrack write loop,
+                    // the synthesis loop unwinds and AiSpeakingFinished fires
+                    // from its finally block. System TTS: stop() triggers
+                    // onDone/onError via the utterance listener.
+                    if (isAiSpeaking) {
+                        piperEngine.requestStop()
+                        textToSpeech?.stop()
+                        isAiSpeaking = false
+                        CallEventBus.emit(CallEvent.AiSpeakingFinished)
+                        Log.i(TAG, "[MUTE] cut in-flight playback")
+                    }
+                }
+                updateNotification(if (aiVoiceMuted) "Muted" else "AI speaking enabled")
+                Log.i(TAG, "[MUTE] muted=$aiVoiceMuted")
             }
             ACTION_REPEAT_LAST -> {
-                if (lastAiMessage.isNotBlank()) {
+                if (lastAiMessage.isNotBlank() && !aiVoiceMuted) {
+                    // A muted AI stays muted: replay cannot bypass the mute
+                    // state silently — unmute first, then repeat.
                     speakText(lastAiMessage, force = true)
+                } else if (lastAiMessage.isNotBlank()) {
+                    Log.i(TAG, "[MUTE] repeat-last skipped — AI voice muted")
                 }
             }
             ACTION_SEND_TEXT -> {
@@ -593,13 +636,13 @@ class CallService : Service() {
             .getString("note:$callId", null)
     }
 
-    fun speakText(text: String, force: Boolean = false) {
-        if (!force && isPaused) return
-        if (isMuted && !force) {
-            // Muted: silence the voice but keep the transcript truthful — the
-            // last message still updates so "Repeat last" works after unmuting.
-            lastAiMessage = text
-            Log.d(TAG, "[MUTE] skipping speech (muted): ${text.take(60)}")
+    fun speakText(text: String, force: Boolean = false, replayable: Boolean = true) {
+        if (aiVoiceMuted && !force) {
+            // Muted: silence the voice but keep the transcript truthful — real
+            // AI replies remain replayable after unmuting. System notices are
+            // not valid replay content.
+            if (replayable) lastAiMessage = text
+            Log.d(TAG, "[MUTE] skipping speech (muted): " + text.take(60))
             return
         }
         if (text.isBlank()) return
@@ -620,9 +663,15 @@ class CallService : Service() {
     private suspend fun speechLoop() {
         for (text in speechChannel) {
             if (!coroutineContext.isActive) break
-            if (isPaused) continue
+            // Full-duplex discipline: the recognizer must not run while the AI
+            // talks (echo self-transcription risk). Pausing here closes the
+            // loop for EVERY speech path — greeting, AiMessage, replay,
+            // fallback excuse — so hands-free listening is resumed exactly
+            // when this message finishes (or is cut by barge-in).
+            pauseListeningForTts()
             // Benchmark B4: time from channel dequeue to first AudioTrack.write is measured in speakPaced/speakWithPiper.
             speakPaced(text)
+            scheduleSttRestart()
         }
     }
 
@@ -733,7 +782,7 @@ class CallService : Service() {
         bargeInArmedMs = System.currentTimeMillis()
         CallEventBus.emit(CallEvent.AiSpeakingStarted)
         // Arm VAD in parallel with synthesis — low-duty AudioRecord tap, no SpeechRecognizer.
-        val vad = BargeInController(this, onBargeIn = { handleBargeIn() })
+        val vad = BargeInController(this, onBargeIn = { handleBargeIn() }, isSpeakerActive = { audioManager.isSpeakerOn })
         bargeInController = vad
         vad.start()
         // Keep precisely one synthesis job ahead of the audio being played.
@@ -845,7 +894,7 @@ class CallService : Service() {
         // Arm VAD for system TTS as well — barge-in cuts this queue via stop().
         val ttfaStart = System.currentTimeMillis()
         bargeInArmedMs = ttfaStart
-        val vad = BargeInController(this, onBargeIn = { handleBargeIn() })
+        val vad = BargeInController(this, onBargeIn = { handleBargeIn() }, isSpeakerActive = { audioManager.isSpeakerOn })
         bargeInController = vad
         vad.start()
         // We do not replace the global UtteranceProgressListener here (it is set once in
@@ -1027,14 +1076,27 @@ class CallService : Service() {
         if (isRecording || speechRecognizer != null) return
         try {
             val recognizer = SpeechRecognizer.createSpeechRecognizer(this)
-            if (recognizer == null) return
+            if (recognizer == null) {
+                // The recognizer can't be created (rare devices / missing
+                // voice services). Emit so the UI's optimistic "Listening"
+                // doesn't sit on a dead session.
+                CallEventBus.emit(CallEvent.SttFailed("recognizer unavailable"))
+                return
+            }
             speechRecognizer = recognizer
             isRecording = true
-            updateNotification("Recording...")
+            updateNotification("Listening...")
 
             val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
                 putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
                 putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.US)
+                // Voice-communication mic path: platforms that support the extra
+                // run the recognizer's capture through the call audio pipeline
+                // (AEC + NS wired in), so the AI's playback doesn't feed back
+                // into the transcript. Services that don't support it ignore
+                // unknown extras; a string literal (not the API-31 constant)
+                // keeps this compiling on every level down to minSdk 26.
+                putExtra(EXTRA_AUDIO_SOURCE, MediaRecorder.AudioSource.VOICE_COMMUNICATION)
             }
 
             recognizer.setRecognitionListener(object : RecognitionListener {
@@ -1045,16 +1107,21 @@ class CallService : Service() {
                     recognizer.destroy()
                     if (speechRecognizer == recognizer) speechRecognizer = null
                     val currentCallId = callId
+                    // Turn completed (or silence returned an empty result):
+                    // clear the failure streak and reopen the mic — the loop
+                    // never waits for a manual re-engage.
+                    sttErrorRetries = 0
+                    sttConsecutiveFailures = 0
+                    sttFailureAnnounced = false
                     if (text != null && text.isNotBlank() && currentCallId != null) {
-                        sttErrorRetries = 0
                         val messageId = UUID.randomUUID().toString()
                         scope.launch {
-                            processUserText(text, currentCallId, messageId)
+                            processUserText(SpeechTextCleaner.clean(text), currentCallId, messageId)
                             repository.saveUserTextMessage(currentCallId, text)
                         }
-                    } else {
-                        updateNotification("Paused")
                     }
+                    updateNotification("Listening...")
+                    scheduleSttRestart()
                 }
 
                 override fun onError(error: Int) {
@@ -1066,7 +1133,15 @@ class CallService : Service() {
 
                 override fun onReadyForSpeech(params: Bundle) {}
                 override fun onBeginningOfSpeech() {}
-                override fun onRmsChanged(rmsdB: Float) {}
+                override fun onRmsChanged(rmsdB: Float) {
+                    // Real mic amplitude feeds the waveform; devices fire this
+                    // at wildly different rates, so throttle to a sane cadence.
+                    val now = System.currentTimeMillis()
+                    if (now - lastMicLevelEmitMs >= MIC_EMIT_INTERVAL_MS) {
+                        lastMicLevelEmitMs = now
+                        CallEventBus.emit(CallEvent.MicAmplitude(rmsdB))
+                    }
+                }
                 override fun onBufferReceived(buffer: ByteArray?) {}
                 override fun onEndOfSpeech() {}
                 override fun onPartialResults(partialResults: Bundle) {
@@ -1089,6 +1164,7 @@ class CallService : Service() {
         } catch (e: Exception) {
             Log.e(TAG, "[STT] failed to start recording", e)
             isRecording = false; speechRecognizer = null
+            CallEventBus.emit(CallEvent.SttFailed("start failed"))
         }
     }
 
@@ -1104,14 +1180,60 @@ class CallService : Service() {
     }
 
     /**
-     * Recognizer failed outright (not a "no result callback" case). One
-     * automatic retry covers the transient handoff errors; a retry-limited
-     * detection keeps the loop bounded. After the retry also fails:
-     * 1. speak the excuse so the human knows to use text/tap mic — and
-     * 2. POST a transparent non-speech note so the owning agent's
-     *    send_message_and_wait returns instead of hanging until timeout.
+     * Hands-free listening driver. Called after every completed speech path
+     * (result, silence timeout, AI speech end) so the mic reopens without a
+     * tap. Skipped while the AI is speaking — [speechLoop] re-arms listening
+     * when that message actually finishes.
+     */
+    private fun scheduleSttRestart(delayMs: Long = STT_RESTART_DELAY_MS) {
+        sttAutoRestartJob?.cancel()
+        sttAutoRestartJob = scope.launch(Dispatchers.Main) {
+            delay(delayMs)
+            if (callId == null || resourcesReleased || isRecording || speechRecognizer != null || isAiSpeaking) {
+                return@launch
+            }
+            startRecording()
+        }
+    }
+
+    /**
+     * Release the recognizer before TTS playback — both engines would fight
+     * over the mic, and an open recognizer can transcribe the AI's own voice
+     * through the loudspeaker on devices without echo cancellation. Barge-in
+     * during playback is covered by [BargeInController] (VAD), which hands
+     * the mic straight back to STT when the user interrupts.
+     */
+    private fun pauseListeningForTts() {
+        sttAutoRestartJob?.cancel()
+        val recognizer = speechRecognizer ?: return
+        speechRecognizer = null
+        isRecording = false
+        try {
+            recognizer.destroy()
+        } catch (e: Exception) {
+            Log.w(TAG, "[STT] destroy during TTS handoff failed", e)
+        }
+    }
+
+    /**
+     * Recognizer error handling for the always-listening loop.
+     *
+     * Silence timeouts and no-match are NORMAL cycles of continuous capture
+     * (the user didn't speak inside the platform's window) — they restart
+     * silently and never touch the failure budget. Real errors get the
+     * short auto-retry first; if that also fails:
+     * 1. the UI gets a hint that voice capture is degraded, and
+     * 2. the owning agent receives a transparent non-speech note — ONCE per
+     *    failure streak — so send_message_and_wait can't hang until timeout,
+     * and listening keeps restarting on a cool-down until the failure budget
+     * is spent (a dead recognizer engine must not loop excuses forever).
      */
     private fun handleSttError(error: Int) {
+        if (error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT || error == SpeechRecognizer.ERROR_NO_MATCH) {
+            // Routine continuous-capture cycle: nobody spoke in this window.
+            scheduleSttRestart()
+            return
+        }
         val currentCallId = callId
         if (sttErrorRetries < STT_MAX_RETRIES && currentCallId != null) {
             sttErrorRetries++
@@ -1125,17 +1247,31 @@ class CallService : Service() {
             }
             return
         }
-        Log.i(TAG, "[STT] recognizer failed after retries (error=$error) — fallback excuse + agent note")
-        speakText("Sorry, I didn't catch that.")
-        updateNotification("Paused")
-        if (currentCallId != null) {
-            val messageId = UUID.randomUUID().toString()
-            processUserText(
-                "(The user tried to speak, but speech transcription failed on the phone.)",
-                currentCallId,
-                messageId,
-            )
+        sttErrorRetries = 0
+        if (sttConsecutiveFailures >= STT_MAX_CONSECUTIVE_FAILURES) {
+            // The recognizer engine is not recovering (uninstalled voice
+            // service, wedged audio HAL). Stop the restart loop; the UI hint
+            // and typed replies keep the call usable.
+            Log.w(TAG, "[STT] giving up the listening loop after $sttConsecutiveFailures consecutive failures")
+            CallEventBus.emit(CallEvent.SttFailed("repeated failures"))
+            return
         }
+        sttConsecutiveFailures++
+        Log.i(TAG, "[STT] recognizer error=$error — failures=$sttConsecutiveFailures/$STT_MAX_CONSECUTIVE_FAILURES, re-arming on cool-down")
+        if (!sttFailureAnnounced) {
+            sttFailureAnnounced = true
+            CallEventBus.emit(CallEvent.SttFailed("error $error"))
+            speakText("Sorry, I didn't catch that.", replayable = false)
+            if (currentCallId != null) {
+                val messageId = UUID.randomUUID().toString()
+                processUserText(
+                    "(The user tried to speak, but speech transcription failed on the phone.)",
+                    currentCallId,
+                    messageId,
+                )
+            }
+        }
+        scheduleSttRestart(STT_FAILURE_COOLDOWN_MS)
     }
 
     private fun processUserText(text: String, callId: String, messageId: String) {
@@ -1320,9 +1456,14 @@ class CallService : Service() {
         textToSpeech?.stop()
         speechRecognizer?.destroy()
         speechRecognizer = null
+        sttAutoRestartJob?.cancel()
+        sttAutoRestartJob = null
+        sttConsecutiveFailures = 0
+        sttFailureAnnounced = false
+        sttErrorRetries = 0
         isRecording = false
         isAiSpeaking = false
-        isMuted = false
+        aiVoiceMuted = false
         audioManager.abandonFocus()
         releaseWakeLock()
         stopForeground(STOP_FOREGROUND_REMOVE)
@@ -1421,6 +1562,20 @@ class CallService : Service() {
         /** Transient STT handoff errors dominate; a second attempt resolves most. */
         const val STT_MAX_RETRIES = 1
         const val STT_RETRY_DELAY_MS = 500L
+        // Hands-free listening loop: how fast the mic reopens after a finished
+        // turn/silence cycle, how long a broken engine is given between
+        // restarts, and how many consecutive real failures the loop absorbs
+        // before standing down (custom recognizers vary per OEM).
+        const val STT_RESTART_DELAY_MS = 350L
+        const val STT_FAILURE_COOLDOWN_MS = 4_000L
+        const val STT_MAX_CONSECUTIVE_FAILURES = 3
+        // Mic opens this long after answer; if the greeting is already
+        // speaking, the restart is a no-op and speechLoop resumes listening
+        // when the greeting finishes.
+        const val STT_ARM_AFTER_ANSWER_MS = 5_000L
+        // RecognizerIntent.EXTRA_AUDIO_SOURCE (API 31); string literal so the
+        // code compiles for the whole supported range (minSdk 26).
+        const val EXTRA_AUDIO_SOURCE = "android.speech.extra.AUDIO_SOURCE"
         const val EXTRA_CALL_ID = "call_id"
         const val EXTRA_TEXT = "text"
         const val EXTRA_MESSAGE_ID = "message_id"
@@ -1441,7 +1596,10 @@ class CallService : Service() {
         const val CHANNEL_ONGOING_CALL = "ongoing_call"
         // v2: old "incoming_call" channel had no ringtone/vibration and ColorOS drops
         // channel updates/delete, so an in-place upgrade is impossible — version the ID.
-        const val CHANNEL_INCOMING_CALL = "incoming_call_v2"
+        // v3: the app owns the audible ring (IncomingCallRinger) so it starts
+        // with the notification and loops until the ring resolves; the channel
+        // itself is silent to avoid a second, one-shot system ringtone.
+        const val CHANNEL_INCOMING_CALL = "incoming_call_v3"
         // Quiet-hours variant (backlog item 6): silent ring channel so DND
         // never makes noise while the call still reaches the screen.
         const val CHANNEL_INCOMING_CALL_QUIET = "incoming_call_quiet_v1"
@@ -1478,6 +1636,7 @@ class CallService : Service() {
         private const val PIPER_WAIT_MS = 3_000L
         private const val WARMUP_UTTERANCE_ID = "tts-warmup"
         private const val WARMUP_TEXT = "ok"
+        private const val MIC_EMIT_INTERVAL_MS = 90L
         private const val WARMUP_FILE = "tts-warmup.wav"
 
         /**
@@ -1537,18 +1696,37 @@ class CallService : Service() {
                 },
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
             )
-            val callStyle = if (Build.VERSION.SDK_INT >= 31) {
-                val person = Person.Builder().setName(callerName).build()
-                NotificationCompat.CallStyle.forIncomingCall(person, declinePi, answerPi)
-            } else {
-                null
+            // The custom view owns the whole surface: avatar, caller, reason,
+            // and both actions. No addAction row — the system strips an action
+            // divider under an otherwise complete surface, which read as a
+            // stray handle at the bottom of the heads-up.
+            val content = RemoteViews(context.packageName, R.layout.notification_call).apply {
+                setTextViewText(R.id.call_notification_caller, callerName)
+                setTextViewText(
+                    R.id.call_notification_context,
+                    summary.ifBlank { context.getString(R.string.call_notification_default_context) },
+                )
+                setTextViewText(
+                    R.id.call_notification_mode,
+                    context.getString(
+                        if (quiet) R.string.call_notification_mode_quiet else R.string.call_notification_mode,
+                    ),
+                )
+                setTextColor(
+                    R.id.call_notification_mode,
+                    android.graphics.Color.parseColor(if (quiet) "#E7C169" else "#A79AF0"),
+                )
+                setOnClickPendingIntent(R.id.call_notification_surface, pi)
+                setOnClickPendingIntent(R.id.call_notification_header, pi)
+                setOnClickPendingIntent(R.id.call_notification_answer, answerPi)
+                setOnClickPendingIntent(R.id.call_notification_decline, declinePi)
             }
 
             val builder = NotificationCompat.Builder(context, channel)
-                .setContentTitle(if (quiet) "Incoming AI Call (quiet)" else "Incoming AI Call")
-                .setContentText(summary.ifBlank { "$callerName is calling..." })
+                .setContentTitle(callerName)
+                .setContentText(summary.ifBlank { context.getString(R.string.call_notification_default_context) })
                 .setSmallIcon(R.drawable.agentcall_notification_icon)
-                .setColor(android.graphics.Color.parseColor("#6366F1"))
+                .setColor(android.graphics.Color.parseColor("#7967DE"))
                 .setPriority(if (quiet) NotificationCompat.PRIORITY_LOW else NotificationCompat.PRIORITY_HIGH)
                 .setCategory(NotificationCompat.CATEGORY_CALL)
                 .setFullScreenIntent(pi, true)
@@ -1558,19 +1736,20 @@ class CallService : Service() {
                 // Both intents point at the same IncomingCallActivity so body tap
                 // opens the full UI exactly like the real phone app.
                 .setContentIntent(pi)
-                .setAutoCancel(true)
-                .setOngoing(false)
-                .setStyle(callStyle)
-            // CallStyle.forIncomingCall already registers the two actions
-            // (Answer/Decline) with the system UI; adding them again via
-            // addAction creates a duplicate third tappable element on OEM
-            // skins (realme/ColorOS showed a red pill + purple pill + green
-            // icon). Only add fallback actions when CallStyle is unavailable
-            // (API <31).
-            if (callStyle == null) {
-                builder.addAction(R.drawable.ic_call, "Answer", answerPi)
-                builder.addAction(R.drawable.ic_missed_call, "Decline", declinePi)
-            }
+                .setAutoCancel(false)
+                .setOngoing(true)
+                .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+                .setStyle(NotificationCompat.DecoratedCustomViewStyle())
+                .setCustomContentView(content)
+                .setCustomBigContentView(content)
+                .setShowWhen(false)
+
+            // The ring starts with the notification, not when the ring UI is
+            // opened. A suppressed full-screen intent (OEM policy, locked
+            // screen, rejected heads-up) must still ring, and the ring UI
+            // reuses this player instead of starting a second one.
+            IncomingCallRinger.start(context, callId, quiet)
+
             val notification = builder.build()
 
             mgr.notify(NOTIFICATION_ID_INCOMING, notification)
@@ -1606,9 +1785,15 @@ class CallService : Service() {
             mgr.cancel(NOTIFICATION_ID_FSI_WARNING)
         }
 
+        /**
+         * Single resolve point for the ring surface: every answer, decline,
+         * later, timeout and terminal event clears the notification through
+         * here, so the ringtone can never outlive the call notification.
+         */
         fun cancelIncomingNotification(context: Context) {
             val mgr = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             mgr.cancel(NOTIFICATION_ID_INCOMING)
+            IncomingCallRinger.stop()
         }
 
         /**

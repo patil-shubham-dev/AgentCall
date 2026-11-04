@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Primary answer action: the universal call-green, matching the in-app
+     swipe-to-answer direction and keeping violet as the identity accent. -->
+<ripple xmlns:android="http://schemas.android.com/apk/res/android"
+    android:color="#33FFFFFF">
+    <item>
+        <shape android:shape="rectangle">
+            <gradient
+                android:angle="270"
+                android:endColor="#2D8759"
+                android:startColor="#3BA874" />
+            <corners android:radius="25dp" />
+        </shape>
+    </item>
+</ripple>

@@ -52,7 +52,6 @@ import com.agentcall.app.data.api.AiKeyCreateResponse
 import com.agentcall.app.data.api.AiKeyItem
 import com.agentcall.app.call.FcmRegistrationStore
 import com.agentcall.app.data.repository.CallRepository
-import com.agentcall.app.ui.composables.AmbientBackground
 import com.agentcall.app.ui.composables.Plate
 import com.agentcall.app.ui.composables.SectionLabel
 import com.agentcall.app.ui.theme.*
@@ -335,17 +334,8 @@ fun SettingsScreen(
             .navigationBarsPadding(),
     ) {
         // Header: SYSTEM INSET (statusBarsPadding above) + 12dp breathing.
-        // matchParentSize keeps the ambient backdrop inside the header's
-        // wrapped height — fillMaxSize here made this Box swallow the whole
-        // screen, reserving dead space below the title.
         Spacer(modifier = Modifier.height(Spacing.XS))
         Box(modifier = Modifier.fillMaxWidth()) {
-            AmbientBackground(
-                accentColor = MaterialTheme.colorScheme.primary,
-                density = 0.6f,
-                speedMultiplier = 0.5f,
-                modifier = Modifier.matchParentSize(),
-            )
             Column {
                 Text(
                     text = "Settings",

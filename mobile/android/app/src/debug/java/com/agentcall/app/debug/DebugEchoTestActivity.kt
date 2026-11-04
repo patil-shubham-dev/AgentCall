@@ -53,10 +53,10 @@ class DebugEchoTestActivity : ComponentActivity() {
                 if (!ready) { finishAndRemoveTask(); return@launch }
 
                 bargeFired = false
-                val vad = BargeInController(this@DebugEchoTestActivity) {
+                val vad = BargeInController(this@DebugEchoTestActivity, onBargeIn = {
                     bargeFired = true
                     Log.i(TAG, "[ECHO-TEST] BARGE FIRED at ${System.currentTimeMillis() - vadStartMs}ms after VAD start")
-                }
+                })
                 vadStartMs = System.currentTimeMillis()
                 vad.start()
                 Log.i(TAG, "[ECHO-TEST] VAD started mode=$mode threshold check")

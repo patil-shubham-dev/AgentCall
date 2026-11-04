@@ -3,8 +3,6 @@ package com.agentcall.app
 import android.app.Application
 import android.app.NotificationChannel
 import android.app.NotificationManager
-import android.media.AudioAttributes
-import android.media.RingtoneManager
 import android.os.Build
 import android.util.Log
 import com.agentcall.app.call.CallService
@@ -71,13 +69,11 @@ class AgentCallApp : Application() {
         ).apply {
             description = "Notifications for incoming AI calls"
             setShowBadge(true)
-            setSound(
-                RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE),
-                AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
-                    .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                    .build(),
-            )
+            // The ringtone is app-owned (IncomingCallRinger): it starts with
+            // the notification and repeats until answer/decline. A channel
+            // sound would play once on top of it and could be suppressed
+            // independently of the call.
+            setSound(null, null)
             enableVibration(true)
             vibrationPattern = longArrayOf(0, 1000, 500, 1000)
         }
@@ -120,6 +116,9 @@ class AgentCallApp : Application() {
         if (legacy != null && legacy.vibrationPattern == null) {
             manager.deleteNotificationChannel("incoming_call")
         }
+        // v2 is the pre-ringer version: it carried the one-shot system
+        // ringtone and would double up with the app-owned looping ring.
+        manager.deleteNotificationChannel("incoming_call_v2")
 
         val signaling = NotificationChannel(
             SignalingForegroundService.CHANNEL_SIGNALING,

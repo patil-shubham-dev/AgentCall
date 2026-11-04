@@ -19,8 +19,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import java.util.UUID
 import javax.inject.Inject
-import kotlin.math.abs
-import kotlin.math.sin
 
 data class ChatBubble(
     val id: String,
@@ -59,15 +57,26 @@ data class ActiveCallUiState(
     val isRecording: Boolean = false,
     val isProcessing: Boolean = false,
     val isAiSpeaking: Boolean = false,
-    val isPaused: Boolean = false,
-    val isMuted: Boolean = false,
+    /**
+     * The AI's spoken replies are silenced (transcript still flows). NOT a
+     * microphone mute — the name is explicit so screens can't mislabel it.
+     */
+    val aiVoiceMuted: Boolean = false,
     val isSpeakerOn: Boolean = false,
     val elapsedSeconds: Int = 0,
     val callContext: CallContextInfo = CallContextInfo(),
     val messages: List<ChatBubble> = emptyList(),
     val statusText: String = "Connecting...",
-    val waveformLevels: List<Float> = List(40) { 0.08f },
-    val peakWaveformLevel: Float = 0f,
+    /**
+     * Transient hands-free voice hint (STT degraded / awaiting mic). Rendered
+     * only inside the call-stage support line — never as a banner. Cleared by
+     * the next user speech event.
+     */
+    val voiceHint: String? = null,
+    /** Normalized microphone energy for the bottom call wave (0..1). */
+    val userAudioLevel: Float = 0f,
+    /** Normalized AI playback energy for the top call wave (0..1). */
+    val aiAudioLevel: Float = 0f,
     val callId: String = "",
     val aiResponding: Boolean? = null,
     val aiRespondingUntilMs: Long? = null,
@@ -92,6 +101,13 @@ class CallViewModel @Inject constructor(
     // unit-testable; this ViewModel only applies side effects.
     private var machine = CallStateMachine()
 
+    /**
+     * Real audio amplitude buffer (M4): mic RMS while listening and Piper
+     * chunk RMS while speaking both feed it; the waveform shows what the
+     * audio path actually carries instead of synthetic math.
+     */
+    private val audioLevels = AudioLevels()
+
     private val _uiState = MutableStateFlow(ActiveCallUiState())
     val uiState: StateFlow<ActiveCallUiState> = _uiState.asStateFlow()
 
@@ -108,6 +124,11 @@ class CallViewModel @Inject constructor(
             agentName = agentName,
             phase = machine.state.phase,
             statusText = "Connecting...",
+            voiceHint = null,
+            // Fresh-bound VM is already idle, but sync the route flag from
+            // the real device state so consecutive calls can't disagree
+            // with what the audio service actually left set.
+            isSpeakerOn = audioManager.isSpeakerOn,
         )
         // The backend already confirmed the answer over REST before this
         // screen opened; on deployments whose push socket never delivers,
@@ -182,16 +203,21 @@ class CallViewModel @Inject constructor(
                         applyMachineEvent(CallMachineEvent.FIRST_AI_MESSAGE)
                         addAiMessage(event.text, event.messageId)
                     }
-                    is CallEvent.UserMessage -> addUserTranscript(event.messageId, event.text)
+                    is CallEvent.UserMessage -> {
+                        addUserTranscript(event.messageId, event.text)
+                        clearSttHint()
+                    }
                     is CallEvent.UserSpeechPartial -> {
                         // Display recognition progress locally only. A partial
                         // may be revised by the recognizer, so it must never
                         // become a transcript bubble or agent-visible event.
+                        // Presence and the live waveform carry the state — the
+                        // header never shows a competing status line.
+                        clearSttHint()
                         _uiState.value = _uiState.value.copy(
                             isAiSpeaking = false,
                             isRecording = true,
                             isProcessing = false,
-                            statusText = "Hearing: ${event.text.take(60)}",
                         )
                     }
                     is CallEvent.UserTextSent -> markUserTextSent(event.messageId)
@@ -220,19 +246,39 @@ class CallViewModel @Inject constructor(
                             statusText = "AI disconnected — the call ended",
                         )
                     }
-                    is CallEvent.AiSpeakingStarted -> setAiSpeaking(true)
-                    is CallEvent.AiSpeakingFinished -> setAiSpeaking(false)
+                    is CallEvent.AiSpeakingStarted -> {
+                        audioLevels.reset(micStream = false)
+                        setAiSpeaking(true)
+                    }
+                    is CallEvent.AiSpeakingFinished -> {
+                        audioLevels.reset(micStream = false)
+                        setAiSpeaking(false)
+                    }
                     is CallEvent.AiWaitStatusChanged ->
                         setAiResponding(event.active, event.activeUntilMs, event.agentOnline)
+                    is CallEvent.TtsAmplitude -> pushAmplitude(mic = false, level = event.level)
+                    is CallEvent.MicAmplitude -> pushAmplitude(mic = true, level = event.level)
+                    is CallEvent.SttFailed -> {
+                        // The recognizer failed for good; the listening loop
+                        // stands down until it recovers. Surface a quiet hint
+                        // in the call stage — banner-free, single source of
+                        // truth for "what is happening right now".
+                        _uiState.value = _uiState.value.copy(
+                            isRecording = false,
+                            isProcessing = false,
+                            voiceHint = "Voice isn't working right now — you can still type",
+                        )
+                    }
                     is CallEvent.BargeInDetected -> {
                         // TTS has been stopped before the recognizer starts.
                         // Update local UI immediately rather than waiting for
                         // Piper's non-cancellable JNI synthesis to unwind.
+                        audioLevels.reset(micStream = false)
+                        clearSttHint()
                         _uiState.value = _uiState.value.copy(
                             isAiSpeaking = false,
                             isRecording = true,
                             isProcessing = false,
-                            statusText = "Interrupted — listening...",
                         )
                     }
                 }
@@ -271,8 +317,8 @@ class CallViewModel @Inject constructor(
                         // ends the call if the backend resolved it, and the
                         // watchdog bounds a genuinely dead session. The FSM only
                         // leaves ACTIVE for an explicitly observed RECONNECTING;
-                        // map DISCONNECTED onto it so the timer pauses and the
-                        // next CONNECTED re-syncs instead of racing.
+                        // map DISCONNECTED onto it so the reconnect path re-anchors the
+                        // timer without resetting it and the next CONNECTED re-syncs.
                         if (current.phase == CallPhase.ACTIVE) {
                             applyMachineEvent(CallMachineEvent.SOCKET_RECONNECTING)
                             _uiState.value = _uiState.value.copy(
@@ -294,10 +340,17 @@ class CallViewModel @Inject constructor(
         val before = machine.state
         val after = machine.onEvent(event)
         if (after == before) return
-        // The first ACTIVE entry (answer or reconnect resume) restarts the
-        // in-call timer.
+        // Timer semantics: the FIRST entry into ACTIVE arms the clock.
+        // A RECONNECTING→ACTIVE resume must never reset it — the call has
+        // kept running server-side, so re-anchor the start so elapsed time
+        // is preserved exactly (a phone call's duration is wall time since
+        // it first went active, not time since the socket recovered).
         if (after.phase == CallPhase.ACTIVE && before.phase != CallPhase.ACTIVE) {
-            callStartTime = System.currentTimeMillis()
+            callStartTime = if (before.phase == CallPhase.RECONNECTING) {
+                System.currentTimeMillis() - _uiState.value.elapsedSeconds * 1000L
+            } else {
+                System.currentTimeMillis()
+            }
         }
         _uiState.value = _uiState.value.copy(
             phase = after.phase,
@@ -342,10 +395,12 @@ class CallViewModel @Inject constructor(
             text = text,
             timestamp = System.currentTimeMillis(),
         )
+        // NOTE: isAiSpeaking is NOT set here on purpose — the real playback
+        // start (AiSpeakingStarted from TTS) is the single authority for the
+        // speaking state. A message bubble can be inserted while the user is
+        // mid-utterance; setting speaking here produced contradictory status.
         _uiState.value = _uiState.value.copy(
             messages = _uiState.value.messages + msg,
-            statusText = "AI speaking",
-            isAiSpeaking = true,
         )
     }
 
@@ -358,8 +413,10 @@ class CallViewModel @Inject constructor(
         )
         _uiState.value = _uiState.value.copy(
             messages = _uiState.value.messages + msg,
+            // The user's finalized turn is the boundary — nothing can still
+            // be "thinking" once a transcript bubble exists or the AI starts.
             isAiSpeaking = false,
-            statusText = "You said: ${text.take(50)}",
+            isProcessing = false,
         )
     }
 
@@ -378,7 +435,6 @@ class CallViewModel @Inject constructor(
         )
         _uiState.value = _uiState.value.copy(
             messages = _uiState.value.messages + msg,
-            statusText = "You typed: ${text.take(50)}",
         )
 
         viewModelScope.launch {
@@ -400,7 +456,6 @@ class CallViewModel @Inject constructor(
             messages = _uiState.value.messages.map {
                 if (it.id == messageId && it.role == "user") it.copy(failed = true) else it
             },
-            statusText = "Message not sent — tap to retry",
         )
     }
 
@@ -411,7 +466,6 @@ class CallViewModel @Inject constructor(
             messages = _uiState.value.messages.map {
                 if (it.id == messageId) it.copy(failed = false) else it
             },
-            statusText = "Resending...",
         )
         context.startService(Intent(context, CallService::class.java).apply {
             action = CallService.ACTION_SEND_TEXT
@@ -421,23 +475,17 @@ class CallViewModel @Inject constructor(
         })
     }
 
-    fun setPaused(paused: Boolean) {
-        _uiState.value = _uiState.value.copy(
-            isPaused = paused,
-            statusText = if (paused) "Call paused — press Record when ready" else "Resumed",
-        )
-    }
-
-    fun setRecording(recording: Boolean) {
-        _uiState.value = _uiState.value.copy(
-            isRecording = recording,
-            statusText = if (recording) "Listening..." else "Processing...",
-            isProcessing = !recording,
-        )
+    private fun clearSttHint() {
+        if (_uiState.value.voiceHint != null) {
+            _uiState.value = _uiState.value.copy(voiceHint = null)
+        }
     }
 
     fun setAiSpeaking(speaking: Boolean) {
-        _uiState.value = _uiState.value.copy(isAiSpeaking = speaking)
+        _uiState.value = _uiState.value.copy(
+            isAiSpeaking = speaking,
+            isProcessing = if (speaking) false else _uiState.value.isProcessing,
+        )
     }
 
     fun setAiResponding(active: Boolean, activeUntilMs: Long?, agentOnline: Boolean = true) {
@@ -448,18 +496,47 @@ class CallViewModel @Inject constructor(
         )
     }
 
-    fun setMuted(context: Context, muted: Boolean) {
-        _uiState.value = _uiState.value.copy(isMuted = muted)
+    fun setAiVoiceMuted(context: Context, muted: Boolean) {
+        _uiState.value = _uiState.value.copy(aiVoiceMuted = muted)
         context.startService(Intent(context, CallService::class.java).apply {
             action = CallService.ACTION_SET_MUTED
             putExtra(CallService.EXTRA_MUTED, muted)
         })
     }
 
-    fun toggleSpeaker(): Boolean {
-        val next = audioManager.toggleSpeaker()
+    /**
+     * Audio-route picker support: only routes Android actually reports;
+     * selection is applied to the communication device (S+) or the legacy
+     * speakerphone flag. `isSpeakerOn` is synced from the real resulting
+     * state, not the request.
+     */
+    fun availableAudioRoutes(): List<CallAudioManager.AudioRoute> = audioManager.availableRoutes()
+
+    fun currentAudioRouteId(): String = audioManager.currentRouteId()
+
+    fun selectAudioRoute(route: CallAudioManager.AudioRoute): Boolean {
+        val next = audioManager.selectRoute(route)
         _uiState.value = _uiState.value.copy(isSpeakerOn = next)
         return next
+    }
+
+    /**
+     * New amplitude chunk → buffer + full-state snapshot at the producers'
+     * cadence (~10 Hz each, already throttled upstream). The call aura is the
+     * only thing recomposing on these.
+     */
+    private fun pushAmplitude(mic: Boolean, level: Float) {
+        if (mic) audioLevels.onMic(level) else audioLevels.onTts(level)
+        val state = _uiState.value
+        val energy = audioLevels.energyLevels(
+            listeningActive = state.isRecording,
+            speakingActive = state.isAiSpeaking,
+            muted = state.aiVoiceMuted,
+        )
+        _uiState.value = state.copy(
+            userAudioLevel = energy.user,
+            aiAudioLevel = energy.ai,
+        )
     }
 
     fun tick() {
@@ -471,16 +548,33 @@ class CallViewModel @Inject constructor(
             current = current.copy(aiResponding = false, aiRespondingUntilMs = null)
             _uiState.value = current
         }
-        val elapsed = if (callStartTime > 0) ((System.currentTimeMillis() - callStartTime) / 1000).toInt() else current.elapsedSeconds
-        val t = elapsed.toFloat()
-        val levels = generateWaveform(t, !current.isRecording && !current.isAiSpeaking)
+        // ENDED freezes the timer so the summary panel shows the call's real
+        // duration, not time-since-end.
+        val elapsed = if (current.phase == CallPhase.ENDED) {
+            current.elapsedSeconds
+        } else if (callStartTime > 0) {
+            ((System.currentTimeMillis() - callStartTime) / 1000).toInt()
+        } else {
+            current.elapsedSeconds
+        }
+        // Idle envelope falls back to the quiet baseline; amplitude events
+        // overwrite this at ~10 Hz whenever a stream is actually live.
+        audioLevels.decayTowardBaseline(current.isRecording, current.isAiSpeaking)
+        val energy = audioLevels.energyLevels(
+            listeningActive = current.isRecording,
+            speakingActive = current.isAiSpeaking,
+            muted = current.aiVoiceMuted,
+        )
         _uiState.value = current.copy(
             elapsedSeconds = elapsed,
-            waveformLevels = levels,
-            peakWaveformLevel = levels.maxOrNull() ?: 0.08f,
+            userAudioLevel = energy.user,
+            aiAudioLevel = energy.ai,
         )
         maybePollTranscript()
     }
+
+    // MARK: removed dead code — setPaused() had no callers (the paused banner
+    // was never reachable) and disconnect() was never invoked by any screen.
 
     private var lastTranscriptPollMs = 0L
     private var lastTerminalCheckMs = 0L
@@ -548,32 +642,6 @@ class CallViewModel @Inject constructor(
                     putExtra(CallService.EXTRA_CALL_ID, current.callId)
                     putExtra(CallService.EXTRA_TEXT, m.content)
                 })
-            }
-        }
-    }
-
-    fun disconnect() {
-        applyMachineEvent(CallMachineEvent.HARD_DISCONNECT)
-        _uiState.value = _uiState.value.copy(
-            statusText = "Disconnected",
-            isAiSpeaking = false,
-            isRecording = false,
-            isProcessing = false,
-            aiResponding = null,
-            aiRespondingUntilMs = null,
-        )
-    }
-
-    private fun generateWaveform(t: Float, silent: Boolean): List<Float> {
-        val base = if (silent) 0.04f else 0.08f
-        return List(40) { i ->
-            if (silent) {
-                base + 0.02f * abs(sin(t * 0.3f + i * 0.5f))
-            } else {
-                val freq = 2f + 3f * abs(sin(i * 0.1f))
-                val envelope = 1f - (i - 20f) * (i - 20f) / 400f
-                val signal = abs(sin(t * freq * 0.5f + i * 0.3f) * 0.7f + sin(t * 1.3f + i * 0.7f) * 0.3f)
-                (base + signal * envelope * 0.5f).coerceIn(0.02f, 0.95f)
             }
         }
     }

@@ -62,6 +62,7 @@ class MainActivity : ComponentActivity() {
         requestNotificationPermission()
 
         pendingProfileId = intent.getStringExtra("profile_id")
+        pendingOpenSettings = intent.getBooleanExtra("open_settings", false)
 
         setContent {
             AgentCallTheme {
@@ -70,6 +71,7 @@ class MainActivity : ComponentActivity() {
                 Box(modifier = Modifier.fillMaxSize()) {
                     MainApp(
                         initialProfileId = pendingProfileId,
+                        initialOpenSettings = pendingOpenSettings,
                         onCallClicked = { callId ->
                             val intent = Intent(this@MainActivity, CallActivity::class.java).apply {
                                 putExtra("call_id", callId)
@@ -91,6 +93,8 @@ class MainActivity : ComponentActivity() {
         setIntent(intent)
         // Missed-call notifications deep-link into a profile (backlog item 1).
         intent.getStringExtra("profile_id")?.let { pendingProfileId = it }
+        // Call settings opens the in-app SettingsScreen (backlog item 2).
+        pendingOpenSettings = intent.getBooleanExtra("open_settings", false)
     }
 
     override fun onResume() {
@@ -107,6 +111,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private var pendingProfileId: String? by mutableStateOf(null)
+    private var pendingOpenSettings: Boolean by mutableStateOf(false)
 }
 
 @Composable
@@ -162,11 +167,15 @@ private fun AgentCallSplash(onFinished: () -> Unit) {
 @Composable
 fun MainApp(
     initialProfileId: String? = null,
+    initialOpenSettings: Boolean = false,
     onCallClicked: (String) -> Unit = {},
 ) {
     val navController = rememberNavController()
 
-    LaunchedEffect(initialProfileId) {
+    LaunchedEffect(initialProfileId, initialOpenSettings) {
+        if (initialOpenSettings) {
+            navController.navigate("settings")
+        }
         val id = initialProfileId
         if (id != null) {
             navController.navigate("profile/$id")

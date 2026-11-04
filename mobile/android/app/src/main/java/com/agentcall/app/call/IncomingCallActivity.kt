@@ -3,94 +3,121 @@ package com.agentcall.app.call
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.media.MediaPlayer
-import android.media.Ringtone
-import android.media.RingtoneManager
-import android.net.Uri
+import android.os.Bundle
+import android.provider.Settings
 import android.util.Log
 import android.widget.Toast
-import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.setValue
-import androidx.core.content.ContextCompat
-import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.lifecycle.lifecycleScope
-import androidx.compose.animation.core.*
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.PhoneForwarded
-import androidx.compose.material.icons.filled.*
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material.icons.filled.DoNotDisturbOn
+import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.RadioButton
+import androidx.compose.material3.RadioButtonDefaults
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.scale
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.foundation.Image
-import androidx.compose.ui.graphics.*
-import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.agentcall.app.R
-import com.agentcall.app.data.api.ApiClient
-import com.agentcall.app.data.api.ApiService
-import com.agentcall.app.settings.CallerTuneManager
+import androidx.core.content.ContextCompat
+import androidx.core.view.WindowCompat
+import androidx.lifecycle.lifecycleScope
 import com.agentcall.app.settings.MessageTemplates
 import com.agentcall.app.settings.QuietHoursManager
-import com.agentcall.app.ui.composables.ActionCircle
-import com.agentcall.app.ui.composables.AmbientBackground
-import com.agentcall.app.ui.ClientBadge
+import com.agentcall.app.ui.composables.AgentCallAvatar
+import com.agentcall.app.ui.composables.FlowFieldBackground
 import com.agentcall.app.ui.theme.*
 import dagger.hilt.android.AndroidEntryPoint
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import java.util.concurrent.atomic.AtomicBoolean
 import javax.inject.Inject
 
 @AndroidEntryPoint
 class IncomingCallActivity : ComponentActivity() {
 
-    @Inject lateinit var callerTuneManager: CallerTuneManager
     @Inject lateinit var quietHoursManager: QuietHoursManager
-    private var mediaPlayer: MediaPlayer? = null
-    private var ringtoneFallback: Ringtone? = null
-    @Volatile private var isPlayerValid = false
 
     private var showCall by mutableStateOf(false)
     private var quietRing by mutableStateOf(false)
     private var showMicPermissionDenied by mutableStateOf(false)
     private var pendingCallIntent: Intent? = null
     private var currentCallId by mutableStateOf("")
-private var currentCallerName by mutableStateOf("AI Agent")
-private var currentContextSummary by mutableStateOf("")
-private var currentClientInfoName by mutableStateOf<String?>(null)
-    private var currentTimeoutSeconds by mutableStateOf(60)
+    private var currentCallerName by mutableStateOf("AI Agent")
+    private var currentContextSummary by mutableStateOf("")
+    private var currentClientInfoName by mutableStateOf<String?>(null)
     private var ownsRing = false
     private var ringResolved = false
+    private var answeredInUi = false
+
     private val requestRecordAudioLauncher = registerForActivityResult(
-        ActivityResultContracts.RequestPermission()
+        ActivityResultContracts.RequestPermission(),
     ) { granted ->
         if (granted) {
             pendingCallIntent?.let {
                 pendingCallIntent = null
                 startService(it)
                 ringResolved = true
+                answeredInUi = true
                 showCall = true
             }
         } else {
@@ -112,64 +139,9 @@ private var currentClientInfoName by mutableStateOf<String?>(null)
             "notification/fsi"
         }
 
-    private fun startRinger() {
-        // Backlog item 6: during quiet hours the ring is fully silent (the
-        // notification used the quiet channel too). The UI still shows so an
-        // important call can be answered.
-        if (quietHoursManager.isQuietNow(currentCallerName)) {
-            Log.i(TAG, "[RING] quiet hours active — silent ring for $currentCallerName")
-            isPlayerValid = false
-            return
-        }
-        try {
-            // One global tune for every incoming call (Settings > Caller Tune),
-            // falling back to the system default.
-            val uri: Uri = callerTuneManager.uri
-            val mp = MediaPlayer().apply {
-                setDataSource(this@IncomingCallActivity, uri)
-                isLooping = true
-                setOnErrorListener { _, what, extra ->
-                    Log.w(TAG, "MediaPlayer error: what=$what extra=$extra")
-                    isPlayerValid = false
-                    true
-                }
-            }
-            kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
-                try {
-                    mp.prepare()
-                    mp.start()
-                    isPlayerValid = true
-                } catch (_: Exception) {
-                    mp.release()
-                    ringtoneFallback = RingtoneManager.getRingtone(this@IncomingCallActivity, RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE))
-                    ringtoneFallback?.play()
-                }
-            }
-            mediaPlayer = mp
-        } catch (_: Exception) {
-            ringtoneFallback = RingtoneManager.getRingtone(this, RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE))
-            ringtoneFallback?.play()
-        }
-    }
-
-    private fun stopRinger() {
-        try {
-            mediaPlayer?.apply {
-                if (isPlayerValid && isPlaying) stop()
-                release()
-            }
-        } catch (_: Exception) { }
-        try {
-            ringtoneFallback?.stop()
-        } catch (_: Exception) { }
-        mediaPlayer = null
-        ringtoneFallback = null
-        isPlayerValid = false
-    }
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        androidx.core.view.WindowCompat.setDecorFitsSystemWindows(window, false)
+        WindowCompat.setDecorFitsSystemWindows(window, false)
 
         if (!isProcessing.compareAndSet(false, true)) {
             finish()
@@ -177,7 +149,11 @@ private var currentClientInfoName by mutableStateOf<String?>(null)
         }
         ownsRing = true
 
-        currentCallId = intent.getStringExtra("call_id") ?: run { isProcessing.set(false); finish(); return }
+        currentCallId = intent.getStringExtra("call_id") ?: run {
+            isProcessing.set(false)
+            finish()
+            return
+        }
         currentCallerName = intent.getStringExtra("caller_name") ?: "AI Agent"
         currentContextSummary = intent.getStringExtra("context_summary") ?: ""
         currentClientInfoName = intent.getStringExtra("client_info_name")
@@ -192,133 +168,166 @@ private var currentClientInfoName by mutableStateOf<String?>(null)
                 return
             }
         }
-        // The ring UI now owns the timeout: the service's 60s fallback (meant
+        // The ring UI owns the timeout now: the service's 60s fallback (meant
         // for a notification that was never opened) would otherwise fire under
         // the open Later picker and send the AI a decline note racing the
-        // user's chosen callback. The in-UI countdown below is picker-aware.
+        // user's chosen callback. The in-UI countdown is picker-aware.
         SignalingForegroundService.notifyRingOpened(this@IncomingCallActivity)
 
         quietRing = quietHoursManager.isQuietNow(currentCallerName)
         Log.i(TAG, "[LAUNCH] IncomingCallActivity created callId=$currentCallId via=$launchSource quiet=$quietRing")
 
-        startRinger()
+        // The notification already started the ring. This is a no-op for the
+        // same call and covers direct/debug/deep-link launches that never
+        // posted one. Never a second player.
+        IncomingCallRinger.start(this, currentCallId, quietRing)
+
+        // One ring truth for both surfaces: when the notification's Answer (or
+        // Decline) resolves this call while the ring UI is visible, follow it
+        // instead of leaving a second call screen behind.
+        lifecycleScope.launch {
+            CallStateHolder.state.collect { state ->
+                if (state.callId != currentCallId) return@collect
+                when (state.status) {
+                    CallStatus.ANSWERED -> if (!answeredInUi && !showCall) {
+                        Log.i(TAG, "[STATE] answered elsewhere for $currentCallId — closing ring UI")
+                        finish()
+                    }
+                    CallStatus.ENDED -> if (!showCall) finish()
+                    else -> Unit
+                }
+            }
+        }
 
         setContent {
             AgentCallTheme(darkTheme = true) {
                 if (showMicPermissionDenied) {
                     LaunchedEffect(Unit) {
-                        Toast.makeText(this@IncomingCallActivity,
-                            "Microphone permission required for calls. Grant it in Settings.",
-                            Toast.LENGTH_LONG).show()
+                        Toast.makeText(
+                            this@IncomingCallActivity,
+                            "Microphone permission is required for calls. Grant it in Settings.",
+                            Toast.LENGTH_LONG,
+                        ).show()
                         showMicPermissionDenied = false
                     }
                 }
 
-                if (showCall) {
-                    ActiveCallScreen(callId = currentCallId, context = this@IncomingCallActivity,
-                        contextSummary = currentContextSummary.takeIf { it.isNotBlank() },
-                        onEndCall = { cid ->
-                            startService(Intent(this@IncomingCallActivity, CallService::class.java).apply {
-                                action = CallService.ACTION_END_CALL
-                                putExtra(CallService.EXTRA_CALL_ID, cid)
-                            })
-                            finish()
-                        })
-                } else {
-                    IncomingCallScreen(
-                        callerName = currentCallerName,
-                        contextSummary = currentContextSummary,
-                        clientInfoName = currentClientInfoName,
-                        quiet = quietRing,
-                        onAnswer = {
-                            stopRinger()
-                            // Ring resolved by answer: disarm the exact-alarm
-                            // timeout (no-op if the FGS job path owns it).
-                            RingTimeoutScheduler.cancel(this@IncomingCallActivity, currentCallId)
-                            // Backlog item 14 — the FGS ring is cleared by
-                            // CallService's ACTION_START_CALL (notifyRingResolved)
-                            // after the shared state flips to ANSWERED, so a
-                            // stale decline can never cancel an answered call.
-                            CallService.cancelIncomingNotification(this@IncomingCallActivity)
-                            val svcIntent = Intent(this@IncomingCallActivity, CallService::class.java).apply {
-                                action = CallService.ACTION_START_CALL
-                                putExtra(CallService.EXTRA_CALL_ID, currentCallId)
-                                putExtra(CallService.EXTRA_CALLER_NAME, currentCallerName)
-                                putExtra(CallService.EXTRA_CONTEXT_SUMMARY, currentContextSummary)
-                                putExtra(CallService.EXTRA_LAUNCH_UI, false)
-                                // Debug-only: forward the watchdog-cap override so
-                                // adb-driven H2 verification can pass it through the
-                                // ring UI (this ROM blocks shell starts of the
-                                // non-exported service directly).
-                                if (com.agentcall.app.BuildConfig.DEBUG) {
-                                    val dbg = intent.getLongExtra(CallService.EXTRA_DEBUG_MAX_CALL_MS, 0L)
-                                    if (dbg > 0L) putExtra(CallService.EXTRA_DEBUG_MAX_CALL_MS, dbg)
-                                }
-                            }
-                            if (ContextCompat.checkSelfPermission(this@IncomingCallActivity,
-                                    Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
-                                startService(svcIntent)
+                Crossfade(
+                    targetState = showCall,
+                    animationSpec = tween(durationMillis = 340),
+                    label = "callTransition",
+                ) { inCall ->
+                    if (inCall) {
+                        ActiveCallScreen(
+                            callId = currentCallId,
+                            context = this@IncomingCallActivity,
+                            contextSummary = currentContextSummary.takeIf { it.isNotBlank() },
+                            agentName = currentCallerName,
+                            onEndCall = { cid ->
+                                startService(Intent(this@IncomingCallActivity, CallService::class.java).apply {
+                                    action = CallService.ACTION_END_CALL
+                                    putExtra(CallService.EXTRA_CALL_ID, cid)
+                                })
+                            },
+                            onDismiss = { finish() },
+                        )
+                    } else {
+                        key(currentCallId) {
+                        IncomingCallScreen(
+                            callerName = currentCallerName,
+                            contextSummary = currentContextSummary,
+                            clientInfoName = currentClientInfoName,
+                            quiet = quietRing,
+                            onAnswer = {
                                 ringResolved = true
-                                showCall = true
-                            } else {
-                                pendingCallIntent = svcIntent
-                                requestRecordAudioLauncher.launch(Manifest.permission.RECORD_AUDIO)
-                            }
-                        },
-                        onDecline = {
-                            stopRinger()
-                            ringResolved = true
-                            RingTimeoutScheduler.cancel(this@IncomingCallActivity, currentCallId)
-                            // Backlog item 14 — only cancel while this call is
-                            // still ringing: the in-UI countdown auto-decline
-                            // can race the answer tap, and a stale FSI decline
-                            // must never cancel a live or answered call.
-                            val state = CallStateHolder.state.value
-                            if (state.status == CallStatus.RINGING && state.callId == currentCallId) {
+                                answeredInUi = true
+                                // Ring resolved by answer: disarm the exact-alarm
+                                // timeout (no-op if the FGS job path owns it).
+                                RingTimeoutScheduler.cancel(this@IncomingCallActivity, currentCallId)
+                                // Backlog item 14 — the FGS ring is cleared by
+                                // CallService's ACTION_START_CALL (notifyRingResolved)
+                                // after the shared state flips to ANSWERED, so a
+                                // stale decline can never cancel an answered call.
+                                CallService.cancelIncomingNotification(this@IncomingCallActivity)
+                                val svcIntent = Intent(this@IncomingCallActivity, CallService::class.java).apply {
+                                    action = CallService.ACTION_START_CALL
+                                    putExtra(CallService.EXTRA_CALL_ID, currentCallId)
+                                    putExtra(CallService.EXTRA_CALLER_NAME, currentCallerName)
+                                    putExtra(CallService.EXTRA_CONTEXT_SUMMARY, currentContextSummary)
+                                    putExtra(CallService.EXTRA_LAUNCH_UI, false)
+                                    // Debug-only: forward the watchdog-cap override so
+                                    // adb-driven H2 verification can pass it through the
+                                    // ring UI (this ROM blocks shell starts of the
+                                    // non-exported service directly).
+                                    if (com.agentcall.app.BuildConfig.DEBUG) {
+                                        val dbg = intent.getLongExtra(CallService.EXTRA_DEBUG_MAX_CALL_MS, 0L)
+                                        if (dbg > 0L) putExtra(CallService.EXTRA_DEBUG_MAX_CALL_MS, dbg)
+                                    }
+                                }
+                                if (ContextCompat.checkSelfPermission(
+                                        this@IncomingCallActivity,
+                                        Manifest.permission.RECORD_AUDIO,
+                                    ) == PackageManager.PERMISSION_GRANTED
+                                ) {
+                                    startService(svcIntent)
+                                    showCall = true
+                                } else {
+                                    pendingCallIntent = svcIntent
+                                    requestRecordAudioLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                                }
+                            },
+                            onDecline = {
+                                ringResolved = true
+                                RingTimeoutScheduler.cancel(this@IncomingCallActivity, currentCallId)
+                                // Backlog item 14 — only cancel while this call is
+                                // still ringing: the in-UI countdown auto-decline
+                                // can race the answer tap, and a stale FSI decline
+                                // must never cancel a live or answered call.
+                                val state = CallStateHolder.state.value
+                                if (state.status == CallStatus.RINGING && state.callId == currentCallId) {
+                                    SignalingForegroundService.notifyRingResolved(this@IncomingCallActivity)
+                                    CallService.cancelIncomingNotification(this@IncomingCallActivity)
+                                    startService(Intent(this@IncomingCallActivity, CallService::class.java).apply {
+                                        action = CallService.ACTION_CANCEL_CALL
+                                        putExtra(CallService.EXTRA_CALL_ID, currentCallId)
+                                        putExtra(CallService.EXTRA_TEXT, quietDeclineNote())
+                                    })
+                                } else {
+                                    Log.i(TAG, "[DECLINE] skipped cancel for $currentCallId (${state.status}) — no longer ringing")
+                                }
+                                isProcessing.set(false)
+                                finish()
+                            },
+                            onLater = { minutes ->
+                                ringResolved = true
+                                RingTimeoutScheduler.cancel(this@IncomingCallActivity, currentCallId)
                                 SignalingForegroundService.notifyRingResolved(this@IncomingCallActivity)
                                 CallService.cancelIncomingNotification(this@IncomingCallActivity)
                                 startService(Intent(this@IncomingCallActivity, CallService::class.java).apply {
-                                    action = CallService.ACTION_CANCEL_CALL
+                                    action = CallService.ACTION_SCHEDULE_CALLBACK
                                     putExtra(CallService.EXTRA_CALL_ID, currentCallId)
-                                    putExtra(CallService.EXTRA_TEXT, quietDeclineNote())
+                                    putExtra(CallService.EXTRA_TEXT, minutes.toString())
+                                    putExtra(CallService.EXTRA_NOTE, MessageTemplates.laterMessage(this@IncomingCallActivity, minutes))
                                 })
-                            } else {
-                                Log.i(TAG, "[DECLINE] skipped cancel for $currentCallId (${state.status}) — no longer ringing")
-                            }
-                            isProcessing.set(false)
-                            finish()
-                        },
-                        onLater = { minutes ->
-                            stopRinger()
-                            ringResolved = true
-                            RingTimeoutScheduler.cancel(this@IncomingCallActivity, currentCallId)
-                            SignalingForegroundService.notifyRingResolved(this@IncomingCallActivity)
-                            CallService.cancelIncomingNotification(this@IncomingCallActivity)
-                            startService(Intent(this@IncomingCallActivity, CallService::class.java).apply {
-                                action = CallService.ACTION_SCHEDULE_CALLBACK
-                                putExtra(CallService.EXTRA_CALL_ID, currentCallId)
-                                putExtra(CallService.EXTRA_TEXT, minutes.toString())
-                                putExtra(CallService.EXTRA_NOTE, MessageTemplates.laterMessage(this@IncomingCallActivity, minutes))
-                            })
-                            isProcessing.set(false)
-                            finish()
-                        },
-                    )
+                                isProcessing.set(false)
+                                finish()
+                            },
+                        )
+                        }
+                    }
                 }
             }
         }
 
         lifecycleScope.launch {
             CallEventBus.events.collect { event ->
-                if (event is CallEvent.CallEnded) {
+                if (event is CallEvent.CallEnded && !showCall) {
                     delay(500)
                     finish()
                 }
             }
         }
     }
-
-    private val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main + kotlinx.coroutines.SupervisorJob())
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
@@ -335,20 +344,8 @@ private var currentClientInfoName by mutableStateOf<String?>(null)
         showMicPermissionDenied = false
         pendingCallIntent = null
         ringResolved = false
-        stopRinger()
-        startRinger()
-    }
-
-    override fun onPause() {
-        super.onPause()
-        try {
-            mediaPlayer?.apply {
-                if (isPlayerValid && isPlaying) pause()
-            }
-        } catch (_: Exception) { }
-        try {
-            ringtoneFallback?.stop()
-        } catch (_: Exception) { }
+        answeredInUi = false
+        IncomingCallRinger.start(this, currentCallId, quietRing)
     }
 
     override fun onResume() {
@@ -360,23 +357,14 @@ private var currentClientInfoName by mutableStateOf<String?>(null)
             val state = CallStateHolder.state.value
             if (state.status != CallStatus.RINGING || state.callId != currentCallId) {
                 Log.i(TAG, "[RESUME] stale FSI for $currentCallId (${state.status}) — finishing")
-                stopRinger()
                 isProcessing.set(false)
                 finish()
-                return
             }
         }
-        try {
-            mediaPlayer?.apply {
-                if (isPlayerValid && !isPlaying) start()
-            }
-        } catch (_: Exception) { }
-        ringtoneFallback?.play()
     }
 
     override fun onDestroy() {
-        stopRinger()
-        if (ownsRing && !ringResolved) {
+        if (ownsRing && !ringResolved && !isChangingConfigurations) {
             // Backlog item 14 — same guard as decline: only auto-decline
             // while this call is still ringing.
             val callIdToCancel = currentCallId
@@ -412,6 +400,13 @@ private var currentClientInfoName by mutableStateOf<String?>(null)
     }
 }
 
+/**
+ * Incoming call surface:
+ * status → avatar → caller → context → one swipe control → Later.
+ *
+ * The hierarchy above the control stays fixed while the countdown runs, so the
+ * swipe target never moves under the user's finger.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun IncomingCallScreen(
@@ -425,254 +420,365 @@ fun IncomingCallScreen(
 ) {
     var showLaterPicker by remember { mutableStateOf(false) }
     var selectedMinutes by remember { mutableIntStateOf(10) }
-
-    val timeoutSeconds = 60
-    var secondsLeft by remember { mutableIntStateOf(timeoutSeconds) }
+    var resolved by remember { mutableStateOf(false) }
+    var secondsLeft by remember { mutableIntStateOf(TIMEOUT_SECONDS) }
 
     // Auto-decline countdown, paused while the Later picker is open so the
     // user can take their time choosing; resumes with the remaining seconds
-    // when the picker closes (LaunchedEffect keyed on showLaterPicker).
-    LaunchedEffect(showLaterPicker) {
-        if (showLaterPicker) return@LaunchedEffect
-        while (secondsLeft > 0) {
-            delay(1000)
+    // when the picker closes. Cancelled as soon as the call is resolved.
+    LaunchedEffect(showLaterPicker, resolved) {
+        if (showLaterPicker || resolved) return@LaunchedEffect
+        while (secondsLeft > 0 && !resolved) {
+            delay(1_000)
             secondsLeft--
         }
-        onDecline()
+        if (!resolved) {
+            resolved = true
+            onDecline()
+        }
     }
 
-    val laterOptions = listOf(5 to "5 min", 10 to "10 min", 15 to "15 min", 30 to "30 min", 60 to "1 hour")
+    val laterOptions = listOf(
+        5 to "5 minutes",
+        10 to "10 minutes",
+        15 to "15 minutes",
+        30 to "30 minutes",
+        60 to "1 hour",
+    )
 
-    val infiniteTransition = rememberInfiniteTransition(label = "incoming")
+    BoxWithConstraints(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background),
+    ) {
+        // Short screens (split screen, landscape) switch to a smaller, scrollable
+        // composition so the swipe target is never pushed off-screen.
+        val compact = maxHeight < 560.dp
+        val veryCompact = maxHeight < 460.dp
 
-    val pulseDot by infiniteTransition.animateFloat(0f, 1f,
-        infiniteRepeatable(tween(2000, easing = EaseInOutSine), RepeatMode.Reverse), label = "pulseDot")
-    // Gentle breathing on the brand mark while the phone rings.
-    val logoBreath by infiniteTransition.animateFloat(0.97f, 1.03f,
-        infiniteRepeatable(tween(1600, easing = EaseInOutSine), RepeatMode.Reverse), label = "logoBreath")
+        FlowFieldBackground(modifier = Modifier.fillMaxSize())
 
-    Box(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
-        // Premium atmospheric: subtle brand-purple vertical wash + radial halo behind avatar
-        // Keeps dark identity, avoids flat black; very low alpha so it never reads as neon.
+        // Keep the ambient field visible while anchoring the text and controls
+        // in a calmer, darker band.
         Box(
-            modifier = Modifier.fillMaxSize().background(
-                Brush.verticalGradient(
-                    colors = listOf(BrandPurple.copy(alpha = 0.09f), Color.Transparent),
-                    startY = 0f,
-                    endY = 820f
-                )
-            )
-        )
-        AmbientBackground(
-            accentColor = BrandPurple,
-            secondaryColor = BrandPurple.copy(alpha = 0.55f),
-            speedMultiplier = 0.7f,
-            density = 0.9f,
-        )
-        Canvas(modifier = Modifier.fillMaxSize()) {
-            drawCircle(
-                brush = Brush.radialGradient(
-                    colors = listOf(BrandPurple.copy(alpha = 0.13f), Color.Transparent),
-                    center = Offset(size.width * 0.5f, size.height * 0.36f),
-                    radius = size.width * 0.62f
+            modifier = Modifier
+                .fillMaxSize()
+                .background(
+                    Brush.verticalGradient(
+                        0f to MaterialTheme.colorScheme.background.copy(alpha = 0.18f),
+                        0.26f to Color.Transparent,
+                        0.70f to Color.Transparent,
+                        1f to MaterialTheme.colorScheme.background.copy(alpha = 0.72f),
+                    ),
                 ),
-                radius = size.width * 0.62f,
-                center = Offset(size.width * 0.5f, size.height * 0.36f)
+        )
+
+        Column(
+            modifier = if (compact) {
+                Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
+                    .statusBarsPadding()
+                    .navigationBarsPadding()
+                    .padding(horizontal = 24.dp)
+            } else {
+                Modifier
+                    .fillMaxSize()
+                    .statusBarsPadding()
+                    .navigationBarsPadding()
+                    .padding(horizontal = 24.dp)
+            },
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Spacer(modifier = if (compact) Modifier.height(12.dp) else Modifier.weight(0.10f))
+
+            IncomingStatusPill(quiet = quiet)
+
+            Spacer(modifier = if (compact) Modifier.height(14.dp) else Modifier.height(24.dp))
+
+            RingingAvatar(size = if (compact) 76.dp else 108.dp)
+
+            Spacer(modifier = if (compact) Modifier.height(12.dp) else Modifier.height(22.dp))
+
+            Text(
+                callerName,
+                style = MaterialTheme.typography.headlineLarge.copy(
+                    fontSize = 24.sp,
+                    letterSpacing = (-0.02).sp,
+                ),
+                color = MaterialTheme.colorScheme.onBackground,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth(),
             )
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                if (clientInfoName != null) "AgentCall AI via $clientInfoName" else "AgentCall AI",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
+            if (contextSummary.isNotBlank() && !veryCompact) {
+                Spacer(modifier = Modifier.height(if (compact) 12.dp else 18.dp))
+                Text(
+                    contextSummary,
+                    style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp, lineHeight = 21.sp),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center,
+                    maxLines = if (compact) 2 else 3,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(horizontal = 8.dp),
+                )
+            }
+
+            Spacer(modifier = if (compact) Modifier.height(22.dp) else Modifier.weight(1f))
+
+            SwipeCallControl(
+                onAnswer = {
+                    if (!resolved) {
+                        resolved = true
+                        onAnswer()
+                    }
+                },
+                onDecline = {
+                    if (!resolved) {
+                        resolved = true
+                        onDecline()
+                    }
+                },
+                enabled = !resolved,
+            )
+
+            TextButton(
+                onClick = { if (!resolved) showLaterPicker = true },
+                enabled = !resolved,
+                modifier = Modifier.heightIn(min = 48.dp).padding(top = 2.dp),
+            ) {
+                Text(
+                    "Later",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    Icons.Default.Schedule,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f),
+                    modifier = Modifier.size(13.dp),
+                )
+                Spacer(modifier = Modifier.width(5.dp))
+                Text(
+                    "Auto-decline in ${secondsLeft}s",
+                    style = MonoLabel,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f),
+                    textAlign = TextAlign.Center,
+                )
+            }
+
+            Spacer(modifier = if (compact) Modifier.height(16.dp) else Modifier.weight(0.05f))
         }
 
-        Column(modifier = Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().padding(horizontal = Spacing.ScreenPadding, vertical = Spacing.L), horizontalAlignment = Alignment.CenterHorizontally) {
-            Spacer(modifier = Modifier.weight(0.12f))
-
-            Surface(shape = RoundedCornerShape(100.dp), color = BrandPurple.copy(alpha = 0.13f)) {
-                Row(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Box(modifier = Modifier.size(8.dp).clip(CircleShape)
-                        .background(BrandPurple.copy(alpha = 0.55f + pulseDot * 0.45f)))
-                    Spacer(modifier = Modifier.width(12.dp))
-                    Text("Incoming AI Call",
-                        style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 1.sp),
-                        color = BrandPurple, fontWeight = FontWeight.SemiBold)
-                }
-            }
-
-            Spacer(modifier = Modifier.weight(0.08f))
-
-            if (quiet) {
-                Surface(
-                    shape = RoundedCornerShape(100.dp),
-                    color = Amber400.copy(alpha = 0.12f),
-                    modifier = Modifier.padding(bottom = 8.dp),
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Icon(Icons.Default.DoNotDisturbOn, "Quiet hours", tint = Amber400, modifier = Modifier.size(14.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            "Quiet hours — ringing silently",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = Amber300,
+        if (showLaterPicker) {
+            ModalBottomSheet(
+                onDismissRequest = { showLaterPicker = false },
+                sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+                containerColor = MaterialTheme.colorScheme.surface,
+                shape = RoundedCornerShape(topStart = Radii.Sheet, topEnd = Radii.Sheet),
+                tonalElevation = 0.dp,
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .windowInsetsPadding(
+                            WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom),
                         )
-                    }
-                }
-                Spacer(modifier = Modifier.height(12.dp))
-            }            // AgentCall brand mark — the same asset Home uses, presented as a
-            // brand logo (bare, over the dark ambient halo) and NOT inside a
-            // purple avatar disc: the brand logo is not an AI avatar. No
-            // enclosing rings; the countdown lives in "Auto-decline in Ns".
-            Image(
-                painter = painterResource(R.drawable.agentcall_logo_transparent),
-                contentDescription = "AgentCall",
-                modifier = Modifier
-                    .size(120.dp)
-                    .scale(logoBreath),
-            )
-
-            Spacer(modifier = Modifier.height(12.dp))
-            Text(callerName, style = MaterialTheme.typography.headlineMedium,
-                color = MaterialTheme.colorScheme.onBackground, fontWeight = FontWeight.SemiBold)
-
-            Spacer(modifier = Modifier.height(6.dp))
-            Text(if (clientInfoName != null) "AI Agent \u00B7 via $clientInfoName" else "AI Agent",
-                style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Spacer(modifier = Modifier.height(8.dp))
-            ClientBadge(clientInfoName = clientInfoName)
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            if (contextSummary.isNotBlank()) {
-                Surface(
-                    modifier = Modifier.fillMaxWidth(0.85f),
-                    shape = RoundedCornerShape(Radii.Panel),
-                    color = MaterialTheme.colorScheme.surfaceVariant,
-                    border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                        .padding(horizontal = 24.dp),
                 ) {
-                    Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.Top) {
-                        Icon(Icons.Default.Info, "Call context", modifier = Modifier.size(18.dp),
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Text(contextSummary, style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurface, textAlign = TextAlign.Start)
-                    }
-                }
-            }
-
-            Spacer(modifier = Modifier.weight(0.1f))
-
-            if (showLaterPicker) {
-                Box(modifier = Modifier.weight(1f).fillMaxWidth().padding(top = 16.dp)) {
-                    Surface(
-                        modifier = Modifier.fillMaxSize(),
-                        shape = RoundedCornerShape(20.dp), color = MaterialTheme.colorScheme.surface,
-                    ) {
-                        Column(
-                            modifier = Modifier.padding(12.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                        ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Text("Call back in...",
-                                style = MaterialTheme.typography.titleMedium,
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            Icons.Default.Schedule,
+                            contentDescription = null,
+                            tint = BrandPurpleLight,
+                            modifier = Modifier.size(20.dp),
+                        )
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column {
+                            Text(
+                                "Call back later",
+                                style = MaterialTheme.typography.titleLarge,
                                 color = MaterialTheme.colorScheme.onSurface,
                                 fontWeight = FontWeight.SemiBold,
-                                modifier = Modifier.weight(1f))
-                            IconButton(onClick = { showLaterPicker = false }) {
-                                Icon(Icons.Default.Close, "Back to call", tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                            }
-                        }
-                        Spacer(modifier = Modifier.height(12.dp))
-                        Column(
-                            modifier = Modifier
-                                .weight(1f)
-                                .fillMaxWidth()
-                                .verticalScroll(rememberScrollState()),
-                        ) {
-                        laterOptions.forEach { (mins, label) ->
-                            val isSelected = selectedMinutes == mins
-                            Surface(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(vertical = 3.dp)
-                                    .clickable { selectedMinutes = mins },
-                                shape = RoundedCornerShape(12.dp),
-                                color = if (isSelected) BrandPurple.copy(alpha = 0.14f) else MaterialTheme.colorScheme.surfaceVariant,
-                            ) {
-                                Row(modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
-                                    verticalAlignment = Alignment.CenterVertically) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(20.dp)
-                                            .border(
-                                                2.dp,
-                                                if (isSelected) BrandPurple else MaterialTheme.colorScheme.onSurfaceVariant,
-                                                CircleShape,
-                                            )
-                                            .background(
-                                                if (isSelected) BrandPurple else Color.Transparent,
-                                                CircleShape,
-                                            ),
-                                        contentAlignment = Alignment.Center,
-                                    ) {
-                                        if (isSelected) {
-                                            Box(Modifier.size(8.dp).background(Color.White, CircleShape))
-                                        }
-                                    }
-                                    Spacer(modifier = Modifier.width(12.dp))
-                                    Text(label, style = MaterialTheme.typography.bodyLarge,
-                                        color = MaterialTheme.colorScheme.onSurface)
-                                }
-                            }
-                        }
-                        }
-                        Spacer(modifier = Modifier.height(12.dp))
-                        Button(onClick = { onLater(selectedMinutes) },
-                            modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp),
-                            colors = ButtonDefaults.buttonColors(containerColor = BrandPurple)) {
-                            Text("Call me back in $selectedMinutes min")
-                        }
+                            )
+                            Text(
+                                "The AI will call you again at this time.",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
                         }
                     }
-                }
-            } else {
-                Row(horizontalArrangement = Arrangement.spacedBy(18.dp), verticalAlignment = Alignment.CenterVertically) {
-                    ActionCircle(
-                        icon = Icons.AutoMirrored.Filled.PhoneForwarded,
-                        label = "Decline", iconTint = Red400, labelColor = Red400,
-                        bgColor = GlassRed, size = 64.dp, onClick = onDecline,
-                        shadowElevation = 0.dp,
-                    )
-
-                    ActionCircle(
-                        icon = Icons.Default.Call, label = "Answer",
-                        iconTint = Slate50, labelColor = Green400,
-                        bgColor = Color.Transparent, size = 76.dp, onClick = onAnswer,
-                        isSolid = true, solidColor = Green500,
-                    )
-
-                    ActionCircle(
-                        icon = Icons.Default.Schedule, label = "Later",
-                        iconTint = Indigo300, labelColor = Indigo300,
-                        bgColor = GlassWhite, size = 64.dp,
-                        onClick = { showLaterPicker = true },
-                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Column(
+                        modifier = Modifier
+                            .heightIn(max = 280.dp)
+                            .verticalScroll(rememberScrollState()),
+                    ) {
+                    laterOptions.forEach { (minutes, label) ->
+                        val selected = selectedMinutes == minutes
+                        Surface(
+                            onClick = { selectedMinutes = minutes },
+                            shape = RoundedCornerShape(Radii.Card),
+                            color = if (selected) AccentTint else Color.Transparent,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .heightIn(min = 52.dp)
+                                    .padding(horizontal = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                RadioButton(
+                                    selected = selected,
+                                    onClick = { selectedMinutes = minutes },
+                                    colors = RadioButtonDefaults.colors(
+                                        selectedColor = BrandPurpleLight,
+                                        unselectedColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    ),
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    label,
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                )
+                            }
+                        }
+                    }
+                    }
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Button(
+                        onClick = {
+                            if (!resolved) {
+                                resolved = true
+                                showLaterPicker = false
+                                onLater(selectedMinutes)
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth().height(50.dp),
+                        shape = RoundedCornerShape(Radii.Field),
+                        colors = ButtonDefaults.buttonColors(containerColor = BrandPurple),
+                    ) {
+                        Text("Call me back in $selectedMinutes min", color = OnAccent)
+                    }
+                    TextButton(
+                        onClick = { showLaterPicker = false },
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                    ) {
+                        Text(
+                            "Back to call",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(12.dp))
                 }
             }
-
-            Spacer(modifier = Modifier.height(12.dp))
-            if (!showLaterPicker) {
-                Text("Answer, decline, or schedule for later",
-                    style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    textAlign = TextAlign.Center)
-                Spacer(modifier = Modifier.height(12.dp))
-                Text("Auto-decline in ${secondsLeft}s",
-                    style = MonoLabel,
-                    color = Slate400,
-                    textAlign = TextAlign.Center)
-            }
-            Spacer(modifier = Modifier.weight(0.05f))
         }
     }
 }
+
+@Composable
+private fun IncomingStatusPill(quiet: Boolean) {
+    Surface(
+        shape = RoundedCornerShape(Radii.Pill),
+        color = if (quiet) WarningBg else BrandPurple.copy(alpha = 0.13f),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (quiet) {
+                Icon(
+                    Icons.Default.DoNotDisturbOn,
+                    contentDescription = null,
+                    tint = AlertAmber,
+                    modifier = Modifier.size(13.dp),
+                )
+            } else {
+                Box(
+                    modifier = Modifier
+                        .size(6.dp)
+                        .clip(CircleShape)
+                        .background(BrandPurpleLight),
+                )
+            }
+            Spacer(modifier = Modifier.width(7.dp))
+            Text(
+                if (quiet) "AI voice call · silent" else "AI voice call",
+                style = MaterialTheme.typography.labelMedium,
+                color = if (quiet) AlertAmber else BrandPurpleLight,
+                fontWeight = FontWeight.Medium,
+            )
+        }
+    }
+}
+
+/**
+ * Agent avatar with a slow expanding ring. Motion communicates "it is ringing"
+ * and stops entirely when system animations are disabled.
+ */
+@Composable
+private fun RingingAvatar(size: Dp) {
+    val context = LocalContext.current
+    val reducedMotion = remember(context) {
+        runCatching {
+            Settings.Global.getFloat(
+                context.contentResolver,
+                Settings.Global.ANIMATOR_DURATION_SCALE,
+                1f,
+            ) == 0f
+        }.getOrDefault(false)
+    }
+    val transition = rememberInfiniteTransition(label = "ringingAvatar")
+    val pulse by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 2_400, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart,
+        ),
+        label = "ringPulse",
+    )
+
+    // The rings expand to 78dp on the 108dp avatar; the box is sized so the
+    // largest ring is never clipped by the Canvas bounds.
+    Box(
+        modifier = Modifier.size(size * 1.45f),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (!reducedMotion) {
+            Canvas(modifier = Modifier.fillMaxSize()) {
+                val core = size.toPx()
+                repeat(2) { index ->
+                    val progress = (pulse + index * 0.5f) % 1f
+                    val radius = core / 2f + progress * core * 0.20f
+                    drawCircle(
+                        color = BrandPurple.copy(alpha = (1f - progress) * 0.16f),
+                        radius = radius,
+                        style = Stroke(width = 1.dp.toPx()),
+                    )
+                }
+            }
+        }
+        AgentCallAvatar(size = size, contentDescription = "AgentCall AI")
+    }
+}
+
+private const val TIMEOUT_SECONDS = 60
+
+/** Amber with enough contrast on the dark ground (the alias is historical). */
+private val AlertAmber = Color(0xFFE7C169)

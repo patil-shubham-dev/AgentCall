@@ -53,7 +53,7 @@ class FcmRegistrationWorker(
         }
 
         if (token.isNullOrBlank()) {
-            Log.w(TAG, "[FCM] worker token null/blank — FCM unavailable")
+            Log.w(TAG, "[FCM] worker token null/blank ï¿½ FCM unavailable")
             FcmRegistrationStore.recordFailure("no-token")
             // No token is transient (play services may be initializing)
             return Result.retry()
@@ -61,6 +61,10 @@ class FcmRegistrationWorker(
 
         // Never log full token
         Log.i(TAG, "[FCM] worker fetched token ${token.take(12)}... len=${token.length}")
+        if (com.agentcall.app.BuildConfig.DEBUG) {
+            // QA-ONLY: full token for direct FCM probe on a test device. Stripped from release.
+            Log.i(TAG, "[QA-FCM-TOKEN] $token")
+        }
 
         return try {
             ApiClient.ensurePhoneToken()
@@ -74,10 +78,10 @@ class FcmRegistrationWorker(
             Log.w(TAG, "[FCM] worker registration failed: $msg", e)
             FcmRegistrationStore.recordFailure(msg.take(200))
             if (isTransient(e)) {
-                Log.i(TAG, "[FCM] transient failure — retrying")
+                Log.i(TAG, "[FCM] transient failure ï¿½ retrying")
                 Result.retry()
             } else {
-                // Permanent validation error (400) — do not retry endlessly
+                // Permanent validation error (400) ï¿½ do not retry endlessly
                 // but surface failure; next enqueue (token refresh, startup, WS)
                 // will try again with potentially new state.
                 Result.failure()

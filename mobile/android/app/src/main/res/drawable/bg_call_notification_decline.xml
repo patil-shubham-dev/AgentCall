@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Secondary decline action: quiet surface, red only in the label/icon. -->
+<ripple xmlns:android="http://schemas.android.com/apk/res/android"
+    android:color="#2EFF7A80">
+    <item>
+        <shape android:shape="rectangle">
+            <solid android:color="#17141B" />
+            <corners android:radius="25dp" />
+            <stroke
+                android:width="1dp"
+                android:color="#472A31" />
+        </shape>
+    </item>
+</ripple>

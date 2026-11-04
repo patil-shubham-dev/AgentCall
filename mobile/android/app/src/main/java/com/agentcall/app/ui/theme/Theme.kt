@@ -1,6 +1,5 @@
 ﻿package com.agentcall.app.ui.theme
 
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
@@ -11,14 +10,14 @@ import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
 
-// ── Minimal premium — warm paper + ink ──
-// Light: paper bg, white cards, ink primary. Dark: true near-black, no graphite.
-// One radius, one border, one accent (ink), semantic each ONE meaning.
+// ── AgentCall dark identity ───────────────
+// Charcoal ground + violet accent; the light scheme stays for explicit
+// darkTheme = false callers. Legacy extended names remap onto the tokens.
 
 private val DarkColorScheme = darkColorScheme(
-    primary = DarkTextPrimary,
-    onPrimary = DarkBg,
-    primaryContainer = DarkSurfaceVariant,
+    primary = BrandPurple,
+    onPrimary = OnAccent,
+    primaryContainer = AccentTint,
     onPrimaryContainer = DarkTextPrimary,
     secondary = DarkTextSecondary,
     onSecondary = DarkBg,
@@ -38,13 +37,13 @@ private val DarkColorScheme = darkColorScheme(
     outlineVariant = DarkBorderStrong,
     inverseSurface = LightBg,
     inverseOnSurface = LightTextPrimary,
-    inversePrimary = Ink,
-    surfaceTint = DarkBorder,
+    inversePrimary = BrandPurplePressed,
+    surfaceTint = BrandPurple,
 )
 
 private val LightColorScheme = lightColorScheme(
-    primary = Ink,
-    onPrimary = OnInk,
+    primary = LightTextPrimary,
+    onPrimary = LightBg,
     primaryContainer = LightSurfaceVariant,
     onPrimaryContainer = LightTextPrimary,
     secondary = LightTextSecondary,
@@ -64,7 +63,7 @@ private val LightColorScheme = lightColorScheme(
     outlineVariant = LightBorderStrong,
     inverseSurface = DarkSurface,
     inverseOnSurface = DarkTextPrimary,
-    inversePrimary = Ink,
+    inversePrimary = BrandPurpleLight,
     surfaceTint = LightBorder,
 )
 
@@ -118,9 +117,11 @@ val MaterialTheme.extendedColors: ExtendedColors
     get() = LocalExtendedColors.current
 
 // ── Theme Composition ───────────────────────
+// Dark-first: the product identity is deep charcoal; callers that want the
+// light scheme pass darkTheme = false explicitly.
 @Composable
 fun AgentCallTheme(
-    darkTheme: Boolean = isSystemInDarkTheme(),
+    darkTheme: Boolean = true,
     content: @Composable () -> Unit
 ) {
     val colorScheme = if (darkTheme) DarkColorScheme else LightColorScheme
