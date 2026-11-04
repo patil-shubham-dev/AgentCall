@@ -485,3 +485,57 @@ Monitor a full day of `keep-render-warm` runs with the updated schedule
 behavior; if gap-to-gap uptime is poor, consider chaining app-observed
 caveat: none (app no longer participates). Else continue P0.1b barge-in
 physical validation.
+
+---
+
+## Session 2026-11-03 — dark identity, real amplitude, honest call surfaces
+
+Brief: P0 redesign of the voice-call surfaces (incoming + active), real
+(non-fake) amplitude indicators, call summary, notification caller identity,
+via the committed dark visual identity (charcoal ground + single violet
+accent). Backend deliberately untouched.
+
+### Shipped
+
+- Design system M1: `Color.kt` rewritten to the dark identity with legacy
+  aliases remapped; `Type.kt` sans-only (Fraunces unreferenced, stripped by
+  shrinker); `Theme.kt` dark-first; `AmbientBackground.kt` deleted and removed
+  from ProfileDetail/Settings/BatteryOptimization; `GradientAvatar.kt`
+  rebuilt as a flat violet disc.
+- Incoming-call screen (M2): rebuilt `IncomingCallScreen` — identity chip
+  with pulse, breathing avatar, real 60s auto-decline countdown, bounded
+  scrollable context card, Decline/Answer/Later action row, Later picker
+  panel (5min..1h). Activity glue unchanged.
+- Active-call screen (M3/M5): presence header (avatar, presence label,
+  status hint, mono timer), ENDED summary card (outcome + duration + Close;
+  transcript stays as read-back), timestamps on every transcript bubble,
+  waveform/typing/controls hidden when ended. AmbientBackground/orb decor
+  deleted.
+- Real amplitude (M4): `CallEventBus.TtsAmplitude/MicAmplitude`;
+  `PiperTtsEngine` computes per-slice RMS (~2048 frames) and reports via
+  `onLevel`; `SpeechRecognizer.onRmsChanged` in CallService emits throttled
+  (90ms) mic levels; `AudioLevels` pure mixer (round-robin slots, decaying
+  rolling-max mic normalization, decay-to-baseline) drives the waveform from
+  the ViewModel at ~10 Hz. The fake sin-waveform generator is deleted.
+- Presence (M3): `CallPresence` enum + pure derivation with unit tests.
+- Notification caller identity (M6): Person icon (agentcall_logo_transparent)
+  + large icon on the incoming notification; accent color token matched
+  (#7967DE).
+- Consistency sweep (M7): no legacy hexes/serif usage remain; all screens
+  follow the tokens via remapped aliases; dark-first theme everywhere.
+- Backend audit (M8): REST surface matches the Android contract (no changes);
+  suite baseline (252 tests) already green prior session.
+
+### Validation
+
+- `gradlew :app:testDebugUnitTest :app:assembleDebug` — BUILD SUCCESSFUL;
+  89 unit tests green (77 baseline + AudioLevelsTest 6 + CallPresenceTest 6),
+  fresh app-debug.apk (~118.7 MB) at
+  `mobile/android/app/build/outputs/apk/debug/app-debug.apk`.
+
+### Caveats
+
+- Device QA still BLOCKED (no emulator package, no USB device, arm64-only
+  APK); screen changes validated by compile+tests only.
+- Mic amplitude is RMS-normalized per device (decaying rolling max); physical
+  tuning on real hardware still worthwhile.
