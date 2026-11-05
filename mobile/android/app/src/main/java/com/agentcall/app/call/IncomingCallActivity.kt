@@ -456,7 +456,14 @@ fun IncomingCallScreen(
         val compact = maxHeight < 560.dp
         val veryCompact = maxHeight < 460.dp
 
-        FlowFieldBackground(modifier = Modifier.fillMaxSize())
+        FlowFieldBackground(
+            modifier = Modifier.fillMaxSize(),
+            // The incoming surface needs atmospheric connection energy, not a
+            // competing animation behind the caller and the call decision.
+            // Quiet-hours calls are intentionally even calmer.
+            speed = if (quiet) 0.24f else 0.42f,
+            trailOpacity = if (quiet) 0.07f else 0.10f,
+        )
 
         // Keep the ambient field visible while anchoring the text and controls
         // in a calmer, darker band.

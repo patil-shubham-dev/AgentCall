@@ -62,6 +62,26 @@ class AudioLevelsTest {
     }
 
     @Test
+    fun `background microphone noise stays below the visual gate`() {
+        val levels = AudioLevels(slots = 8)
+        repeat(8) { levels.onMic(-8f) }
+
+        val energy = levels.energyLevels(listeningActive = true, speakingActive = false, muted = false)
+
+        assertEquals(0f, energy.user, 0f)
+    }
+
+    @Test
+    fun `near silent tts chunks stay below the visual gate`() {
+        val levels = AudioLevels(slots = 8)
+        repeat(6) { levels.onTts(0.001f) }
+
+        val energy = levels.energyLevels(listeningActive = false, speakingActive = true, muted = false)
+
+        assertEquals(0f, energy.ai, 0f)
+    }
+
+    @Test
     fun `out-of-mode stream decays toward silence instead of freezing`() {
         val levels = AudioLevels(slots = 8)
         repeat(8) { levels.onTts(0.9f) }

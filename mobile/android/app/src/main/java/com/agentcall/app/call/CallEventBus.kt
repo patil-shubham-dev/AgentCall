@@ -11,6 +11,8 @@ sealed class CallEvent {
     data class UserMessage(val messageId: String, val text: String) : CallEvent()
     /** Ephemeral recognizer hypothesis; never persisted or sent to the agent. */
     data class UserSpeechPartial(val text: String) : CallEvent()
+    /** The platform recognizer has actually acquired or released the microphone. */
+    data class ListeningStateChanged(val active: Boolean) : CallEvent()
     /**
      * Speech recognition failed for good (after retries, or the recognizer
      * can't be created at all). The UI must leave its optimistic Listening

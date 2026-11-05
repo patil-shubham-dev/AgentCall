@@ -220,6 +220,13 @@ class CallViewModel @Inject constructor(
                             isProcessing = false,
                         )
                     }
+                    is CallEvent.ListeningStateChanged -> {
+                        clearSttHint()
+                        _uiState.value = _uiState.value.copy(
+                            isRecording = event.active,
+                            isProcessing = false,
+                        )
+                    }
                     is CallEvent.UserTextSent -> markUserTextSent(event.messageId)
                     is CallEvent.UserTextFailed -> markUserTextFailed(event.messageId)
                     is CallEvent.CallAnswered -> {

@@ -104,36 +104,54 @@ class AudioLevels(slots: Int = DEFAULT_SLOTS) {
         ((peak - BASELINE) / (1f - BASELINE)).coerceIn(0f, 1f)
 
     /**
-     * Recognizer rmsdB is device-dependent (commonly a noisy -10..0 dB window);
-     * auto-scale against a decaying rolling maximum so quiet microphones still
-     * produce visible energy.
+     * Recognizer rmsdB is device-dependent (commonly a noisy -10..0 dB window).
+     * The gate runs before normalization, and calibration only learns from a
+     * clearly voiced sample. That prevents a quiet room from calibrating itself
+     * up into a full-size visual gesture.
      */
     private fun normalizeMic(level: Float): Float {
         val normalized = ((level + 10f) / 10f).coerceIn(0f, 1f)
+        if (normalized <= MIC_GATE) {
+            rollingMax *= MAX_DECAY
+            return BASELINE
+        }
+        if (normalized >= MIC_CALIBRATION_FLOOR) {
+            rollingMax = maxOf(rollingMax * MAX_DECAY, normalized)
+        } else {
+            rollingMax *= MAX_DECAY
+        }
         val scaled = if (rollingMax <= MIN_WINDOW) {
             normalized
         } else {
             (normalized / (rollingMax * SCALE_SOFT)).coerceIn(0f, 1f)
         }
-        rollingMax = maxOf(rollingMax * MAX_DECAY, normalized)
-        return if (scaled < SILENCE) BASELINE else scaled
+        return normalizeAboveGate(scaled, MIC_POST_GATE)
     }
 
     /** TTS chunk RMS is 0..1 float PCM; sqrt gives perceptual loudness. */
     private fun normalizeTts(level: Float): Float {
         val scaled = (sqrt(level.coerceIn(0f, 1f)) * TTS_GAIN).coerceIn(0f, 1f)
-        return if (scaled < SILENCE) BASELINE else scaled
+        return normalizeAboveGate(scaled, TTS_GATE)
+    }
+
+    /** Removes sub-audible activity, then restores the remaining useful range. */
+    private fun normalizeAboveGate(level: Float, threshold: Float): Float {
+        if (level <= threshold) return BASELINE
+        return ((level - threshold) / (1f - threshold)).coerceIn(0f, 1f)
     }
 
     companion object {
         const val DEFAULT_SLOTS = 40
         const val BASELINE = 0.07f
-        private const val SILENCE = 0.035f
         private const val TTS_GAIN = 1.35f
         private const val SCALE_SOFT = 0.85f
         private const val MAX_DECAY = 0.98f
         private const val MIN_WINDOW = 0.25f
         private const val DECAY = 0.80f
-        private const val RECENT_WINDOW = 8
+        private const val RECENT_WINDOW = 3
+        private const val MIC_GATE = 0.24f
+        private const val MIC_POST_GATE = 0.08f
+        private const val TTS_GATE = 0.07f
+        private const val MIC_CALIBRATION_FLOOR = 0.45f
     }
 }

@@ -74,7 +74,7 @@ data class WaveMood(
  * - no pointer input: this composable never steals a call gesture.
  */
 @Composable
-fun CallWaveBackground(
+fun LegacyDitherWaveBackground(
     mood: WaveMood,
     userLevel: Float,
     aiLevel: Float,
@@ -192,16 +192,20 @@ private class DitheringWaveRenderer {
     private var rows = 0
     private var blocksX = 0f
     private var blocksY = 0f
+    private var blockPx = 1f
 
     private var userBitmap: Bitmap? = null
     private var aiBitmap: Bitmap? = null
+    private var interferenceBitmap: Bitmap? = null
     private var userPixels = IntArray(0)
     private var aiPixels = IntArray(0)
+    private var interferencePixels = IntArray(0)
 
     private var qx = IntArray(0)
     private var qy = IntArray(0)
     private var userWave = FloatArray(0)
     private var aiWave = FloatArray(0)
+    private var collision = FloatArray(0)
 
     // Smoothed input envelopes and phase drift live across frames so attack,
     // release and organic time-warping survive recompositions.
@@ -213,7 +217,7 @@ private class DitheringWaveRenderer {
         if (w == width && h == height && cols > 0) return
         width = w
         height = h
-        val blockPx = (3f * density).coerceAtLeast(1f)
+        blockPx = (3f * density).coerceAtLeast(1f)
         blocksX = w / blockPx
         blocksY = h / blockPx
         cols = kotlin.math.ceil(blocksX.toDouble()).toInt().coerceAtLeast(1).coerceAtMost(w)
@@ -222,8 +226,10 @@ private class DitheringWaveRenderer {
 
         userPixels = IntArray(cols * rows)
         aiPixels = IntArray(cols * rows)
+        interferencePixels = IntArray(cols * rows)
         userBitmap = Bitmap.createBitmap(cols, rows, Bitmap.Config.ARGB_8888)
         aiBitmap = Bitmap.createBitmap(cols, rows, Bitmap.Config.ARGB_8888)
+        interferenceBitmap = Bitmap.createBitmap(cols, rows, Bitmap.Config.ARGB_8888)
 
         qx = IntArray(cols) { bx ->
             floor((bx + 0.5f) - blocksX / 2f).toInt()
@@ -234,6 +240,7 @@ private class DitheringWaveRenderer {
         }
         userWave = FloatArray(cols)
         aiWave = FloatArray(cols)
+        collision = FloatArray(cols)
         dst.set(0, 0, w, h)
     }
 
@@ -250,74 +257,46 @@ private class DitheringWaveRenderer {
         userEnv = smoothLevel(userEnv, userLevel, dt)
         aiEnv = smoothLevel(aiEnv, aiLevel, dt)
         val energy = max(userEnv, aiEnv)
-        // Speech slightly accelerates the field; silence keeps a slow, calm
-        // current. The drift accumulates, so motion never snaps between loops.
-        phaseDrift += dt * (0.16f + 1.05f * energy)
-        val t = 0.5f * seconds + phaseDrift
-
-        val amp = mood.amplitude.coerceIn(0f, 1f)
-        val audioGain = mood.audioGain.coerceIn(0f, 1f)
-        val headroom = 0.65f + 0.55f * amp
-        val userSpread = waveSpread(userEnv, headroom)
-        val aiSpread = waveSpread(aiEnv, headroom)
-        val userPush = (0.06f + 0.94f * userEnv) * audioGain * MAX_APPROACH
-        val aiPush = (0.06f + 0.94f * aiEnv) * audioGain * MAX_APPROACH
-        val speedScale = 0.86f + amp * 0.30f + energy * 0.10f
+        // The temporal movement is deliberately tied to real speech. During
+        // silence the line only drifts imperceptibly instead of running an
+        // always-active decorative animation.
+        phaseDrift += dt * (0.008f + 0.34f * energy)
+        val t = 0.28f * seconds + phaseDrift
+        val topBaseline = (WAVE_INSET_PX / blockPx).coerceIn(2f, rows * 0.24f)
+        val bottomBaseline = (rows - topBaseline).coerceIn(rows * 0.76f, rows - 2f)
+        val userHeight = waveHeight(userEnv, blockPx)
+        val aiHeight = waveHeight(aiEnv, blockPx)
 
         for (bx in 0 until cols) {
             val x = (qx[bx] / blocksX) * 4f
-            val userBase = organicWave(x, t, USER_SEED, userEnv, userSpread)
-            val aiBase = organicWave(x, t, AI_SEED, aiEnv, aiSpread)
-
-            // Screen-space front positions (0 = top, 1 = bottom). The gap is
-            // positive while the fields are apart; near zero they are touching
-            // and the collision term lets each path bend the other.
-            val userFront = 1f - WAVE_REGION *
-                (0.5f + (userPush - userBase) / (4f * speedScale))
-            val aiFront = WAVE_REGION *
-                (0.5f + (aiPush - aiBase) / (4f * speedScale))
-            val proximity = collisionWeight(userFront - aiFront)
-            val userReach = (1f - abs(userFront - 0.5f) * 2.4f).coerceIn(0f, 1f) * userEnv
-            val aiReach = (1f - abs(aiFront - 0.5f) * 2.4f).coerceIn(0f, 1f) * aiEnv
-            val collide = proximity * max(userReach, aiReach)
-
-            // Short-lived ripples where the fronts meet: temporary amplitude,
-            // curvature and energy changes rather than a global scale.
-            val interference = sin(5.1f * x + 3.2f * t) * 0.20f +
-                sin(8.3f * x - 4.6f * t + 0.7f) * 0.10f
-            val breathe = sin(7.7f * x + 6.1f * t) * 0.10f +
-                sin(3.3f * x - 2.7f * t + 2.2f) * 0.06f
-
-            userWave[bx] = userBase +
-                breathe * (0.35f + 0.65f * userEnv) +
-                collide * (aiBase * 0.45f + interference)
-            aiWave[bx] = aiBase -
-                breathe * (0.35f + 0.65f * aiEnv) -
-                collide * (userBase * 0.45f - interference)
+            // These are waveform centre lines, not field fronts. Their
+            // movement varies per column, making recognisable hills and lows
+            // only when that side has real energy.
+            userWave[bx] = (bottomBaseline + organicWave(x, t, USER_SEED, userEnv, 1f) * userHeight)
+                .coerceIn(rows * 0.72f, rows - 2f)
+            aiWave[bx] = (topBaseline + organicWave(x, t, AI_SEED, aiEnv, 1f) * aiHeight)
+                .coerceIn(2f, rows * 0.28f)
+            collision[bx] = interferenceIntensity(1f, userEnv, aiEnv)
         }
 
         val userColor = inkColor(userTint, mood.brightness * 1.15f)
         val aiColor = inkColor(aiTint, mood.brightness)
         java.util.Arrays.fill(userPixels, 0)
         java.util.Arrays.fill(aiPixels, 0)
+        java.util.Arrays.fill(interferencePixels, 0)
+        val userThickness = ribbonThickness(userEnv)
+        val aiThickness = ribbonThickness(aiEnv)
 
         for (by in 0 until rows) {
             val ditherRow = mod8(qy[by]) * 8
-            val p = (by + 0.5f) / rows
-            // Each field owns one edge of the screen and reaches toward the
-            // centre at most halfway through its own region. The reference
-            // shader and its phase are unchanged; only the vertical viewport is
-            // placed. At full audio the two fronts can meet at the centre.
-            val yBottom = ((1f - p) / WAVE_REGION - 0.5f) * 4f * speedScale - userPush
-            val yTop = (p / WAVE_REGION - 0.5f) * 4f * speedScale - aiPush
             val rowOffset = by * cols
             for (bx in 0 until cols) {
                 val threshold = BAYER8[ditherRow + mod8(qx[bx])]
                 val index = rowOffset + bx
-                if (waveShape(yBottom + userWave[bx]) + threshold >= 1f) {
+                if (ditherRibbon(abs(by - userWave[bx]), userThickness, threshold)) {
                     userPixels[index] = userColor
                 }
-                if (waveShape(yTop + aiWave[bx]) + threshold >= 1f) {
+                if (ditherRibbon(abs(by - aiWave[bx]), aiThickness, threshold)) {
                     aiPixels[index] = aiColor
                 }
             }
@@ -325,16 +304,19 @@ private class DitheringWaveRenderer {
 
         userBitmap?.setPixels(userPixels, 0, cols, 0, 0, cols, rows)
         aiBitmap?.setPixels(aiPixels, 0, cols, 0, 0, cols, rows)
+        interferenceBitmap?.setPixels(interferencePixels, 0, cols, 0, 0, cols, rows)
     }
 
     fun draw(scope: DrawScope) {
         val user = userBitmap ?: return
         val ai = aiBitmap ?: return
+        val interference = interferenceBitmap ?: return
         if (width <= 0 || height <= 0) return
         scope.drawIntoCanvas { canvas ->
             val native = canvas.nativeCanvas
             native.drawBitmap(user, null, dst, paint)
             native.drawBitmap(ai, null, dst, paint)
+            native.drawBitmap(interference, null, dst, paint)
         }
     }
 
@@ -407,6 +389,24 @@ internal fun collisionWeight(gap: Float): Float {
     return raw * raw
 }
 
+/** The shared-space effect is present only while both real streams are live. */
+internal fun interferenceIntensity(proximity: Float, user: Float, ai: Float): Float =
+    proximity.coerceIn(0f, 1f) * minOf(user.coerceIn(0f, 1f), ai.coerceIn(0f, 1f))
+
+/** Envelope height in renderer blocks: silent lines stay short; speech gains hills. */
+internal fun waveHeight(energy: Float, blockPx: Float): Float {
+    val shaped = energy.coerceIn(0f, 1f).let { it * it * (3f - 2f * it) }
+    val px = SILENT_WAVE_HEIGHT_PX + (SPEECH_WAVE_HEIGHT_PX - SILENT_WAVE_HEIGHT_PX) * shaped
+    return px / blockPx.coerceAtLeast(1f)
+}
+
+/** Ordered-dither edge around a thin waveform ribbon. */
+internal fun ditherRibbon(distance: Float, halfThickness: Float, threshold: Float): Boolean =
+    (halfThickness + 0.62f - distance).coerceIn(0f, 1f) > threshold
+
+private fun ribbonThickness(energy: Float): Float =
+    0.42f + 1.45f * energy.coerceIn(0f, 1f)
+
 /** Ordered 8x8 Bayer thresholds in [0, 1), row-major. */
 internal val BAYER8: FloatArray = intArrayOf(
     0, 32, 8, 40, 2, 34, 10, 42,
@@ -426,16 +426,8 @@ private const val FRAME_MS = 33L
 private const val STILL_FRAME_SECONDS = 12.7f
 
 /** Fraction of the screen each wave may use from its own edge. */
-private const val WAVE_REGION = 0.66f
-
-/**
- * Maximum vertical shift (in shader units) that audio may pull a field toward
- * the centre. The original wave itself is unchanged.
- */
-private const val MAX_APPROACH = 1.0f
-
-/** Calm and full-voice crest spread (shader units). */
-private const val SILENCE_SPREAD = 0.09f
+/** Calm and full-voice crest spread (legacy helper tests). */
+private const val SILENCE_SPREAD = 0.018f
 private const val LOUD_SPREAD = 0.72f
 
 /** Audio envelope time constants: fast attack, slower natural release. */
@@ -444,6 +436,11 @@ private const val LEVEL_RELEASE_S = 0.42f
 
 /** Gap at which two fronts start interfering (screen fraction). */
 private const val COLLISION_RANGE = 0.28f
+
+/** Physical screen distance keeps the baselines 100–120px from each edge. */
+private const val WAVE_INSET_PX = 112f
+private const val SILENT_WAVE_HEIGHT_PX = 5f
+private const val SPEECH_WAVE_HEIGHT_PX = 72f
 
 private const val USER_SEED = -0.7f
 private const val AI_SEED = 2.35f

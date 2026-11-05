@@ -2,6 +2,7 @@ package com.agentcall.app.call
 
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutLinearInEasing
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
@@ -89,8 +90,8 @@ fun SwipeCallControl(
     val scope = rememberCoroutineScope()
     val density = LocalDensity.current
 
-    val thumbSize = 64.dp
-    val trackHeight = 80.dp
+    val thumbSize = 60.dp
+    val trackHeight = 92.dp
     val thumbPx = with(density) { thumbSize.toPx() }
     var trackWidthPx by remember { mutableIntStateOf(0) }
     val travel = ((trackWidthPx - thumbPx) / 2f).coerceAtLeast(1f)
@@ -103,6 +104,7 @@ fun SwipeCallControl(
     var committed by remember { mutableStateOf(false) }
     var crossedRight by remember { mutableStateOf(false) }
     var crossedLeft by remember { mutableStateOf(false) }
+    var dragging by remember { mutableStateOf(false) }
 
     fun springBack(value: Float) {
         settling = true
@@ -162,23 +164,23 @@ fun SwipeCallControl(
         offset < -1f -> Error
         else -> BrandPurple
     }
+    // The thumb responds to contact, not an always-running idle loop. This
+    // creates a precise, tactile affordance without competing with the caller.
+    val thumbScale by animateFloatAsState(
+        targetValue = when {
+            committed -> 0.96f
+            dragging -> 1.045f
+            else -> 1f
+        },
+        animationSpec = spring(dampingRatio = 0.72f, stiffness = 620f),
+        label = "callThumbContact",
+    )
 
     Box(
         modifier = modifier
             .fillMaxWidth()
             .height(trackHeight)
             .onSizeChanged { trackWidthPx = it.width }
-            .clip(RoundedCornerShape(trackHeight / 2))
-            .background(
-                Brush.verticalGradient(
-                    listOf(
-                        DarkSurfaceElevated.copy(alpha = 0.94f),
-                        DarkSurfaceElevated.copy(alpha = 0.74f),
-                    ),
-                ),
-                RoundedCornerShape(trackHeight / 2),
-            )
-            .border(1.dp, DarkBorder, RoundedCornerShape(trackHeight / 2))
             .semantics {
                 contentDescription = "Call actions. Swipe right to answer, swipe left to decline."
                 customActions = listOf(
@@ -204,21 +206,32 @@ fun SwipeCallControl(
             }
             .drawBehind {
                 val value = if (settling) settle.value else dragPx
+                val lineHeight = 4.dp.toPx()
+                val lineY = size.height / 2f - lineHeight / 2f
+                val lineStart = thumbPx / 2f
+                drawRoundRect(
+                    color = DarkSurfaceElevated.copy(alpha = 0.92f),
+                    topLeft = Offset(lineStart, lineY),
+                    size = Size(size.width - lineStart * 2f, lineHeight),
+                    cornerRadius = androidx.compose.ui.geometry.CornerRadius(lineHeight / 2f),
+                )
                 if (value > 0.5f) {
-                    drawRect(
+                    drawRoundRect(
                         brush = Brush.horizontalGradient(
-                            listOf(Success.copy(alpha = 0f), Success.copy(alpha = 0.22f * rightProgress)),
+                            listOf(Success.copy(alpha = 0f), Success.copy(alpha = 0.56f * rightProgress)),
                         ),
-                        topLeft = Offset(size.width / 2f, 0f),
-                        size = Size(value, size.height),
+                        topLeft = Offset(size.width / 2f, lineY),
+                        size = Size(value, lineHeight),
+                        cornerRadius = androidx.compose.ui.geometry.CornerRadius(lineHeight / 2f),
                     )
                 } else if (value < -0.5f) {
-                    drawRect(
+                    drawRoundRect(
                         brush = Brush.horizontalGradient(
-                            listOf(Error.copy(alpha = 0.22f * leftProgress), Error.copy(alpha = 0f)),
+                            listOf(Error.copy(alpha = 0.56f * leftProgress), Error.copy(alpha = 0f)),
                         ),
-                        topLeft = Offset.Zero,
-                        size = Size(-value, size.height),
+                        topLeft = Offset(size.width / 2f + value, lineY),
+                        size = Size(-value, lineHeight),
+                        cornerRadius = androidx.compose.ui.geometry.CornerRadius(lineHeight / 2f),
                     )
                 }
             }
@@ -236,9 +249,16 @@ fun SwipeCallControl(
                         crossedLeft = false
                         dragPx = settle.value
                         settling = false
+                        dragging = true
                     },
-                    onDragEnd = { release(commit = true) },
-                    onDragCancel = { release(commit = false) },
+                    onDragEnd = {
+                        dragging = false
+                        release(commit = true)
+                    },
+                    onDragCancel = {
+                        dragging = false
+                        release(commit = false)
+                    },
                 ) { change, dragAmount ->
                     if (committed) return@detectHorizontalDragGestures
                     change.consume()
@@ -263,7 +283,10 @@ fun SwipeCallControl(
         Row(
             modifier = Modifier
                 .align(Alignment.CenterStart)
-                .padding(start = 20.dp)
+                .padding(start = 2.dp)
+                .clip(RoundedCornerShape(30.dp))
+                .background(Error.copy(alpha = 0.10f + 0.12f * leftProgress))
+                .padding(horizontal = 12.dp, vertical = 11.dp)
                 .graphicsLayer {
                     alpha = (0.55f + 0.45f * leftProgress - 0.35f * rightProgress).coerceIn(0.18f, 1f)
                     val scale = 1f + 0.04f * leftProgress
@@ -291,7 +314,10 @@ fun SwipeCallControl(
         Row(
             modifier = Modifier
                 .align(Alignment.CenterEnd)
-                .padding(end = 20.dp)
+                .padding(end = 2.dp)
+                .clip(RoundedCornerShape(30.dp))
+                .background(Success.copy(alpha = 0.10f + 0.12f * rightProgress))
+                .padding(horizontal = 12.dp, vertical = 11.dp)
                 .graphicsLayer {
                     alpha = (0.55f + 0.45f * rightProgress - 0.35f * leftProgress).coerceIn(0.18f, 1f)
                     val scale = 1f + 0.04f * rightProgress
@@ -315,11 +341,15 @@ fun SwipeCallControl(
             )
         }
 
-        // Draggable thumb. The ring fills as the gesture approaches commit;
-        // the disc itself takes the direction colour.
+        // Draggable handle between two discrete call targets. The minimal line
+        // reads as a gesture path without framing it in a web-style card.
         Box(
             modifier = Modifier
                 .offset { IntOffset(offset.roundToInt(), 0) }
+                .graphicsLayer {
+                    scaleX = thumbScale
+                    scaleY = thumbScale
+                }
                 .size(thumbSize)
                 .clip(CircleShape)
                 .background(thumbColor)

@@ -57,9 +57,9 @@ import kotlin.random.Random
 fun FlowFieldBackground(
     modifier: Modifier = Modifier,
     color: Color = BrandPurpleLight,
-    trailOpacity: Float = 0.15f,
+    trailOpacity: Float = 0.10f,
     particleCount: Int = 0,
-    speed: Float = 1f,
+    speed: Float = 0.42f,
 ) {
     val context = LocalContext.current
     val density = LocalDensity.current.density
@@ -105,7 +105,7 @@ fun FlowFieldBackground(
             return@LaunchedEffect
         }
 
-        val safeSpeed = speed.coerceIn(0.1f, 3f)
+        val safeSpeed = speed.coerceIn(0.1f, 1.2f)
         while (isActive) {
             delay(FRAME_MS)
             renderer.advance(safeSpeed)
@@ -216,9 +216,13 @@ private class FlowFieldRenderer {
         val canvas = bufferCanvas ?: return
         canvas.drawColor(fadeColor)
         tick = (tick + 1f) % 16384f
+        // One slow collective breath makes this a connection field rather
+        // than a random particle simulation. The range is deliberately tiny
+        // so caller information remains dominant throughout the ring state.
+        val breathing = 0.92f + 0.08f * sin(tick * 0.018f)
         for (i in 0 until count) {
             val angle = flowAngle(x[i], y[i], bufferWidth.toFloat(), bufferHeight.toFloat(), tick)
-            val step = 0.2f * speed * rate[i]
+            val step = 0.16f * speed * rate[i] * breathing
             vx[i] += cos(angle) * step
             vy[i] += sin(angle) * step
 
@@ -307,7 +311,9 @@ internal fun spawnY(index: Int): Float = ((index % 16384) * 0.75487766625f + 0.5
 
 private const val PARTICLE_CSS_PX = 1.5f
 private const val STILL_STEPS = 110
-private const val FRAME_MS = 16L
+// A calm ring-state field gains nothing from 60fps updates. Thirty frames per
+// second keeps trajectories smooth while halving the idle renderer workload.
+private const val FRAME_MS = 33L
 private const val MIN_PARTICLES = 160
 private const val MAX_PARTICLES = 600
 

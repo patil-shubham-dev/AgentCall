@@ -44,11 +44,11 @@ class CallWaveDitherTest {
     }
 
     @Test
-    fun `silence stays calm but never flat`() {
+    fun `silence stays calm with only an imperceptible ambient drift`() {
         val silence = waveSpread(0f, 1f)
         val loud = waveSpread(1f, 1f)
         assertTrue(silence > 0f)
-        assertTrue(loud > silence * 4f)
+        assertTrue(loud > silence * 30f)
         assertTrue(organicWave(0.4f, 1f, 0f, 0f, silence) != organicWave(0.4f, 2f, 0f, 0f, silence))
     }
 
@@ -75,5 +75,26 @@ class CallWaveDitherTest {
         assertEquals(0f, collisionWeight(0.4f), 0f)
         assertEquals(1f, collisionWeight(0f), 0f)
         assertTrue(collisionWeight(0.05f) > collisionWeight(0.12f))
+    }
+
+    @Test
+    fun `interference requires both participants to be active`() {
+        assertEquals(0f, interferenceIntensity(1f, 1f, 0f), 0f)
+        assertEquals(0f, interferenceIntensity(1f, 0f, 1f), 0f)
+        assertEquals(0.4f, interferenceIntensity(0.8f, 0.7f, 0.5f), 0.0001f)
+    }
+
+    @Test
+    fun `voice envelope has far more height than the silent ribbon`() {
+        val quiet = waveHeight(0f, blockPx = 9f)
+        val loud = waveHeight(1f, blockPx = 9f)
+
+        assertTrue(loud > quiet * 10f)
+    }
+
+    @Test
+    fun `ribbon dithering does not paint far from its centre line`() {
+        assertTrue(ditherRibbon(distance = 0f, halfThickness = 0.5f, threshold = 0.9f))
+        assertFalse(ditherRibbon(distance = 3f, halfThickness = 0.5f, threshold = 0f))
     }
 }

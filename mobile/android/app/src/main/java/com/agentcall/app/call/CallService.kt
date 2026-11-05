@@ -7,7 +7,6 @@ import android.content.pm.PackageManager
 import android.Manifest
 import androidx.core.content.ContextCompat
 import android.media.AudioAttributes
-import android.media.MediaRecorder
 import android.os.Build
 import android.os.Debug
 import android.os.Bundle
@@ -19,8 +18,8 @@ import android.speech.SpeechRecognizer
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.util.Log
-import android.widget.RemoteViews
 import androidx.core.app.NotificationCompat
+import androidx.core.app.Person
 import com.agentcall.app.BuildConfig
 import com.agentcall.app.ForegroundTracker
 import com.agentcall.app.MainActivity
@@ -111,6 +110,9 @@ class CallService : Service() {
     private var incomingSummary: String? = null
 
     private var speechRecognizer: SpeechRecognizer? = null
+    // Prevent stale callbacks from a recognizer destroyed for TTS from
+    // re-arming capture while the AI is speaking.
+    private var recognizerGeneration = 0L
     private var pendingSpeakText: String? = null
 
     // STT failure handling (task invariant 6: a barge-in must never lose the
@@ -1073,7 +1075,7 @@ class CallService : Service() {
     }
 
     private fun startRecording() {
-        if (isRecording || speechRecognizer != null) return
+        if (isRecording || speechRecognizer != null || isAiSpeaking) return
         try {
             val recognizer = SpeechRecognizer.createSpeechRecognizer(this)
             if (recognizer == null) {
@@ -1085,27 +1087,34 @@ class CallService : Service() {
             }
             speechRecognizer = recognizer
             isRecording = true
+            val generation = ++recognizerGeneration
+            CallEventBus.emit(CallEvent.ListeningStateChanged(true))
             updateNotification("Listening...")
 
             val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
                 putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-                putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.US)
-                // Voice-communication mic path: platforms that support the extra
-                // run the recognizer's capture through the call audio pipeline
-                // (AEC + NS wired in), so the AI's playback doesn't feed back
-                // into the transcript. Services that don't support it ignore
-                // unknown extras; a string literal (not the API-31 constant)
-                // keeps this compiling on every level down to minSdk 26.
-                putExtra(EXTRA_AUDIO_SOURCE, MediaRecorder.AudioSource.VOICE_COMMUNICATION)
+                // Match the phone language instead of forcing US English. This
+                // is particularly important for the accented English commonly
+                // used on the target devices.
+                putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault().toLanguageTag())
+                putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
+                // These are requests, not guarantees: engines can choose their
+                // own limits. They make a spoken answer feel like a turn rather
+                // than cutting it at the first short pause.
+                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 1_100L)
+                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1_700L)
+                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 900L)
             }
 
             recognizer.setRecognitionListener(object : RecognitionListener {
                 override fun onResults(results: Bundle) {
+                    if (generation != recognizerGeneration || speechRecognizer !== recognizer) return
                     val texts = results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                     val text = texts?.firstOrNull()
                     isRecording = false
                     recognizer.destroy()
                     if (speechRecognizer == recognizer) speechRecognizer = null
+                    CallEventBus.emit(CallEvent.ListeningStateChanged(false))
                     val currentCallId = callId
                     // Turn completed (or silence returned an empty result):
                     // clear the failure streak and reopen the mic — the loop
@@ -1120,14 +1129,18 @@ class CallService : Service() {
                             repository.saveUserTextMessage(currentCallId, text)
                         }
                     }
-                    updateNotification("Listening...")
-                    scheduleSttRestart()
+                    // A completed turn is handed to the agent before capture is
+                    // opened again. Reopening immediately races the response and
+                    // causes an audible stop/start loop on several OEM engines.
+                    if (text.isNullOrBlank()) scheduleSttRestart(STT_SILENCE_RESTART_DELAY_MS)
                 }
 
                 override fun onError(error: Int) {
+                    if (generation != recognizerGeneration || speechRecognizer !== recognizer) return
                     isRecording = false
                     recognizer.destroy()
                     if (speechRecognizer == recognizer) speechRecognizer = null
+                    CallEventBus.emit(CallEvent.ListeningStateChanged(false))
                     handleSttError(error)
                 }
 
@@ -1163,7 +1176,9 @@ class CallService : Service() {
             recognizer.startListening(intent)
         } catch (e: Exception) {
             Log.e(TAG, "[STT] failed to start recording", e)
-            isRecording = false; speechRecognizer = null
+            isRecording = false
+            speechRecognizer = null
+            CallEventBus.emit(CallEvent.ListeningStateChanged(false))
             CallEventBus.emit(CallEvent.SttFailed("start failed"))
         }
     }
@@ -1171,6 +1186,7 @@ class CallService : Service() {
     private fun stopRecording() {
         if (!isRecording) return
         isRecording = false
+        CallEventBus.emit(CallEvent.ListeningStateChanged(false))
         updateNotification("Processing...")
         try {
             speechRecognizer?.stopListening()
@@ -1206,8 +1222,10 @@ class CallService : Service() {
     private fun pauseListeningForTts() {
         sttAutoRestartJob?.cancel()
         val recognizer = speechRecognizer ?: return
+        recognizerGeneration++
         speechRecognizer = null
         isRecording = false
+        CallEventBus.emit(CallEvent.ListeningStateChanged(false))
         try {
             recognizer.destroy()
         } catch (e: Exception) {
@@ -1231,7 +1249,10 @@ class CallService : Service() {
     private fun handleSttError(error: Int) {
         if (error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT || error == SpeechRecognizer.ERROR_NO_MATCH) {
             // Routine continuous-capture cycle: nobody spoke in this window.
-            scheduleSttRestart()
+            // Do not hammer a recognizer back open after silence. Aside from
+            // wasting battery, that cadence causes a repeated privacy/start
+            // sound on a number of Android OEM speech services.
+            scheduleSttRestart(STT_SILENCE_RESTART_DELAY_MS)
             return
         }
         val currentCallId = callId
@@ -1240,7 +1261,7 @@ class CallService : Service() {
             Log.i(TAG, "[STT] error=$error — auto-retry $sttErrorRetries/$STT_MAX_RETRIES in ${STT_RETRY_DELAY_MS}ms")
             scope.launch(Dispatchers.Main) {
                 delay(STT_RETRY_DELAY_MS)
-                if (callId == currentCallId && !isRecording && speechRecognizer == null) {
+                if (callId == currentCallId && !isRecording && speechRecognizer == null && !isAiSpeaking) {
                     Log.i(TAG, "[STT] retrying recognizer")
                     startRecording()
                 }
@@ -1456,6 +1477,7 @@ class CallService : Service() {
         textToSpeech?.stop()
         speechRecognizer?.destroy()
         speechRecognizer = null
+        recognizerGeneration++
         sttAutoRestartJob?.cancel()
         sttAutoRestartJob = null
         sttConsecutiveFailures = 0
@@ -1567,15 +1589,15 @@ class CallService : Service() {
         // restarts, and how many consecutive real failures the loop absorbs
         // before standing down (custom recognizers vary per OEM).
         const val STT_RESTART_DELAY_MS = 350L
+        // A deliberate gap between silent recognition sessions avoids the
+        // repeated mic-on/mic-off sound produced by OEM recognition services.
+        const val STT_SILENCE_RESTART_DELAY_MS = 2_500L
         const val STT_FAILURE_COOLDOWN_MS = 4_000L
         const val STT_MAX_CONSECUTIVE_FAILURES = 3
         // Mic opens this long after answer; if the greeting is already
         // speaking, the restart is a no-op and speechLoop resumes listening
         // when the greeting finishes.
         const val STT_ARM_AFTER_ANSWER_MS = 5_000L
-        // RecognizerIntent.EXTRA_AUDIO_SOURCE (API 31); string literal so the
-        // code compiles for the whole supported range (minSdk 26).
-        const val EXTRA_AUDIO_SOURCE = "android.speech.extra.AUDIO_SOURCE"
         const val EXTRA_CALL_ID = "call_id"
         const val EXTRA_TEXT = "text"
         const val EXTRA_MESSAGE_ID = "message_id"
@@ -1696,35 +1718,20 @@ class CallService : Service() {
                 },
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
             )
-            // The custom view owns the whole surface: avatar, caller, reason,
-            // and both actions. No addAction row — the system strips an action
-            // divider under an otherwise complete surface, which read as a
-            // stray handle at the bottom of the heads-up.
-            val content = RemoteViews(context.packageName, R.layout.notification_call).apply {
-                setTextViewText(R.id.call_notification_caller, callerName)
-                setTextViewText(
-                    R.id.call_notification_context,
-                    summary.ifBlank { context.getString(R.string.call_notification_default_context) },
-                )
-                setTextViewText(
-                    R.id.call_notification_mode,
-                    context.getString(
-                        if (quiet) R.string.call_notification_mode_quiet else R.string.call_notification_mode,
-                    ),
-                )
-                setTextColor(
-                    R.id.call_notification_mode,
-                    android.graphics.Color.parseColor(if (quiet) "#E7C169" else "#A79AF0"),
-                )
-                setOnClickPendingIntent(R.id.call_notification_surface, pi)
-                setOnClickPendingIntent(R.id.call_notification_header, pi)
-                setOnClickPendingIntent(R.id.call_notification_answer, answerPi)
-                setOnClickPendingIntent(R.id.call_notification_decline, declinePi)
-            }
+            // Let Android own the compact heads-up treatment. CallStyle gives
+            // each OEM's notification shade its native caller hierarchy and
+            // circular Answer/Decline affordances, including appropriately
+            // sized touch targets at the user's current font scale. Deliberately
+            // omit Person.icon: AgentCall is represented once by the small app
+            // icon in the system header; the AI caller is text-first.
+            val caller = Person.Builder()
+                .setName(callerName)
+                .setImportant(true)
+                .build()
 
             val builder = NotificationCompat.Builder(context, channel)
                 .setContentTitle(callerName)
-                .setContentText(summary.ifBlank { context.getString(R.string.call_notification_default_context) })
+                .setContentText(context.getString(R.string.call_notification_mode))
                 .setSmallIcon(R.drawable.agentcall_notification_icon)
                 .setColor(android.graphics.Color.parseColor("#7967DE"))
                 .setPriority(if (quiet) NotificationCompat.PRIORITY_LOW else NotificationCompat.PRIORITY_HIGH)
@@ -1739,10 +1746,8 @@ class CallService : Service() {
                 .setAutoCancel(false)
                 .setOngoing(true)
                 .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-                .setStyle(NotificationCompat.DecoratedCustomViewStyle())
-                .setCustomContentView(content)
-                .setCustomBigContentView(content)
-                .setShowWhen(false)
+                .setStyle(NotificationCompat.CallStyle.forIncomingCall(caller, declinePi, answerPi))
+                .setShowWhen(true)
 
             // The ring starts with the notification, not when the ring UI is
             // opened. A suppressed full-screen intent (OEM policy, locked
