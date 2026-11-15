@@ -9,8 +9,8 @@ data class AudioEnergy(val user: Float = 0f, val ai: Float = 0f)
  * Pure amplitude buffer for the call aura.
  *
  * Both real audio streams feed it — mic RMS during listening
- * ([android.speech.SpeechRecognizer.onRmsChanged]) and TTS chunk RMS during
- * playback (Piper PCM) — so the visualization reflects actual audio
+ * ([StreamingAsrEngine] per-frame dB) and TTS chunk RMS during playback
+ * (Piper PCM) — so the visualization reflects actual audio
  * amplitude, never synthetic movement. Energy is reported per stream so the
  * mirrored call aura can react to each side independently; idle buffers decay
  * toward the quiet baseline instead of freezing at the last gesture.

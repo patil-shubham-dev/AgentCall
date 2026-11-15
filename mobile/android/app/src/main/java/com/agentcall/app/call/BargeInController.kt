@@ -53,7 +53,7 @@ private fun inferSpeakerRoute(context: Context): Boolean {
  *   drop silero_vad.onnx into assets/vad/ and swap [VadEngine] to [SherpaVadEngine]
  *   without changing CallService wiring.
  *
- * Runs on its own scope (Dispatchers.IO). Must NOT hold SpeechRecognizer's mic;
+ * Runs on its own scope (Dispatchers.IO). Must NOT hold the ASR mic;
  * it releases AudioRecord synchronously on stop so auto-STT can acquire immediately.
  */
 class BargeInController(

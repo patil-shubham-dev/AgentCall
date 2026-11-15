@@ -66,6 +66,8 @@ data class ActiveCallUiState(
     val elapsedSeconds: Int = 0,
     val callContext: CallContextInfo = CallContextInfo(),
     val messages: List<ChatBubble> = emptyList(),
+    /** Live ASR hypothesis for the current turn; never persisted or sent. */
+    val partialTranscript: String = "",
     val statusText: String = "Connecting...",
     /**
      * Transient hands-free voice hint (STT degraded / awaiting mic). Rendered
@@ -93,9 +95,11 @@ class CallViewModel @Inject constructor(
 
     private var messageCounter = 0
     private var callStartTime = 0L
-    @Volatile private var isSending = false
     private var eventCollectionJob: kotlinx.coroutines.Job? = null
     private var connectionStateJob: kotlinx.coroutines.Job? = null
+
+    /** Per-call setup coroutines; cancelled whenever [connect] runs again. */
+    private var setupJobs: List<kotlinx.coroutines.Job> = emptyList()
 
     // Pure FSM (backlog item 12): phase decisions live here so they are
     // unit-testable; this ViewModel only applies side effects.
@@ -116,20 +120,45 @@ class CallViewModel @Inject constructor(
         contextSummary: String? = null,
         agentName: String = "AI Agent",
     ) {
-        callStartTime = System.currentTimeMillis()
-        machine = CallStateMachine()
-        machine.onEvent(CallMachineEvent.START_INCOMING)
-        _uiState.value = _uiState.value.copy(
-            callId = callId,
-            agentName = agentName,
-            phase = machine.state.phase,
-            statusText = "Connecting...",
-            voiceHint = null,
-            // Fresh-bound VM is already idle, but sync the route flag from
-            // the real device state so consecutive calls can't disagree
-            // with what the audio service actually left set.
-            isSpeakerOn = audioManager.isSpeakerOn,
-        )
+        // Setup from a previous connect (status-confirm retry loop, call
+        // fetch) must never write into this call's state.
+        setupJobs.forEach { it.cancel() }
+        setupJobs = emptyList()
+
+        val previous = _uiState.value
+        val sameCall = previous.callId == callId
+        if (sameCall) {
+            // Screen recreation (rotation) reconnects the same call: keep the
+            // phase, transcript and running timer instead of flashing
+            // "Connecting..." over a live stage. Only the device-owned route
+            // flag is re-synced.
+            _uiState.value = previous.copy(
+                agentName = agentName,
+                isSpeakerOn = audioManager.isSpeakerOn,
+            )
+        } else {
+            if (previous.callId.isNotBlank()) {
+                // A second live call can be delivered into the same activity
+                // and view model (singleInstance onNewIntent); the new stage
+                // must not inherit the old transcript, presence or timer.
+                messageCounter = 0
+                _uiState.value = ActiveCallUiState()
+            }
+            callStartTime = System.currentTimeMillis()
+            machine = CallStateMachine()
+            machine.onEvent(CallMachineEvent.START_INCOMING)
+            _uiState.value = _uiState.value.copy(
+                callId = callId,
+                agentName = agentName,
+                phase = machine.state.phase,
+                statusText = "Connecting...",
+                voiceHint = null,
+                // Fresh-bound VM is already idle, but sync the route flag from
+                // the real device state so consecutive calls can't disagree
+                // with what the audio service actually left set.
+                isSpeakerOn = audioManager.isSpeakerOn,
+            )
+        }
         // The backend already confirmed the answer over REST before this
         // screen opened; on deployments whose push socket never delivers,
         // call_answered will never arrive — confirm ACTIVE locally so the
@@ -138,9 +167,12 @@ class CallViewModel @Inject constructor(
         // briefly instead of reading status once and giving up (a single
         // read can race the answer and leave the call stuck in CONNECTING,
         // which also disables the transcript poll).
-        viewModelScope.launch {
+        val confirmJob = viewModelScope.launch {
             var attempt = 0
-            while (attempt < 5 && machine.state.phase != CallPhase.ACTIVE) {
+            while (attempt < 5 &&
+                machine.state.phase != CallPhase.ACTIVE &&
+                machine.state.phase != CallPhase.ENDED
+            ) {
                 attempt++
                 val st = repository.getCallStatus(callId)
                 android.util.Log.w("AgentCall", "ACTIVE-CONFIRM attempt=$attempt status=$st phase=${machine.state.phase}")
@@ -154,7 +186,7 @@ class CallViewModel @Inject constructor(
             }
         }
 
-        viewModelScope.launch {
+        val fetchJob = viewModelScope.launch {
             try {
                 val call = ApiClient.create<ApiService>().getCall(callId)
                 val summary = contextSummary?.takeIf { it.isNotBlank() }
@@ -194,6 +226,7 @@ class CallViewModel @Inject constructor(
                 }
             }
         }
+        setupJobs = listOf(confirmJob, fetchJob)
 
         eventCollectionJob?.cancel()
         eventCollectionJob = viewModelScope.launch {
@@ -215,6 +248,7 @@ class CallViewModel @Inject constructor(
                         // header never shows a competing status line.
                         clearSttHint()
                         _uiState.value = _uiState.value.copy(
+                            partialTranscript = event.text.trim(),
                             isAiSpeaking = false,
                             isRecording = true,
                             isProcessing = false,
@@ -225,6 +259,11 @@ class CallViewModel @Inject constructor(
                         _uiState.value = _uiState.value.copy(
                             isRecording = event.active,
                             isProcessing = false,
+                            partialTranscript = if (event.active) {
+                                _uiState.value.partialTranscript
+                            } else {
+                                ""
+                            },
                         )
                     }
                     is CallEvent.UserTextSent -> markUserTextSent(event.messageId)
@@ -273,6 +312,7 @@ class CallViewModel @Inject constructor(
                         _uiState.value = _uiState.value.copy(
                             isRecording = false,
                             isProcessing = false,
+                            partialTranscript = "",
                             voiceHint = "Voice isn't working right now — you can still type",
                         )
                     }
@@ -286,6 +326,7 @@ class CallViewModel @Inject constructor(
                             isAiSpeaking = false,
                             isRecording = true,
                             isProcessing = false,
+                            partialTranscript = "",
                         )
                     }
                 }
@@ -420,6 +461,7 @@ class CallViewModel @Inject constructor(
         )
         _uiState.value = _uiState.value.copy(
             messages = _uiState.value.messages + msg,
+            partialTranscript = "",
             // The user's finalized turn is the boundary — nothing can still
             // be "thinking" once a transcript bubble exists or the AI starts.
             isAiSpeaking = false,
@@ -427,13 +469,18 @@ class CallViewModel @Inject constructor(
         )
     }
 
-    fun sendTextMessage(text: String, messageId: String = UUID.randomUUID().toString()) {
-        if (text.isBlank() || isSending) return
+    /**
+     * Appends the optimistic human bubble. Returns false when the text is
+     * blank, the call has no id yet, or the id was already used — the caller
+     * must not start a transport send in that case or the thread and the
+     * service fall out of sync.
+     */
+    fun sendTextMessage(text: String, messageId: String = UUID.randomUUID().toString()): Boolean {
+        if (text.isBlank()) return false
         // Idempotent: typed message that already exists (retry / double tap)
-        if (_uiState.value.messages.any { it.id == messageId }) return
-        isSending = true
+        if (_uiState.value.messages.any { it.id == messageId }) return false
         val cid = _uiState.value.callId
-        if (cid.isBlank()) { isSending = false; return }
+        if (cid.isBlank()) return false
 
         val msg = ChatBubble(
             id = messageId,
@@ -446,8 +493,8 @@ class CallViewModel @Inject constructor(
 
         viewModelScope.launch {
             repository.saveUserTextMessage(cid, text)
-            isSending = false
         }
+        return true
     }
 
     fun markUserTextSent(messageId: String) {
@@ -492,6 +539,7 @@ class CallViewModel @Inject constructor(
         _uiState.value = _uiState.value.copy(
             isAiSpeaking = speaking,
             isProcessing = if (speaking) false else _uiState.value.isProcessing,
+            partialTranscript = if (speaking) "" else _uiState.value.partialTranscript,
         )
     }
 
