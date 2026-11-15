@@ -24,9 +24,9 @@ Fixes #(issue)
 - [ ] No hardcoded secrets or credentials
 
 ### Architecture Compliance
-- [ ] Aligns with PRODUCT_VISION.md (no AI reasoning inside AgentCall)
-- [ ] Aligns with SYSTEM_ARCHITECTURE.md
-- [ ] Aligns with API_SPEC.md
+- [ ] Aligns with PRODUCT.md (no AI reasoning inside AgentCall)
+- [ ] Aligns with ARCHITECTURE.md
+- [ ] Aligns with MCP_API_SPEC.md
 - [ ] Event-driven where applicable
 - [ ] Provider-agnostic and device-agnostic
 - [ ] No duplicated logic (searched existing code first)
@@ -39,7 +39,7 @@ Fixes #(issue)
 
 ### Documentation
 - [ ] README.md updated (if user-facing change)
-- [ ] API_SPEC.md updated (if API change)
+- [ ] MCP_API_SPEC.md updated (if API change)
 - [ ] ADR created or updated (if architecture change)
 - [ ] CHANGELOG.md updated
 - [ ] Inline comments updated (if logic change)

@@ -5,6 +5,11 @@
 **Last updated:** 2026-10-31  
 **Companion log:** [`VOICE_CONVERSATION_PROGRESS.md`](VOICE_CONVERSATION_PROGRESS.md)
 
+> **Implemented 2026-11:** streaming recognition now runs on a bundled
+> sherpa-onnx Zipformer model (`StreamingAsrEngine`) with one AudioRecord owner
+> per listening turn. The platform `SpeechRecognizer` sections below are kept as
+> the original rationale.
+
 ## 1. Goal and non-goals
 
 Build a reliable, interruptible voice conversation between a human using the

@@ -12,9 +12,9 @@ What problem does this feature solve? Describe what doesn't work or what could b
 
 Describe the solution you'd like.
 
-## Alignment with PRODUCT_VISION
+## Alignment with PRODUCT
 
-How does this feature align with [PRODUCT_VISION.md](../../PRODUCT_VISION.md)?
+How does this feature align with [PRODUCT.md](../../PRODUCT.md)?
 
 > AgentCall owns communication. AI owns intelligence. This feature must not duplicate AI capabilities.
 

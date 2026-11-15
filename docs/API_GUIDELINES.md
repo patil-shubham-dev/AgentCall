@@ -1,6 +1,6 @@
 # AgentCall — API Guidelines
 
-> **Canonical references:** [API_SPEC.md](../API_SPEC.md) | [IMPLEMENTATION_RULES.md](./IMPLEMENTATION_RULES.md)
+> **Canonical references:** [MCP_API_SPEC.md](../MCP_API_SPEC.md) | [IMPLEMENTATION_RULES.md](./IMPLEMENTATION_RULES.md)
 
 ---
 

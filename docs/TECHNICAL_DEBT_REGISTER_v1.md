@@ -87,7 +87,7 @@ Items that need investigation before they can be estimated or scheduled.
 | # | Item | Status | Effort |
 |---|------|--------|--------|
 | TD-31 | Remove commented-out code from routes.ts | **VERIFIED NONE (2026-09-23)** — all `//` lines in routes.ts are explanatory comments; no commented-out code blocks found | Done (nothing to do) |
-| TD-32 | ~~Remove `FINAL_` prefixed audit files from repo root~~ **Already done** — no `FINAL_*` files remain at root; historical audits live in `docs/archive/` | Done | — |
+| TD-32 | ~~Remove `FINAL_` prefixed audit files from repo root~~ **Already done** — no `FINAL_*` files remain at root; obsolete audits were removed in the 2026-11 cleanup | Done | — |
 | TD-33 | ~~Align `package.json` version with release version~~ **Already resolved** — `backend/package.json` and VERSION.md both say 1.0.0 (the Android app versions independently: `versionName 2.1`; see VERSION.md's version-story note) | Done | — |
 | TD-34 | Add `"typecheck"` script to CI pipeline | **Already done** — `.github/workflows/ci-cd.yml` runs `npm run typecheck` in `lint-and-typecheck` | Done |
 

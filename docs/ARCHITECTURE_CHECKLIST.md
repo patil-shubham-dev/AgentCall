@@ -1,6 +1,6 @@
 # AgentCall — Architecture Compliance Checklist
 
-> **Canonical references:** [SYSTEM_ARCHITECTURE.md](../SYSTEM_ARCHITECTURE.md) | [IMPLEMENTATION_RULES.md](./IMPLEMENTATION_RULES.md) | [PRODUCT_VISION.md](../PRODUCT_VISION.md)
+> **Canonical references:** [ARCHITECTURE.md](../ARCHITECTURE.md) | [IMPLEMENTATION_RULES.md](./IMPLEMENTATION_RULES.md) | [PRODUCT.md](../PRODUCT.md)
 
 ---
 

@@ -3,7 +3,7 @@
 > **These rules are mandatory for every developer and AI coding assistant.**
 > Violations must be caught in code review.
 >
-> **Canonical references:** [PRODUCT_VISION.md](../PRODUCT_VISION.md) | [SYSTEM_ARCHITECTURE.md](../SYSTEM_ARCHITECTURE.md) | [API_SPEC.md](../API_SPEC.md) | [PRD.md](./PRD.md)
+> **Canonical references:** [PRODUCT.md](../PRODUCT.md) | [ARCHITECTURE.md](../ARCHITECTURE.md) | [MCP_API_SPEC.md](../MCP_API_SPEC.md) | [PRD.md](./PRD.md)
 
 ---
 

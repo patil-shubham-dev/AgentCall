@@ -3,7 +3,7 @@
 > **This document describes an aspirational error-handling architecture for a planned multi-service system.**
 > **It does NOT describe the current VoiceBridge v1.0 implementation.**
 >
-> For the actual error format, see [API_SPEC.md](../API_SPEC.md).
+> For the actual error format, see [MCP_API_SPEC.md](../MCP_API_SPEC.md).
 > For the actual implementation, see `backend/src/routes.ts` (error handler at line 212).
 
 ---

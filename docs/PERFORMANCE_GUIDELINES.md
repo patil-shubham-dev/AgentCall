@@ -3,8 +3,10 @@
 > **This document describes aspirational performance targets for a planned multi-service system.**
 > **It does NOT describe the current VoiceBridge v1.0 implementation.**
 >
-> For actual performance baselines, see [OPERATIONS_BASELINE.md](../OPERATIONS_BASELINE.md).
-> For actual load test results, see [PERFORMANCE_BASELINE.md](../reports/PERFORMANCE_BASELINE.md).
+> For actual performance baselines, see [OPERATIONS_BASELINE.md](../DEPLOYMENT_GUIDE.md).
+> Load-test reports from the earlier development cycles were removed in the
+> 2026-11 documentation cleanup; current capacity notes live in
+> [DEPLOYMENT_GUIDE.md](../DEPLOYMENT_GUIDE.md).
 
 ---
 

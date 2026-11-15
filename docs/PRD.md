@@ -3,7 +3,7 @@
 **Version:** 1.0
 **Status:** Product Requirements Document
 
-> **Canonical references:** [PRODUCT_VISION.md](../PRODUCT_VISION.md) | [SYSTEM_ARCHITECTURE.md](../SYSTEM_ARCHITECTURE.md) | [API_SPEC.md](../API_SPEC.md)
+> **Canonical references:** [PRODUCT.md](../PRODUCT.md) | [ARCHITECTURE.md](../ARCHITECTURE.md) | [MCP_API_SPEC.md](../MCP_API_SPEC.md)
 
 ---
 
@@ -15,7 +15,7 @@ AgentCall is an open, AI-agnostic communication platform that enables any AI to 
 
 ## 2. Vision
 
-Build the universal communication layer between autonomous AI systems and humans. See [PRODUCT_VISION.md](../PRODUCT_VISION.md) for the complete vision.
+Build the universal communication layer between autonomous AI systems and humans. See [PRODUCT.md](../PRODUCT.md) for the complete vision.
 
 ---
 
@@ -52,7 +52,7 @@ Build the universal communication layer between autonomous AI systems and humans
 
 ### Communication Interfaces
 
-- MCP tools (8 tools per [API_SPEC.md](../API_SPEC.md))
+- MCP tools (8 tools per [MCP_API_SPEC.md](../MCP_API_SPEC.md))
 - REST API
 - WebSocket signaling
 - Server-Sent Events (SSE)
@@ -60,7 +60,7 @@ Build the universal communication layer between autonomous AI systems and humans
 
 ### Runtime Services
 
-Per [SYSTEM_ARCHITECTURE.md](../SYSTEM_ARCHITECTURE.md):
+Per [ARCHITECTURE.md](../ARCHITECTURE.md):
 - Authentication Service
 - Provider Registry
 - Session Manager
@@ -94,9 +94,9 @@ Per [SYSTEM_ARCHITECTURE.md](../SYSTEM_ARCHITECTURE.md):
 
 ## 8. Architecture
 
-See [SYSTEM_ARCHITECTURE.md](../SYSTEM_ARCHITECTURE.md) for the complete architecture specification.
+See [ARCHITECTURE.md](../ARCHITECTURE.md) for the complete architecture specification.
 
-Core principle: AgentCall owns communication. AI owns intelligence. See [PRODUCT_VISION.md](../PRODUCT_VISION.md).
+Core principle: AgentCall owns communication. AI owns intelligence. See [PRODUCT.md](../PRODUCT.md).
 
 ---
 
@@ -109,7 +109,7 @@ Core principle: AgentCall owns communication. AI owns intelligence. See [PRODUCT
 - Request validation
 - Audit logging
 
-See [API_SPEC.md](../API_SPEC.md) for auth details.
+See [MCP_API_SPEC.md](../MCP_API_SPEC.md) for auth details.
 
 ---
 

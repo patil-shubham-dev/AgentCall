@@ -1,6 +1,6 @@
 # AgentCall — ChatGPT Integration Guide
 
-> **Canonical references:** [API_SPEC.md](../API_SPEC.md) | [PRODUCT_VISION.md](../PRODUCT_VISION.md) | [SYSTEM_ARCHITECTURE.md](../SYSTEM_ARCHITECTURE.md)
+> **Canonical references:** [MCP_API_SPEC.md](../MCP_API_SPEC.md) | [PRODUCT.md](../PRODUCT.md) | [ARCHITECTURE.md](../ARCHITECTURE.md)
 
 ---
 
@@ -60,7 +60,7 @@ Create the key in the Android app: **Settings → AI Connections → Add AI**.
 
 **Best for:** Custom applications, production deployments
 
-### Endpoints Required (per [API_SPEC.md](../API_SPEC.md))
+### Endpoints Required (per [MCP_API_SPEC.md](../MCP_API_SPEC.md))
 
 | What | Endpoint |
 |------|----------|

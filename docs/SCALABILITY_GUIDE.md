@@ -6,8 +6,8 @@
 > VoiceBridge v1.0 is a **single-process monolithic service** with optional PostgreSQL persistence.
 > There is no Redis, no message broker, no microservices.
 >
-> For actual architecture, see [ARCHITECTURE_BASELINE.md](../ARCHITECTURE_BASELINE.md).
-> For actual operations, see [OPERATIONS_BASELINE.md](../OPERATIONS_BASELINE.md).
+> For actual architecture, see [ARCHITECTURE.md](../ARCHITECTURE.md).
+> For actual operations, see [OPERATIONS_BASELINE.md](../DEPLOYMENT_GUIDE.md).
 
 ---
 

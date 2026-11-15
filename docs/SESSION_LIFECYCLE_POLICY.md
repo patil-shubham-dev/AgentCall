@@ -2,7 +2,7 @@
 
 **Status:** Design document (do not implement)  
 **Date:** 2026-07-26  
-**Audit reference:** [PHASE2_5A_SESSION_AUDIT.md](./archive/PHASE2_5A_SESSION_AUDIT.md)
+**Audit reference:** [PHASE2_5A_SESSION_AUDIT.md](./SESSION_LIFECYCLE_POLICY.md)
 
 ---
 

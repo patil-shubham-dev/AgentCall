@@ -18,7 +18,7 @@ All contributors must adhere to our [Code of Conduct](./CODE_OF_CONDUCT.md).
 
 1. Check existing issues and discussions
 2. Use the feature request template
-3. Explain the use case and how it aligns with PRODUCT_VISION.md
+3. Explain the use case and how it aligns with PRODUCT.md
 
 ### Pull Requests
 
@@ -34,9 +34,9 @@ See [DEVELOPMENT_GUIDE.md](./DEVELOPMENT_GUIDE.md) for complete setup instructio
 
 ## Architecture
 
-- [PRODUCT_VISION.md](./PRODUCT_VISION.md) — Product philosophy
-- [SYSTEM_ARCHITECTURE.md](./SYSTEM_ARCHITECTURE.md) — Architecture specification
-- [docs/archive/API_SPEC.md](./docs/archive/API_SPEC.md) — API contract
+- [PRODUCT.md](./PRODUCT.md) — Product philosophy
+- [ARCHITECTURE.md](./ARCHITECTURE.md) — Architecture specification
+- [MCP_API_SPEC.md](./MCP_API_SPEC.md) — API contract
 - [IMPLEMENTATION_RULES.md](./docs/IMPLEMENTATION_RULES.md) — Mandatory implementation rules
 
 ## Review Process
@@ -48,4 +48,4 @@ See [DEVELOPMENT_GUIDE.md](./DEVELOPMENT_GUIDE.md) for complete setup instructio
 
 ## Questions?
 
-Open a [Discussion](https://github.com/patil-shubham-dev/AgentCall/discussions) or check [SUPPORT.md](./SUPPORT.md).
+Open a [Discussion](https://github.com/patil-shubham-dev/AgentCall/discussions) or check [GitHub issues](https://github.com/patil-shubham-dev/AgentCall/issues).

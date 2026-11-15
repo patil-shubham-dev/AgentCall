@@ -1,6 +1,6 @@
 # AgentCall — Zero-Cost Architecture Guide
 
-> **Canonical references:** [PRODUCT_VISION.md](../PRODUCT_VISION.md) | [SYSTEM_ARCHITECTURE.md](../SYSTEM_ARCHITECTURE.md) | [API_SPEC.md](../API_SPEC.md)
+> **Canonical references:** [PRODUCT.md](../PRODUCT.md) | [ARCHITECTURE.md](../ARCHITECTURE.md) | [MCP_API_SPEC.md](../MCP_API_SPEC.md)
 
 ---
 
@@ -42,8 +42,8 @@ This document outlines how to run AgentCall entirely on free-tier services, elim
 |---------|-------------|------|
 | Free hosting (Suga/Railway/Fly.io) | Backend hosting | **$0** |
 | GitHub | Source control + CI | **$0** |
-| SpeechRecognizer | STT (on-device) | **$0** |
-| TextToSpeech | TTS (on-device) | **$0** |
+| sherpa-onnx streaming ASR | STT (offline, on-device) | **$0** |
+| Piper + TextToSpeech | TTS (offline, on-device) | **$0** |
 | MCP Server | AI tool interface | **$0** |
 | AI Agent | Conversation logic | **$0** |
 | Total | | **$0** |
@@ -94,8 +94,8 @@ For zero AI cost: Use local Ollama with Cline or OpenCode.
 
 | Anti-pattern | Better Alternative |
 |-------------|-------------------|
-| Cloud STT | Android on-device SpeechRecognizer 🆓 |
-| Cloud TTS | Android on-device TextToSpeech 🆓 |
+| Cloud STT | Bundled sherpa-onnx streaming ASR (offline) 🆓 |
+| Cloud TTS | Bundled Piper + Android TextToSpeech fallback 🆓 |
 | Cloud database for demo | In-memory storage or SQLite 🆓 |
 | OpenAI API for every response | Ollama local + OpenCode 🆓 |
 | Custom domain | Subdomain from hosting provider 🆓 |

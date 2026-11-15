@@ -1,6 +1,6 @@
 # AgentCall — Current Technology Stack
 
-> **Canonical references:** [SYSTEM_ARCHITECTURE.md](../SYSTEM_ARCHITECTURE.md) | [API_SPEC.md](../API_SPEC.md) | [PRODUCT_VISION.md](../PRODUCT_VISION.md)
+> **Canonical references:** [ARCHITECTURE.md](../ARCHITECTURE.md) | [MCP_API_SPEC.md](../MCP_API_SPEC.md) | [PRODUCT.md](../PRODUCT.md)
 
 ## Android App
 
@@ -21,9 +21,9 @@
 | **Core KTX** | AndroidX Core | 1.13.1 | Core AndroidX |
 | **Secure Storage** | Security Crypto | 1.1.0-alpha06 | EncryptedSharedPreferences |
 | **Build System** | Gradle + AGP | 8.7 / 8.5.0 | Build tool |
-| **Speech Recognition** | Android SpeechRecognizer | Platform (API 26+) | On-device STT |
-| **Text-to-Speech** | Android TextToSpeech | Platform (API 26+) | On-device TTS |
-| **Audio Capture** | AudioRecord | Platform (API 26+) | Barge-in PCM detection |
+| **Speech Recognition** | sherpa-onnx streaming Zipformer (int8) | 1.13.6 | Offline on-device STT |
+| **Text-to-Speech** | Piper via sherpa-onnx (Android TTS fallback) | 1.13.6 / platform | Offline on-device TTS |
+| **Audio Capture** | AudioRecord | Platform (API 26+) | ASR capture and barge-in PCM detection |
 
 ## Backend Server
 
@@ -70,7 +70,7 @@
 
 ## Planned / Aligned with SYSTEM_ARCHITECTURE.md
 
-The following are planned to align with the canonical architecture (see [SYSTEM_ARCHITECTURE.md](../SYSTEM_ARCHITECTURE.md)):
+The following are planned to align with the canonical architecture (see [ARCHITECTURE.md](../ARCHITECTURE.md)):
 
 | Technology | Status | Role in Canonical Architecture |
 |-----------|--------|-------------------------------|

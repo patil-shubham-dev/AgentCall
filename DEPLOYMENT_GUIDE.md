@@ -1,6 +1,6 @@
 # VoiceBridge — Deployment Guide
 
-> **Canonical references:** [docs/archive/ARCHITECTURE_BASELINE.md](./docs/archive/ARCHITECTURE_BASELINE.md) | [docs/archive/OPERATIONS_BASELINE.md](./docs/archive/OPERATIONS_BASELINE.md)
+> **Canonical references:** [ARCHITECTURE.md](./ARCHITECTURE.md) | [DEPLOYMENT_GUIDE.md](./DEPLOYMENT_GUIDE.md)
 
 ---
 

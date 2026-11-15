@@ -2,7 +2,7 @@
 
 > **Core Principle:** AgentCall is a communication platform. The AI owns intelligence, AgentCall owns communication.
 > AgentCall must never rewrite prompts, perform reasoning, enrich AI output, or generate summaries.
-> See [PRODUCT_VISION.md](../PRODUCT_VISION.md) for the complete philosophy.
+> See [PRODUCT.md](../PRODUCT.md) for the complete philosophy.
 
 ---
 
@@ -24,7 +24,7 @@ AgentCall transports the communication. The AI handles all conversation logic.
 
 ## MCP Tools for AI Agents
 
-The full API contract requires 8 MCP tools (see [API_SPEC.md](../API_SPEC.md)). Currently 5 are implemented:
+The full API contract requires 8 MCP tools (see [MCP_API_SPEC.md](../MCP_API_SPEC.md)). Currently 5 are implemented:
 
 ### Implemented
 
@@ -98,7 +98,7 @@ https://YOUR_SERVER/mcp?key=ac_YOUR_KEY
 
 ### Option B: REST API (for non-MCP providers)
 
-See [API_SPEC.md](../API_SPEC.md) for the complete REST API reference.
+See [MCP_API_SPEC.md](../MCP_API_SPEC.md) for the complete REST API reference.
 
 ---
 

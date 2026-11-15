@@ -44,7 +44,7 @@ AgentCall gives agents a communication layer. An AI can create a call through MC
 - **Android calling app** built with Kotlin and Jetpack Compose.
 - **Real-time signaling** over WebSocket, with FCM-assisted push-to-wake support.
 - **VoiceBridge runtime** for incoming calls, transcripts, text messages, completion, and cancellation.
-- **On-device speech path** using Android speech and TTS services, with bundled Piper assets for offline TTS support.
+- **Offline on-device speech path** using bundled sherpa-onnx streaming ASR and Piper TTS — no cloud STT/TTS and no per-utterance system speech-service cue tones.
 - **Self-hostable deployment** through Docker Compose, Caddy, coturn, and PostgreSQL-ready persistence modes.
 - **Strict TypeScript backend** with Zod validation, structured errors, and Vitest coverage for core behavior.
 
@@ -233,7 +233,7 @@ Common agent actions include creating a call, sending messages, waiting for huma
 
 AgentCall v1.0.0, "Solo Bridge", is focused on one human, one Android device class, and AI-to-human voice escalation. The current architecture is intentionally simple enough to self-host while leaving clear paths toward multi-user auth, stronger provider isolation, multi-device routing, and additional mobile platforms.
 
-See [VERSION.md](./VERSION.md), [ROADMAP.md](./ROADMAP.md), and [docs/NEXT_IMPROVEMENTS.md](./docs/NEXT_IMPROVEMENTS.md).
+See [VERSION.md](./VERSION.md), [ROADMAP.md](./ROADMAP.md), and [docs/IMPROVEMENT_BACKLOG.md](./docs/IMPROVEMENT_BACKLOG.md).
 
 ## Security Model
 

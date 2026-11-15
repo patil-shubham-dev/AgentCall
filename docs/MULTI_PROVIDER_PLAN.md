@@ -1,6 +1,6 @@
 # AgentCall — Multi-AI Provider Integration Plan
 
-> **Canonical references:** [PRODUCT_VISION.md](../PRODUCT_VISION.md) | [SYSTEM_ARCHITECTURE.md](../SYSTEM_ARCHITECTURE.md) | [API_SPEC.md](../API_SPEC.md)
+> **Canonical references:** [PRODUCT.md](../PRODUCT.md) | [ARCHITECTURE.md](../ARCHITECTURE.md) | [MCP_API_SPEC.md](../MCP_API_SPEC.md)
 
 ---
 
@@ -40,7 +40,7 @@ Allow any AI provider (ChatGPT, Claude, Gemini, local Ollama, custom agents) to 
              Mobile App (Android)
 ```
 
-> See [SYSTEM_ARCHITECTURE.md](../SYSTEM_ARCHITECTURE.md) for the complete runtime architecture.
+> See [ARCHITECTURE.md](../ARCHITECTURE.md) for the complete runtime architecture.
 
 ---
 
@@ -66,7 +66,7 @@ Allow any AI provider (ChatGPT, Claude, Gemini, local Ollama, custom agents) to 
 ### Phase 1: MCP-Native Clients (Already Working)
 **Target:** OpenCode, Claude Code, Cline, Cursor
 
-The MCP server supports stdio and StreamableHTTP transports. See [API_SPEC.md](../API_SPEC.md) for tool definitions.
+The MCP server supports stdio and StreamableHTTP transports. See [MCP_API_SPEC.md](../MCP_API_SPEC.md) for tool definitions.
 
 ### Phase 2: Remote MCP + SSE (Web UI Integration)
 **Target:** ChatGPT Actions, Claude.ai, web-based clients
@@ -78,7 +78,7 @@ The MCP server supports stdio and StreamableHTTP transports. See [API_SPEC.md](.
 ### Phase 3: REST API for Non-MCP Providers
 **Target:** Gemini, Ollama, custom agents
 
-All REST endpoints per [API_SPEC.md](../API_SPEC.md).
+All REST endpoints per [MCP_API_SPEC.md](../MCP_API_SPEC.md).
 
 ### Phase 4: Provider Abstraction Layer
 **Target:** All providers through a single adapter

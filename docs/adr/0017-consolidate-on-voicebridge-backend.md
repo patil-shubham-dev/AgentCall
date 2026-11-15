@@ -60,7 +60,7 @@ The backend has real persistence, a working Android client, production deploymen
 ### Neutral
 
 - ADRs 0011-0016 are retained as historical records of a decision path that was explored and abandoned
-- `docs/archive/consolidation-2026-07/` captures historically-interesting-but-obsolete documentation
+- Obsolete consolidation-era documentation was removed in the 2026-11 cleanup; see git history for the previous revisions
 
 ## Compliance
 

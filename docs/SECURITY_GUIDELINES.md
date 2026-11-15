@@ -3,7 +3,7 @@
 > **This document describes an aspirational security architecture for a planned multi-service system.**
 > **It does NOT describe the current VoiceBridge v1.0 implementation.**
 >
-> For actual security model, see [ARCHITECTURE_BASELINE.md](../ARCHITECTURE_BASELINE.md) (Security Model section).
+> For actual security model, see [ARCHITECTURE.md](../ARCHITECTURE.md) (Security Model section).
 > For actual auth implementation, see `backend/src/routes.ts` and `backend/src/signaling/server.ts`.
 
 ---
@@ -86,18 +86,18 @@ The following security features from the original design are NOT implemented in 
 
 | Stage | Mechanism | Where it goes |
 |-------|-----------|---------------|
-| Capture | `CallService.startRecording()` → `SpeechRecognizer` (Android system speech service) | **Never to the AgentCall backend.** Only the recognized text is POSTed to `/api/v1/calls/:id/user-text` (`CallService.enqueueUserText` → `ApiService.sendUserText`).
-| Recognition | Device speech service (per Android) | Provider-dependent: on-device or the vendor's cloud (e.g. Google recognizer) per device settings. The app has no say and no visibility.
-| Reply | `TextToSpeech` (Android TTS engine) | On-device engine; voice data may come from the vendor's network voices per device settings. No audio leaves through AgentCall.
+| Capture | `CallService.startRecording()` → `StreamingAsrEngine` (bundled sherpa-onnx) | **Never to the AgentCall backend.** Only the recognized text is POSTed to `/api/v1/calls/:id/user-text` (`CallService.enqueueUserText` → `ApiService.sendUserText`).
+| Recognition | Bundled sherpa-onnx Zipformer int8 model | Fully on-device; no speech provider and no network path.
+| Reply | Piper via sherpa-onnx, with Android `TextToSpeech` as fallback | On-device synthesis; no audio leaves through AgentCall. The fallback TTS engine may use vendor network voices per device settings.
 | Backend storage | In-memory session messages (text only) | `completed` calls: 60 min retention (`COMPLETED_RETENTION_MS`, `service.ts`); `cancelled`: 5 min. `sweepStaleSessions` expires them. Process restart clears all.
 | Local storage | Room DB (`call_records`, `transcript_messages`) | On the phone; survives app restarts; wiped on uninstall. No encryption at rest.
 
 ### Honest claim check
 
-- "Your voice stays on your device" — **true with respect to AgentCall**: no
-  audio bytes ever reach the backend. Caveat: the device speech/TTS engines
-  may use their own cloud services per device settings; the app cannot
-  guarantee offline recognition.
+- "Your voice stays on your device" — **true**: speech recognition uses a
+  bundled offline model, and no audio bytes reach the backend or a speech
+  provider. The fallback Android TTS engine may use its own network voices
+  per device settings; the bundled Piper voice does not.
 - "Encrypted in transit, deleted after N days" — transcripts travel over
   HTTPS/WSS in production; server-side retention is ~1 h (completed) in
   memory, not days.
@@ -107,5 +107,4 @@ The following security features from the original design are NOT implemented in 
 ### What the Settings copy says (added this session)
 
 Settings → Privacy & Data states: voice stays on device, backend receives only
-text, transcripts are in-memory for ~1 h, and the device-speech-engine caveat.
-Copy matches this audit.
+text, and transcripts are in-memory for ~1 h. Copy matches this audit.

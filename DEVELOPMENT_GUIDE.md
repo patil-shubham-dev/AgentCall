@@ -1,6 +1,6 @@
 # AgentCall — Development Guide
 
-> **Canonical references:** [IMPLEMENTATION_RULES.md](./docs/IMPLEMENTATION_RULES.md) | [SYSTEM_ARCHITECTURE.md](./SYSTEM_ARCHITECTURE.md) | [docs/archive/API_SPEC.md](./docs/archive/API_SPEC.md)
+> **Canonical references:** [IMPLEMENTATION_RULES.md](./docs/IMPLEMENTATION_RULES.md) | [ARCHITECTURE.md](./ARCHITECTURE.md) | [MCP_API_SPEC.md](./MCP_API_SPEC.md)
 
 ---
 
@@ -33,39 +33,22 @@ AgentCall/
 │   ├── docker-compose.yml
 │   ├── Caddyfile
 │   └── coturn/
-├── docs/                       # Documentation
+├── docs/                       # Documentation (see docs/README.md)
 │   └── adr/                    # Architecture Decision Records
 ├── .github/                    # GitHub templates, workflows
 ├── AGENTS.md
-├── docs/archive/API_SPEC.md
 ├── ARCHITECTURE.md
-├── CURRENT_STACK.md
-├── DEVELOPMENT_GUIDE.md
-├── IMPLEMENTATION_ROADMAP.md
-├── IMPLEMENTATION_RULES.md
-├── INFRASTRUCTURE.md
-├── PRD.md
-├── PRODUCT_VISION.md
-├── PROJECT_OVERVIEW.md
-├── README.md
-├── ROADMAP.md
-├── SYSTEM_ARCHITECTURE.md
 ├── CHANGELOG.md
 ├── CODE_OF_CONDUCT.md
-├── CODE_STYLE.md
 ├── CONTRIBUTING.md
-├── SECURITY.md
-├── SUPPORT.md
-├── TESTING_GUIDE.md
-├── docs/archive/DATABASE_GUIDE.md
-├── API_GUIDELINES.md
-├── ERROR_HANDLING.md
-├── LOGGING_GUIDE.md
-├── SECURITY_GUIDELINES.md
-├── PERFORMANCE_GUIDELINES.md
-├── SCALABILITY_GUIDE.md
 ├── DEPLOYMENT_GUIDE.md
-└── OPEN_SOURCE_READINESS.md
+├── DEVELOPMENT_GUIDE.md
+├── MCP_API_SPEC.md
+├── PRODUCT.md
+├── README.md
+├── ROADMAP.md
+├── SECURITY.md
+└── VERSION.md
 ```
 
 ---
@@ -172,8 +155,8 @@ docs(adr): add service boundaries decision record
 5. Create `service.test.ts` — unit tests
 6. Register events in `event-bus.ts`
 7. Add to `backend/src/index.ts` startup sequence
-8. Add to SYSTEM_ARCHITECTURE.md if applicable
-9. Add to CURRENT_STACK.md if using new technology
+8. Add to ARCHITECTURE.md if applicable
+9. Add to docs/CURRENT_STACK.md if using new technology
 
 ### Service Template
 
@@ -211,7 +194,7 @@ export class Service {
 
 ## How to Add a Device
 
-1. Implement device registration endpoint per docs/archive/API_SPEC.md
+1. Implement the device registration endpoint and document it in `docs/API_GUIDELINES.md`
 2. Add device type to `devices/types.ts`
 3. Add routing logic to `DeviceRouter`
 4. Add push notification handler if platform-specific
@@ -221,7 +204,7 @@ export class Service {
 
 ## How to Add an API
 
-1. Define endpoint in docs/archive/API_SPEC.md first
+1. Define the endpoint contract in `docs/API_GUIDELINES.md` first
 2. Create Zod validation schema
 3. Implement route handler
 4. Add auth middleware (JWT or Provider API Key)
@@ -233,7 +216,7 @@ export class Service {
 
 ## How to Add an MCP Tool
 
-1. Define tool in docs/archive/API_SPEC.md first
+1. Define the tool in MCP_API_SPEC.md first
 2. Add tool definition to `backend/src/mcp/tools.ts`
 3. Implement tool handler
 4. Add Zod validation for tool inputs
